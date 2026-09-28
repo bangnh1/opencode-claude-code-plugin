@@ -193,6 +193,17 @@ export interface TurnState {
 
   // ---- The terminal result ------------------------------------------------
 
+  /**
+   * The last assistant frame's own usage, captured as frames stream. The
+   * `result` frame's usage is the turn's cumulative total across every internal
+   * API iteration, which inflates cache-read into the millions and makes
+   * opencode compact after one prompt; these are the real end-of-turn context
+   * size. `withLastIterationUsage` folds them into `resultMeta.usage`.
+   */
+  lastAssistantUsage: ClaudeStreamMessage["usage"] | undefined
+  /** Sum of every assistant frame's `output_tokens` this turn (each generation). */
+  turnOutputTokens: number
+
   /** Filled by the `result` frame; the close handler's finish reads it too. */
   resultMeta: TurnResultMeta
   /** Subtype of a failing `result`, so the finish reports an error not a stop. */
@@ -346,6 +357,9 @@ export function createTurnState(init: TurnStateInit): TurnState {
     toolCallMap: new Map<number, TurnToolCallEntry>(),
     skipResultForIds: new Set<string>(),
     toolCallsById: new Map<string, { id: string; name: string; input: unknown }>(),
+
+    lastAssistantUsage: undefined,
+    turnOutputTokens: 0,
 
     resultMeta: {},
     resultFailure: undefined,

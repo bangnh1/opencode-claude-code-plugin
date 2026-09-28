@@ -8,6 +8,7 @@
  * what the deleted copy guaranteed and the stream path must keep doing:
  *
  *  - a plain text answer, with the session id, usage and metadata it reported
+ *  - usage de-cumulated to the last iteration, not the turn's cumulative total
  *  - a CLI-executed tool call, in the tools scope, with the proxy off
  *  - the title stub, answered without spawning anything at all
  *  - a compaction call, on its own lean spawn and its own model
@@ -189,6 +190,84 @@ test("doGenerate returns a plain text answer with the turn's session id, usage a
     // The request body is the envelope the CLI was handed, as before.
     assert.match(String((result.request as any).body.text), /say hello/)
     assert.equal(fake.spawns().length, 1)
+  } finally {
+    await release(fake.cwd)
+    fake.cleanup()
+  }
+})
+
+test("doGenerate de-cumulates usage to the last iteration, not the turn's cumulative total", async () => {
+  // Two internal API iterations, each with its own usage, then a result frame
+  // carrying the CUMULATIVE total the CLI actually reports — including the
+  // 20.5M cache read that made opencode read the context as 2000% full and
+  // compact after a single prompt.
+  const fake = createFakeCli([
+    { type: "system", subtype: "init", session_id: SESSION, tools: [] },
+    {
+      type: "assistant",
+      session_id: SESSION,
+      message: {
+        role: "assistant",
+        model: MODEL,
+        stop_reason: "tool_use",
+        content: [{ type: "text", text: "working" }],
+        usage: {
+          input_tokens: 4,
+          output_tokens: 20,
+          cache_read_input_tokens: 500_000,
+          cache_creation_input_tokens: 1_000,
+        },
+      },
+    },
+    {
+      type: "assistant",
+      session_id: SESSION,
+      message: {
+        role: "assistant",
+        model: MODEL,
+        stop_reason: "end_turn",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          input_tokens: 6,
+          output_tokens: 30,
+          cache_read_input_tokens: 520_000,
+          cache_creation_input_tokens: 2_000,
+        },
+      },
+    },
+    {
+      type: "result",
+      subtype: "success",
+      session_id: SESSION,
+      is_error: false,
+      duration_ms: 12,
+      duration_api_ms: 9,
+      num_turns: 1,
+      total_cost_usd: 0.02,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 999,
+        cache_read_input_tokens: 20_507_334,
+        cache_creation_input_tokens: 3_000,
+      },
+    },
+  ])
+  try {
+    const result = await modelFor(fake).doGenerate({ prompt, tools: TOOLS } as any)
+
+    // Context = the LAST frame's own counters, never the cumulative sum.
+    assert.equal(result.usage.inputTokens?.cacheRead, 520_000)
+    assert.equal(result.usage.inputTokens?.cacheWrite, 2_000)
+    assert.equal(result.usage.inputTokens?.noCache, 6)
+    assert.equal(result.usage.inputTokens?.total, 522_006)
+    // Output is summed across the turn's generations (20 + 30), not the result
+    // frame's own 999.
+    assert.equal(result.usage.outputTokens?.total, 50)
+
+    // The cumulative total is still preserved in providerMetadata for billing.
+    const meta = (result.providerMetadata as any)["claude-code"]
+    assert.equal(meta.usage.cache_read_input_tokens, 20_507_334)
+    assert.equal(meta.usage.iterations[0].cache_read_input_tokens, 520_000)
   } finally {
     await release(fake.cwd)
     fake.cleanup()

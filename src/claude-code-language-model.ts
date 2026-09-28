@@ -1831,7 +1831,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               controller.enqueue({
                 type: "finish",
                 finishReason: { unified: "error" as const, raw: refusal.kind },
-                usage: toUsage(msg.usage),
+                // `resultMeta.usage` is the de-cumulated last-frame usage the
+                // stream parser folded in; `msg.usage` is the turn's cumulative
+                // total, which opencode reads as an over-full context.
+                usage: toUsage(state.resultMeta.usage),
                 providerMetadata: {
                   "claude-code": { ...state.resultMeta, path: "model-fallback" },
                 },
@@ -1902,7 +1905,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             finishReason: state.resultFailure
               ? { unified: "error" as const, raw: state.resultFailure }
               : toFinishReason("stop"),
-            usage: toUsage(msg.usage),
+            // De-cumulated last-frame usage (see `withLastIterationUsage`). The
+            // result frame's own `usage` sums every internal iteration, so
+            // reading it here made opencode compact after one prompt.
+            usage: toUsage(state.resultMeta.usage),
             providerMetadata: {
               "claude-code": {
                 ...state.resultMeta,

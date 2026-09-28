@@ -672,6 +672,20 @@ export interface ClaudeStreamMessage {
       /** On a `tool_result` block: the CLI-executed tool failed. */
       is_error?: boolean
     }>
+    /** Why this assistant turn ended; read for the non-partial stop-reason path. */
+    stop_reason?: string | null
+    /**
+     * This assistant frame's OWN usage for its single internal API call. The
+     * `result` frame's `usage` is the turn's cumulative total across every such
+     * call; the last frame's counters are the real context size. Captured per
+     * frame in `stream-parser.ts` and de-cumulated by `withLastIterationUsage`.
+     */
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+    }
   }
 
   // `system`/`init` fields. Read by `reportSystemInit` in `cli-events.ts`;

@@ -40,6 +40,46 @@ export function toUsage(rawUsage?: ClaudeStreamMessage["usage"]): LanguageModelV
   }
 }
 
+/**
+ * Fold the last assistant frame's own usage into the terminal `result` frame's
+ * usage so `toUsage` reports the real end-of-turn context size, not the turn's
+ * cumulative total.
+ *
+ * The CLI's `result` frame sums input, cache and output across EVERY internal
+ * API iteration of the turn. On a tool-heavy turn that runs the same cached
+ * prompt through dozens of iterations, its `cache_read_input_tokens` sums into
+ * the tens of millions — measured at 20.5M against a 1M window — so opencode
+ * reads the context as thousands of percent full and compacts after a single
+ * prompt. The last assistant frame's counters are the true final context, and
+ * its outputs summed across frames are the turn's total generation.
+ *
+ * We hand that to `toUsage` as the single `iterations` entry it already
+ * prefers, and leave the cumulative fields on the object untouched so
+ * `providerMetadata` and the `turnStats` footer keep the real turn totals. When
+ * no assistant frame carried usage (a fake CLI that reports usage only on the
+ * `result` frame, or a CLI that omits it) the cumulative usage is returned
+ * unchanged. Mirrors what the interactive transport builds by hand in
+ * `claude-session-bun.ts`.
+ */
+export function withLastIterationUsage(
+  cumulative: ClaudeStreamMessage["usage"],
+  lastFrame: ClaudeStreamMessage["usage"] | undefined,
+  summedOutput: number,
+): ClaudeStreamMessage["usage"] {
+  if (!lastFrame) return cumulative
+  return {
+    ...cumulative,
+    iterations: [
+      {
+        input_tokens: lastFrame.input_tokens,
+        output_tokens: summedOutput || lastFrame.output_tokens,
+        cache_read_input_tokens: lastFrame.cache_read_input_tokens,
+        cache_creation_input_tokens: lastFrame.cache_creation_input_tokens,
+      },
+    ],
+  }
+}
+
 export function toFinishReason(
   reason: "stop" | "tool-calls" | "error" = "stop",
 ): LanguageModelV3FinishReason {

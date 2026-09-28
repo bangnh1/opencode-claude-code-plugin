@@ -29,6 +29,7 @@ import {
 import { formatAskUserQuestion, isAskUserQuestionTool } from "./ask-user-question.js"
 import { createExitPlanModeQuestionCall } from "./plan-mode-question.js"
 import { PROXY_TOOL_PREFIX } from "./proxy-mcp.js"
+import { withLastIterationUsage } from "./usage.js"
 import {
   modelRefusalFromAssistant,
   modelRefusalFromResult,
@@ -532,6 +533,19 @@ export function createLineHandler(
         state.lastStopReason = (msg as any).delta.stop_reason
       }
 
+      // Each assistant frame carries its OWN usage for that one internal API
+      // call. Keep the last one and sum the outputs: the terminal `result`
+      // frame reports the turn's CUMULATIVE total across every iteration, so on
+      // a tool-heavy turn its cache-read sums into the millions (measured 20.5M
+      // against a 1M window) and makes opencode compact after a single prompt.
+      // The last frame's counters are the real end-of-turn context size, which
+      // `withLastIterationUsage` hands to `toUsage` at the result boundary. The
+      // interactive transport does the same by hand in `claude-session-bun.ts`.
+      if (msg.type === "assistant" && msg.message?.usage) {
+        state.lastAssistantUsage = msg.message.usage
+        state.turnOutputTokens += msg.message.usage.output_tokens ?? 0
+      }
+
       // assistant message (complete, not streaming).
       // When --include-partial-messages is on, this is a duplicate of
       // what we already streamed via content_block_* events. Skip it
@@ -955,7 +969,16 @@ export function createLineHandler(
           durationMs: msg.duration_ms,
           durationApiMs: msg.duration_api_ms,
           numTurns: msg.num_turns,
-          usage: msg.usage,
+          // De-cumulate: the result frame's usage sums every internal
+          // iteration, so `toUsage` must read the last assistant frame's own
+          // counters instead or opencode compacts after one prompt. The
+          // cumulative fields stay on the object for `providerMetadata`; only
+          // `turnStats` above still reads `msg.usage` for the real turn totals.
+          usage: withLastIterationUsage(
+            msg.usage,
+            state.lastAssistantUsage,
+            state.turnOutputTokens,
+          ),
           modelUsage: msg.modelUsage,
           // Names and ids only: a denial's `tool_input` can be a whole
           // file write payload and has no business in metadata.
