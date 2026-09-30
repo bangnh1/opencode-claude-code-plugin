@@ -137,6 +137,7 @@ import {
   QUESTION_PROXY_HINT,
   SUBAGENT_DISPATCH_HINT,
   BACKGROUND_SUBAGENT_HINT,
+  codeModeProxyHint,
 } from "./prompts.js"
 import {
   autoContinueEnabledFor,
@@ -1619,6 +1620,8 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             const opencodeToolDefs = resolveProxyOpencodeToolDefs({
               requested: self.config.proxyOpencodeTools,
               items: liveToolInfo.items,
+              modelTools: self.config.hostApi === "v2" ? (options.tools ?? []) : undefined,
+              allowCodeExecution: self.config.permissionPreset !== "read-only",
               taken: new Set(
                 [...(enrichedProxy ?? []), ...(proxyMcpTools ?? [])].map(
                   (t) => t.name,
@@ -1691,6 +1694,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                       ? [BACKGROUND_SUBAGENT_HINT]
                       : []),
                     ...(questionProxyActive ? [QUESTION_PROXY_HINT] : []),
+                    ...(self.config.hostApi === "v2" && options.tools?.some((t) => t.name === "execute")
+                      ? [codeModeProxyHint(opencodeToolDefs.some((t) => t.name === "execute"))]
+                      : []),
                   ],
                   {
                     compressEnabled: pluginCompressEnabled,
