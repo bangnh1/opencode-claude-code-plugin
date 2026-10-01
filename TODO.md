@@ -78,6 +78,14 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
+- 2026-10-01: `npm audit` reports 3 pre-existing transitive advisories (`@ai-sdk/provider-utils` to
+  `undici`), found by the cli-stream-events lane; none introduced by a recent change. Look into a
+  dependency bump as its own lane, or leave it?
+- 2026-10-01: the mandatory Aikido scan could not run in the lane sessions (no Aikido MCP there)
+  for PR #74 and PR #75. Run it on master yourself, or accept the tests and review as the check?
+- 2026-10-01: `system`/`status`, `system`/`thinking_tokens`, `system`/`task_started` and
+  `system`/`task_notification` arrive unread on ordinary turns (seen in PR #74's captures,
+  `docs/agents-history.md` #g184). Measure them in a later sweep, or drop?
 - 2026-09-26: Windows spawns go through `cmd.exe` with no argument quoting (injection with
   `& | > ^`, broken with spaces or quotes); needs a Windows CI job first, then a resolver and
   escaper. 2026-09-27: left documented until a Windows user appears (none has ever filed an
@@ -98,6 +106,14 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-01: **done** (v0.35.0): the two lanes from "whats next" ("go"). PR #75: `/claude-code-doctor
+  bundle`, an allowlist-redacted log tail plus the doctor report, safe to paste into an issue
+  (live: no prompt, home path, key or raw session id survived). PR #74: the unread CLI stream
+  events measured on 2.1.280; failing `SessionStart` hooks get a WARN and a doctor section,
+  `tool_progress` is logged (the watchdog cannot misfire on it: 30 s heartbeats against 60 s),
+  `tool_use_summary`, `prompt_suggestion` and `command_lifecycle` are never emitted in the
+  plugin's mode and stay ignored. Fixed at merge: a bundle withholds the doctor report's free
+  text (hook stderr, the CLI's MCP and plugin sentences), and table cells are escaped. 1,056 tests.
 - 2026-10-01: **done** (v0.34.1): PR #73, an abort during the turn prologue is honoured (nothing
   spawned or written, the long prologue waits stop, a turn already asked for work stops as before).
   Released once 1Password signing worked again. Also done: the stale npm `next` dist-tag (0.27.0)
