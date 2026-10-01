@@ -285,6 +285,25 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   url: "url",
 
   cliArgs: "argv",
+
+  // The hook and tool_progress reporters (#g185), added when the two lanes
+  // merged: their message text is built at runtime and redacted, so these
+  // fields are what keeps a failed-hook WARN readable in a bundle. `stderr`
+  // is deliberately absent, because a hook can print anything to it.
+  hook: "name",
+  hookName: "name",
+  event: "enum",
+  hookEvent: "enum",
+  outcome: "enum",
+  tool: "name",
+  subagentType: "name",
+  errorCategory: "enum",
+  errorStatus: "count",
+  elapsedSeconds: "count",
+  attempt: "count",
+  maxRetries: "count",
+  taskId: "id",
+  agentId: "id",
 }
 
 function shape(value: unknown): string {

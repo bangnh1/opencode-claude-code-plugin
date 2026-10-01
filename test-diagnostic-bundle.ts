@@ -43,7 +43,12 @@ import {
 } from "./src/diagnostic-bundle.js"
 import { PLUGIN_LOG_MESSAGES } from "./src/log-messages.js"
 import { BUNDLED_LEVELS, bundledMessages, scanLogMessages } from "./src/log-message-scan.js"
-import { decorateDoctorReport, formatDoctorReport, type DoctorReport } from "./src/doctor.js"
+import {
+  decorateDoctorReport,
+  formatDoctorReport,
+  renderDoctorReport,
+  type DoctorReport,
+} from "./src/doctor.js"
 import { describeLogFile, _resetLoggerForTests } from "./src/logger.js"
 
 const HOME = "/Users/testuser"
@@ -137,6 +142,11 @@ test("a log message built at runtime is a known, pinned exception", () => {
     "account-failover.ts:warn:template",
     "claude-code-language-model.ts:warn:template",
     "claude-code-language-model.ts:warn:template",
+    // The failed-hook WARN and the subagent-retry NOTICE (#g185). Accepted:
+    // the hook text quotes the hook's stderr, so it must be redacted, and
+    // both keep their hook, event, outcome and retry fields in `data`.
+    "cli-events.ts:notice:expression",
+    "cli-events.ts:warn:expression",
     "cli-events.ts:warn:expression",
     "cli-events.ts:warn:expression",
     "cli-events.ts:warn:expression",
@@ -438,6 +448,7 @@ const report: DoctorReport = {
   proxyServers: [],
   mcpServerErrors: [],
   pluginLoadFailures: [],
+  hookFailures: [],
   planUsage: { status: "not-requested" },
   backgroundSubagents: { gate: undefined, ledgers: [] },
 }
@@ -487,6 +498,57 @@ test("the bundle argument appends the section and rewrites the whole report", ()
   // what gets pasted.
   assert.ok(out.includes("~/code/app"))
   assertClean(out, "the bundled doctor report")
+})
+
+// The report's free text is not plugin-authored: a hook's stderr and Claude
+// Code's own sentences can carry anything, and the whole-report rewrites only
+// reach the home directory and session ids. Merged together with the hook
+// section (#74), so this goes through the function the command calls.
+test("a bundle withholds the report's free text; a plain report keeps it, one row per line", () => {
+  const withFreeText: DoctorReport = {
+    ...report,
+    mcpServerErrors: [
+      { name: "github", type: "invalid_config", message: `bad url ${SECRETS.urlWithToken}` },
+    ],
+    pluginLoadFailures: [
+      {
+        plugin: "probe@inline",
+        kind: "error",
+        type: "dependency-unsatisfied",
+        message: `cannot read ${SECRETS.homePath}`,
+      },
+    ],
+    hookFailures: [
+      {
+        hookName: "SessionStart:startup",
+        hookEvent: "SessionStart",
+        exitCode: 3,
+        outcome: "error",
+        stderr: `line one | ${SECRETS.apiKey}\nline two ${SECRETS.bearer}`,
+      },
+    ],
+  }
+  const seams = {
+    cliPath: "claude",
+    interactive: false,
+    turnStats: false,
+    redactionContextImpl: context(),
+    logFileImpl: () => ({ path: "/tmp/plugin.log", enabled: false }),
+    readLogTailImpl: () => "",
+  }
+
+  const plain = renderDoctorReport(withFreeText, seams)
+  assert.ok(plain.includes(SECRETS.apiKey!), "the plain report is the user's own screen")
+  const hookRow = plain.split("\n").find((row) => row.startsWith("| SessionStart:startup |"))
+  assert.ok(hookRow, plain)
+  assert.ok(hookRow.includes("line one \\| "), "a pipe in the text is escaped")
+  assert.ok(hookRow.includes(" line two "), "a newline in the text stays in the row")
+
+  const bundled = renderDoctorReport(withFreeText, { ...seams, argument: "bundle" })
+  assert.ok(bundled.includes("| github | `invalid_config` | [redacted, "), bundled)
+  assert.ok(bundled.includes("| probe@inline | error | `dependency-unsatisfied` | [redacted, "), bundled)
+  assert.ok(bundled.includes("| SessionStart:startup | SessionStart | 3 | error | [redacted, "), bundled)
+  assertClean(bundled, "a bundle with free text in the doctor report")
 })
 
 test("describeLogFile reports the path without touching it", () => {

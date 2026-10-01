@@ -13,8 +13,10 @@ import {
   type RedactionContext,
 } from "./diagnostic-bundle.js"
 import {
+  snapshotHookFailures,
   snapshotMcpServerErrors,
   snapshotPluginLoadFailures,
+  type HookFailure,
   type McpServerError,
   type PluginLoadFailure,
 } from "./cli-events.js"
@@ -153,6 +155,8 @@ export interface DoctorReport {
   mcpServerErrors: McpServerError[]
   /** Claude plugins (the skill bridge's included) that did not load this process. */
   pluginLoadFailures: PluginLoadFailure[]
+  /** Hooks the user configured that failed on a spawn this process made. */
+  hookFailures: HookFailure[]
   /** The CLI's own plan-usage report, only when `usage` was asked for. */
   planUsage: PlanUsage
   /** Background subagents: the gate as last read, and what this process did. */
@@ -212,6 +216,14 @@ function describePermissionPresets(rows: PermissionPresetSummary[]): string {
  * the whole report against a fixed object; everything live is gathered in
  * `gatherDoctorReport`.
  */
+/**
+ * One table cell of text the plugin did not write. A hook's stderr is often
+ * several lines, and a newline or a `|` would break the row it sits in.
+ */
+function tableCell(text: string): string {
+  return text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|")
+}
+
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = []
   lines.push(DOCTOR_MARKER)
@@ -302,7 +314,7 @@ export function formatDoctorReport(report: DoctorReport): string {
     lines.push("| server | category | Claude Code said |")
     lines.push("|---|---|---|")
     for (const error of report.mcpServerErrors) {
-      lines.push(`| ${error.name} | \`${error.type}\` | ${error.message || "no detail"} |`)
+      lines.push(`| ${error.name} | \`${error.type}\` | ${tableCell(error.message) || "no detail"} |`)
     }
     lines.push("")
     lines.push("A skipped server is missing from the model's tools with no other sign of it.")
@@ -318,9 +330,34 @@ export function formatDoctorReport(report: DoctorReport): string {
     lines.push("|---|---|---|---|")
     for (const failure of report.pluginLoadFailures) {
       lines.push(
-        `| ${failure.plugin} | ${failure.kind} | \`${failure.type}\` | ${failure.message || "no detail"} |`,
+        `| ${failure.plugin} | ${failure.kind} | \`${failure.type}\` | ${tableCell(failure.message) || "no detail"} |`,
       )
     }
+  }
+
+  // Same rule again, and the reason is the same shape: a hook that fails
+  // leaves no trace in the turn at all. The CLI runs it, discards it and
+  // answers normally, so the only sign is the WARN, which reaches stderr and
+  // a log file that is off by default.
+  if (report.hookFailures.length > 0) {
+    lines.push("")
+    lines.push("**Hooks Claude Code ran that failed**")
+    lines.push("")
+    lines.push("| hook | event | exit | outcome | its stderr |")
+    lines.push("|---|---|---|---|---|")
+    for (const failure of report.hookFailures) {
+      lines.push(
+        `| ${failure.hookName} | ${failure.hookEvent} | ${failure.exitCode ?? "n/a"} | ` +
+          `${failure.outcome ?? "unknown"} | ${tableCell(failure.stderr) || "nothing"} |`,
+      )
+    }
+    lines.push("")
+    lines.push(
+      "These are your own Claude Code hooks, not opencode's. A failed hook's " +
+        "contribution to the session is missing and the turn succeeds anyway. Only the " +
+        "hook's stderr is shown: its stdout is spliced into the model's context and has " +
+        "no business in a bug report.",
+    )
   }
 
   lines.push("")
@@ -558,6 +595,7 @@ export async function gatherDoctorReport(
     proxyServers,
     mcpServerErrors: snapshotMcpServerErrors(),
     pluginLoadFailures: snapshotPluginLoadFailures(),
+    hookFailures: snapshotHookFailures(),
     planUsage,
     backgroundSubagents: {
       gate: snapshotBackgroundSubagentGate(),
@@ -593,6 +631,41 @@ export function decorateDoctorReport(report: string, options: GatherDoctorOption
   return redactForPaste(`${report}\n\n${section}`, context)
 }
 
+/**
+ * The report a bundle formats, with its free text withheld. A hook's stderr
+ * and Claude Code's own sentences about a skipped MCP entry or a plugin that
+ * did not load are not plugin-authored and can carry anything (a token in an
+ * error, a URL with credentials), and the whole-report rewrites in
+ * `decorateDoctorReport` only reach the home directory and session ids. The
+ * name, category, kind, outcome and exit code stay: they are what a
+ * maintainer reads first. A plain report keeps the text, because there it is
+ * the user's own screen.
+ */
+export function withholdFreeText(report: DoctorReport): DoctorReport {
+  const withhold = (text: string): string => (text ? `[redacted, ${text.length} chars]` : text)
+  return {
+    ...report,
+    mcpServerErrors: report.mcpServerErrors.map((error) => ({
+      ...error,
+      message: withhold(error.message),
+    })),
+    pluginLoadFailures: report.pluginLoadFailures.map((failure) => ({
+      ...failure,
+      message: withhold(failure.message),
+    })),
+    hookFailures: report.hookFailures.map((failure) => ({
+      ...failure,
+      stderr: withhold(failure.stderr),
+    })),
+  }
+}
+
+/** Format a gathered report as the command answers it, bundle or not. */
+export function renderDoctorReport(report: DoctorReport, options: GatherDoctorOptions): string {
+  const bundle = wantsDiagnosticBundle(options.argument ?? "")
+  return decorateDoctorReport(formatDoctorReport(bundle ? withholdFreeText(report) : report), options)
+}
+
 /** The whole command: gather, format, and never let a failure eat the answer. */
 export async function buildDoctorReport(options: GatherDoctorOptions): Promise<string> {
   try {
@@ -606,10 +679,11 @@ export async function buildDoctorReport(options: GatherDoctorOptions): Promise<s
       proxyServers: report.proxyServers.map((server) => server.auth.status),
       mcpServerErrors: report.mcpServerErrors.length,
       pluginLoadFailures: report.pluginLoadFailures.length,
+      hookFailures: report.hookFailures.length,
       planUsage: report.planUsage.status,
       backgroundSubagents: report.backgroundSubagents.gate?.supported ?? "not read",
     })
-    return decorateDoctorReport(formatDoctorReport(report), options)
+    return renderDoctorReport(report, options)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     log.warn("claude-code doctor failed to build its report", { error: message })
