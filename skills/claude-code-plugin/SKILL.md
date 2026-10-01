@@ -852,6 +852,8 @@ returns the normal report plus this process's recent `NOTICE`/`WARN`/`ERROR` lin
 **Never ask a user to attach `plugin.log` itself**: it has no redaction guarantee and
 can hold whole system prompts, spawn argv with `--settings` JSON, bridged MCP config
 paths and session ids. The same applies to the rotated `plugin.log.1`.
+A bundle still keeps folder paths below home (as `~/...`) and the `accounts` names, so
+tell the user to read it before pasting it publicly.
 
 The redaction is an allowlist, not a filter. Per line it keeps the timestamp, the level,
 the message **only** when it is one of the message literals extracted from the plugin's

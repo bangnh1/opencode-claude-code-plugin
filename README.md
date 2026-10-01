@@ -976,6 +976,8 @@ Everything else, including every key the allowlist does not name, becomes `[reda
 
 Never in a bundle: prompt or reply text, system prompts or the appended prompt file, tool inputs or outputs, file contents, environment values, bearer tokens, the proxy `authToken`, API keys, `Authorization` headers, MCP server env or headers, URL credentials or query strings, or the raw spawn argv. The argv is kept as option names with every value replaced, which is what a spawn bug report actually needs.
 
+Kept on purpose, so read it before pasting: folder paths below your home directory (project and config folder names such as `~/.claude-<account>`) and your `accounts` names. A maintainer needs both to read a cwd or an account problem, and only you can tell whether a folder or account name is something you would rather not publish.
+
 It is capped at 120 lines and 24,000 bytes, newest first, and says how many lines it left out. With file logging off it says so, tells you how to turn it on, and still returns the report:
 
 ```sh

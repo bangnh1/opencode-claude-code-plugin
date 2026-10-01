@@ -710,6 +710,10 @@ export const BUNDLE_PREAMBLE = [
   "file contents, environment values, bearer tokens, API keys, `Authorization`",
   "headers, MCP server env or headers, URL credentials or query strings, or the",
   "raw spawn argv.",
+  "",
+  "Kept on purpose, so read it before pasting: folder paths below your home (your",
+  "project and config folder names) and your `accounts` names, which a maintainer",
+  "needs to read a cwd or an account problem.",
 ].join("\n")
 
 export const BUNDLE_LOGGING_OFF = [
