@@ -78,6 +78,15 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
+- 2026-10-02: the docs site's `github.io` address redirects to **plain http** on
+  `khalilgharbaoui.codez.it`, because the user site `khalilgharbaoui.github.io` (which owns that
+  custom domain) has HTTPS not enforced, though its certificate is approved. Enforcing it changes
+  the maintainer's personal site too. Enforce it, or leave?
+- 2026-10-02: upload `site/public/social-preview.png` in Settings, General, Social preview (GitHub
+  has no API for it), so links to the repo show the designed card.
+- 2026-10-02: the repo has no topics and no website link in its About box. Set topics (for
+  example opencode, opencode-plugin, claude-code, claude, anthropic, ai-sdk) and the website to
+  the docs site, for discoverability? Both are public repo settings.
 - 2026-09-26: Windows spawns go through `cmd.exe` with no argument quoting (injection with
   `& | > ^`, broken with spaces or quotes); needs a Windows CI job first, then a resolver and
   escaper. 2026-09-27: left documented until a Windows user appears (none has ever filed an
@@ -98,6 +107,16 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-02: **done** (v0.36.0, v0.36.1): "go". PR #76 `forkSessions` (opt-in): a forked opencode
+  session forks the Claude session (`--resume <parent> --fork-session`), first turn 8x cheaper
+  (814 vs 22,355 cache-write tokens); off by default because the fork keeps the parent's system
+  prompt snapshot; fixed at merge: fingerprints hash attachment bytes. The missing MIT LICENSE
+  file added. PR #77, "1 and 2" plus the @designer: docs pages under `docs/`, a Starlight site in
+  `site/` deployed to GitHub Pages by `docs.yml` (daily rebuild, live stats, a tests badge
+  endpoint), README cut from 1,727 to 110 lines; fixed at merge: Pages permissions on the deploy
+  job only. Pages enabled (Actions source, HTTPS enforced on the project); live at
+  khalilgharbaoui.github.io/opencode-claude-code-plugin, which redirects to the codez.it custom
+  domain of the user site. 1,078 tests.
 - 2026-10-01: **done** (v0.35.1): the three follow-ups of 0.35.0 ("see if you can bump its, the
   others do what is recommended and best"). (1) Not a bump: `@ai-sdk/provider-utils` removed,
   `generateId` is local (`src/ids.ts`); its v5 line pulled `undici` 5.29.0 (13 advisories, 3 high).
