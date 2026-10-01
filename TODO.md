@@ -74,16 +74,6 @@ them ran in this directory.
 
 ## Open from you
 
-- 2026-10-01: found by the btw-flake lane (PR #71, #g181), not fixed: an abort that arrives during
-  `doStream`'s prologue (before the stream exists, e.g. while `detectCliVersion` runs) is dropped,
-  because the abort listener is registered inside `start` and `addEventListener("abort")` on an
-  already-aborted signal never fires. So stopping a turn during a slow prologue does not stop the
-  CLI. Changes abort semantics across the turn path. Fix now, later, or drop?
-
-- 2026-10-01: npm's `next` dist-tag still points at 0.27.0 while `latest` is current, so `@next`
-  installs an old version. Removing or moving it is a registry change that needs npm auth
-  (publishing is OIDC-only from CI). Remove it, or leave it?
-
 
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
@@ -108,6 +98,10 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-01: **done** (v0.34.1): PR #73, an abort during the turn prologue is honoured (nothing
+  spawned or written, the long prologue waits stop, a turn already asked for work stops as before).
+  Released once 1Password signing worked again. Also done: the stale npm `next` dist-tag (0.27.0)
+  was removed by the maintainer; only `latest` remains.
 - 2026-10-01: **done** (v0.34.0), the two no-input items ("fix these ... what needs my input last").
   PR #72: opencode 2's `pending` MCP status no longer disables a server; the first turn waits up to
   `mcpConnectWaitMs` (3000) for it; a changed server set respawns with `--resume` only at a safe
