@@ -7,7 +7,7 @@ import type {
   LanguageModelV3Usage,
   SharedV3Warning,
 } from "@ai-sdk/provider"
-import { generateId } from "@ai-sdk/provider-utils"
+import { generateId } from "./ids.js"
 import type {
   ClaudeCodeConfig,
   ControlRequestBehavior,

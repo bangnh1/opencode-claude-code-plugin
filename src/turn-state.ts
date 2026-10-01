@@ -3,7 +3,7 @@ import type {
   LanguageModelV3StreamPart,
   LanguageModelV3Usage,
 } from "@ai-sdk/provider"
-import { generateId } from "@ai-sdk/provider-utils"
+import { generateId } from "./ids.js"
 import type { ClaudeStreamMessage } from "./types.js"
 import type { ActiveProcess } from "./session-manager.js"
 import type { ProxyMcpServer } from "./proxy-mcp.js"

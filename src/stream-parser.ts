@@ -1,4 +1,4 @@
-import { generateId } from "@ai-sdk/provider-utils"
+import { generateId } from "./ids.js"
 import type { ClaudeCodeConfig, ClaudeStreamMessage } from "./types.js"
 import type { TurnState } from "./turn-state.js"
 import { log } from "./logger.js"
