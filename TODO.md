@@ -88,6 +88,9 @@ raised, so they survive context compaction; removed when answered, done or dropp
   its detach keeps, and to reply instead of detaching if anything would be lost. Its own AI step
   confirmed manual review is needed and could not say what a Support detach preserves. Waiting on
   GitHub: when they answer, the maintainer decides whether the loss (if any) is worth it.
+  Same day, at the maintainer's prompt ("you did not mention that he names my for as successor"): a
+  ticket comment quotes the parent's archive notice verbatim (commit 6522f7a, 2026-04-26: "You can
+  find forks like:" with this repository listed first, then Aptul9's), with the same conditions.
 - 2026-09-26: Windows spawns go through `cmd.exe` with no argument quoting (injection with
   `& | > ^`, broken with spaces or quotes); needs a Windows CI job first, then a resolver and
   escaper. 2026-09-27: left documented until a Windows user appears (none has ever filed an
