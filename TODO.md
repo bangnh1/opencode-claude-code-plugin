@@ -82,21 +82,8 @@ raised, so they survive context compaction; removed when answered, done or dropp
   from" on every page, and that link is not nofollow, unlike README links to other sites). Only
   GitHub Support can detach it (github.com/contact, "detach a fork"; stars, issues and PRs stay).
   The maintainer's call.
-- 2026-10-02: **docs site domain `opencode-claude-code-plugin.dev`** (maintainer's, on Cloudflare;
-  "you add them you have access to all"). Site side ready as draft PR #79 (branch `custom-domain`).
-  The DNS needs a Cloudflare credential: none on this machine besides Wrangler's OAuth login, which has
-  no DNS scope; the personal 1Password account (`my.1password.com`) was tried twice and its approval
-  prompt timed out both times. Next: the maintainer approves the 1Password prompt on a retry (one
-  script finds a Cloudflare API credential there and adds the records), or adds the records
-  themselves: four `A` @ 185.199.108-111.153, four `AAAA` @ 2606:50c0:8000-8003::153, `www` CNAME
-  khalilgharbaoui.github.io, all DNS only. Then: Pages custom domain, certificate, enforce HTTPS,
-  merge #79 (merge master into it first), verify, release, update the `ref_docs_site` memory.
 - 2026-10-02: the widget's colour stays the maintainer's `#FF813F` (BMC orange); the designer
   suggests `#E8A33A` to match the site's amber. Change it, or keep?
-- 2026-10-02: the docs site's `github.io` address redirects to **plain http** on
-  `khalilgharbaoui.codez.it`, because the user site `khalilgharbaoui.github.io` (which owns that
-  custom domain) has HTTPS not enforced, though its certificate is approved. Enforcing it changes
-  the maintainer's personal site too. Enforce it, or leave?
 - 2026-10-02: upload `site/public/social-preview.png` in Settings, General, Social preview (GitHub
   has no API for it), so links to the repo show the designed card.
 - 2026-10-02: the repo has no topics and no website link in its About box. Set topics (for
@@ -122,6 +109,13 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-02: **done** (v0.36.4): the docs site serves at https://opencode-claude-code-plugin.dev/ ("you
+  add them you have access to all", then "retry"). Nine DNS-only records added through Cloudflare's
+  API with the personal 1Password item "Khalil CloudFlare PAT"; Pages custom domain set, certificate
+  approved (to 2026-12-31), HTTPS enforced; PR #79 moved the site to the root with its address in
+  `site/site-config.mjs`, fixed the link checker's hardcoded base and a double slash in the social
+  image URL. Verified live: pages, assets, badge endpoint, widget, and one-hop redirects from http,
+  www, the github.io paths and the codez.it paths. The earlier plain-http redirect item is moot.
 - 2026-10-02: **done** (v0.36.3): Émilien (unixfox) credited by name as the original author, first
   row of docs/credits.md, linking his profile and no longer his repository; the "Maintained fork of"
   banner removed from the README and the docs introduction. The LICENSE now carries his copyright
