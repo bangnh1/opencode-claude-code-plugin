@@ -833,13 +833,16 @@ const turns: Turn[] = [
   }
 
   /* The cursor the script moves: a block after the newest line or word. Solid while a
-     turn plays, blinking while it holds or is paused, like a terminal waiting. */
+     turn plays, blinking while it holds or is paused, like a terminal waiting. It takes
+     no room in the line: a negative end margin cancels its width, so landing at the end
+     of a full line never wraps a new row (measured: it moved the whole page by 18px). */
   .is-cursor::after {
     content: '';
     display: inline-block;
     inline-size: 0.6em;
     block-size: 1.05em;
     margin-inline-start: 0.15ch;
+    margin-inline-end: calc(-0.6em - 0.15ch);
     vertical-align: -0.15em;
     border-radius: 1px;
     background: var(--occ-bar);

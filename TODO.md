@@ -132,6 +132,10 @@ Nothing parked.
   one-pass tokenizer (JSON keys and strings, argv flags, placeholders, numbers, punctuation)
   and the install snippet shares the same token colours, defined once per theme in custom.css
   (accent, teal, lavender; light-theme teal #0f6e66 and lavender #5b3fbf pass 4.5:1 on the panel).
+  Then: the label is "just install, and support it" with coffee and relieved-face emoji (one
+  line at 1440); and the page no longer jumps while a replay plays: the moving cursor was an
+  inline block that wrapped a new row at the end of a full line (stage height 635 vs 617 px,
+  measured), now a zero-width block via a negative end margin.
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
