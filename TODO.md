@@ -111,6 +111,16 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-03: **done** (v0.36.5): the compatibility sweep ("ok now what?", then "go"). PR #82
+  measured Claude Code 2.1.286 (2.1.287 and 2.1.288 are blocked here by Aikido's minimum age) and
+  opencode 2.0.22 (sandbox moved from 2.0.16) against 1.18.34; every live check passed on both. Two
+  pre-existing bugs fixed, each with a test that fails first: a CLI-run tool in a step ending on a
+  proxied call never got a result (2.0.22: "Provider did not return a tool result"; 1.x: pending),
+  and output a reused child wrote between turns was replayed as unmarked text (#g189 to #g191;
+  it also corrected #g104: one `-p` run can emit two `result` frames). The four unread `system`
+  events and ten new ones measured, no parser for any, with a verdict each. Reviewed at merge: the
+  placeholder result cannot reach the CLI as a second `tool_result`. 1,083 tests. Still with the
+  maintainer: `claude update` (2.1.280 runs Claude Sonnet 5.5 on a 200k window).
 - 2026-10-02: **done**: design pass 3 (PR #81, docs deploy green, live). "yes to all": the widget
   colour is the designer's #E8A33A (landed with pass 2, confirmed live). The designer's session hit
   its limit before committing pass 3; the maintainer's session reviewed the worktree (build, 0
