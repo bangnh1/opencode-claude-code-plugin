@@ -299,7 +299,12 @@ const turns: Turn[] = [
                 class:list={[
                   'occ-line',
                   `occ-line--${line.lane}`,
-                  { 'occ-line--bar': line.bar, 'occ-line--reply': line.tag === 'reply', 'occ-line--stream': line.stream },
+                  {
+                    'occ-line--bar': line.bar,
+                    'occ-line--reply': line.tag === 'reply',
+                    'occ-line--stream': line.stream,
+                    'occ-line--type': line.tag === 'you',
+                  },
                 ]}
                 style={`--i:${lineIndex}`}
                 data-wait={line.wait}
@@ -307,7 +312,7 @@ const turns: Turn[] = [
                 <span class="occ-line__lane">{line.lane}</span>
                 <span class="occ-line__bar" aria-hidden="true" />
                 <span class="occ-line__body">
-                  {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.stream ? words(line.text).map((word) => <span class="occ-word">{word}</span>) : line.text}</span>
+                  {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.tag === 'you' ? Array.from(line.text).map((char) => <span class="occ-char">{char}</span>) : line.stream ? words(line.text).map((word) => <span class="occ-word">{word}</span>) : line.text}</span>
                   {line.note && <span class="occ-line__note"> · {line.note}</span>}
                 </span>
               </li>
@@ -344,11 +349,16 @@ const turns: Turn[] = [
     const LINE_MS = 520;
     const WORD_MS = 46;
     const HOLD_MS = 6000;
+    const SPEAKER_MS = 240;
+    const CHAR_MS = 34;
 
     interface Step {
       line: HTMLElement;
-      word?: HTMLElement;
-      /** The step that completes its line: a whole line, or the last word of one. */
+      /** First who: the speaker step shows the lane; the body steps then show what was said. */
+      speaker?: boolean;
+      /** One typed character of what the user wrote, or one streamed word of a reply. */
+      part?: HTMLElement;
+      /** The step that completes its line: a whole body, or its last character or word. */
       ends: boolean;
       wait: number;
     }
@@ -356,14 +366,16 @@ const turns: Turn[] = [
       const steps: Step[] = [];
       panel.querySelectorAll<HTMLElement>('.occ-line:not(.occ-line--cursor)').forEach((line) => {
         const wait = Number(line.dataset.wait) || LINE_MS;
-        const lineWords = Array.from(line.querySelectorAll<HTMLElement>('.occ-word'));
-        if (lineWords.length === 0) {
+        steps.push({ line, speaker: true, ends: false, wait: SPEAKER_MS });
+        const parts = Array.from(line.querySelectorAll<HTMLElement>('.occ-char, .occ-word'));
+        if (parts.length === 0) {
           steps.push({ line, ends: true, wait });
           return;
         }
-        lineWords.forEach((word, index) => {
-          const ends = index === lineWords.length - 1;
-          steps.push({ line, word, ends, wait: ends ? wait : WORD_MS });
+        const typed = line.classList.contains('occ-line--type');
+        parts.forEach((part, index) => {
+          const ends = index === parts.length - 1;
+          steps.push({ line, part, ends, wait: ends ? wait : typed ? CHAR_MS : WORD_MS });
         });
       });
       return steps;
@@ -413,14 +425,14 @@ const turns: Turn[] = [
 
     const clear = (index: number) => {
       scripts[index].forEach((step) => {
-        step.line.classList.remove('is-shown', 'is-done');
-        step.word?.classList.remove('is-shown');
+        step.line.classList.remove('is-shown', 'is-done', 'is-body');
+        step.part?.classList.remove('is-shown');
       });
     };
     const showAll = (index: number) => {
       scripts[index].forEach((step) => {
-        step.line.classList.add('is-shown', 'is-done');
-        step.word?.classList.add('is-shown');
+        step.line.classList.add('is-shown', 'is-done', 'is-body');
+        step.part?.classList.add('is-shown');
       });
     };
 
@@ -443,9 +455,14 @@ const turns: Turn[] = [
       done += 1;
       elapsed += step.wait;
       step.line.classList.add('is-shown');
-      step.word?.classList.add('is-shown');
+      if (!step.speaker) step.line.classList.add('is-body');
+      step.part?.classList.add('is-shown');
       if (step.ends) step.line.classList.add('is-done');
-      setCursor(step.word ?? step.line.querySelector<HTMLElement>('.occ-line__text'));
+      setCursor(
+        step.speaker
+          ? step.line.querySelector<HTMLElement>('.occ-line__lane')
+          : (step.part ?? step.line.querySelector<HTMLElement>('.occ-line__text')),
+      );
       remaining = atEnd() ? HOLD_MS : step.wait;
       syncClock();
     };
@@ -835,6 +852,21 @@ const turns: Turn[] = [
   [data-mode='js'] .occ-word.is-shown {
     opacity: 1;
   }
+  /* First who, then what: the speaker arrives a beat before its body. What the user
+     typed is typed out, one character at a time, with no fade per character. */
+  [data-mode='js'] .occ-line__body {
+    opacity: 0;
+    transition: opacity 160ms var(--occ-ease);
+  }
+  [data-mode='js'] .occ-line.is-body .occ-line__body {
+    opacity: 1;
+  }
+  [data-mode='js'] .occ-char {
+    opacity: 0;
+  }
+  [data-mode='js'] .occ-char.is-shown {
+    opacity: 1;
+  }
   [data-mode='js'] .occ-line--stream .occ-line__note {
     opacity: 0;
     transition: opacity 240ms var(--occ-ease);
@@ -853,7 +885,9 @@ const turns: Turn[] = [
       translate: none;
     }
     [data-mode='js'] .occ-line,
+    [data-mode='js'] .occ-line__body,
     [data-mode='js'] .occ-word,
+    [data-mode='js'] .occ-char,
     [data-mode='js'] .occ-line__note,
     .occ-replay__tab-bar::after {
       transition: none;

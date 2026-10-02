@@ -28,7 +28,6 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const withBase = (link: string) => (link.startsWith('/') ? `${base}${link}` : link);
 
 const stats = isHome ? await loadStats() : undefined;
-const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]\n}';
 ---
 
 {
@@ -40,7 +39,11 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
 
         <div class="occ-install">
           <div class="occ-install__head">
-            <span><strong class="occ-install__tldr">tl;dr</strong> just install</span>
+            <span>
+              <strong class="occ-install__tldr">tl;dr</strong> just install, then{' '}
+              <a class="occ-install__coffee" href="https://www.buymeacoffee.com/khalilgharbaoui" rel="noopener">buy me a coffee</a>{'\u00a0'}
+              <span class="occ-install__face" aria-hidden="true">😌</span>
+            </span>
             {stats && (
               <a class="occ-install__ver" href="https://www.npmjs.com/package/@khalilgharbaoui/opencode-claude-code-plugin" rel="noopener">
                 v{stats.npmVersion}
@@ -55,7 +58,7 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
             </button>
             <span class="sr-only" role="status" aria-live="polite" id="occ-copy-status" />
           </div>
-          <pre class="occ-install__code" id="occ-install-code" tabindex="0" aria-label="opencode.json installation snippet"><code>{snippet}</code></pre>
+          <pre class="occ-install__code" id="occ-install-code" tabindex="0" aria-label="opencode.json installation snippet"><code><span class="occ-json-p">{'{'}</span>{'\n  '}<span class="occ-json-key">"plugin"</span><span class="occ-json-p">: [</span><span class="occ-json-str">"@khalilgharbaoui/opencode-claude-code-plugin"</span><span class="occ-json-p">]</span>{'\n'}<span class="occ-json-p">{'}'}</span></code></pre>
           <p class="occ-install__foot">
             Add to <code>opencode.json</code>, then relaunch.
             Requires <code>claude</code> installed and logged in.
@@ -195,8 +198,11 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
     background: var(--occ-panel);
     box-shadow: inset 0 1px 0 var(--occ-highlight);
   }
+  /* Label, version, copy: the label wraps inside its own column when the row is
+     narrow, so the version and the copy button never leave the right edge. */
   .occ-install__head {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 0.75ch;
     margin: 0;
@@ -208,8 +214,19 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
     font-weight: 700;
     color: var(--sl-color-text-accent);
   }
+  .occ-install__coffee {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--occ-bar);
+    text-underline-offset: 0.2em;
+  }
+  .occ-install__coffee:hover {
+    color: var(--sl-color-text-accent);
+  }
+  .occ-install__face {
+    font-family: system-ui, sans-serif;
+  }
   .occ-install__ver {
-    margin-inline-start: auto;
     font-size: var(--sl-text-2xs);
     color: var(--occ-ink-3);
     text-decoration: none;
@@ -241,6 +258,18 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
     background: none;
     border: 0;
     padding: 0;
+  }
+  /* The snippet's three token kinds, in the site's own vocabulary: the key in the
+     accent, the value in ink, the punctuation receding. No highlighter is loaded for
+     eleven tokens. */
+  .occ-json-key {
+    color: var(--sl-color-text-accent);
+  }
+  .occ-json-str {
+    color: var(--occ-ink-1);
+  }
+  .occ-json-p {
+    color: var(--occ-ink-3);
   }
   .occ-copy {
     flex: none;

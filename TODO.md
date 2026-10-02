@@ -120,6 +120,12 @@ Nothing parked.
   takes the wider column (11fr/13fr). Measured on the built site: at 1440x900 the whole held turn
   ends at 833px, at 1280x800 only the reply's footnote dips 29px under the fold, at 390x844 the
   fold is title, tagline, install block, actions, then the replay. No horizontal scroll at 390.
+  Then, from the maintainer's own review of the fold: the tl;dr label reads "just install, then
+  buy me a coffee" with the link and a relieved-face emoji (requested); the JSON snippet is
+  highlighted with three hand-marked token spans in the site's own colours (no highlighter
+  loaded); every `you` line in the replays is typed out character by character; every other
+  line shows its speaker a beat (240 ms) before what it said. The install head is a grid so the
+  version and copy button stay on the right at 390, 768 and 1440.
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
