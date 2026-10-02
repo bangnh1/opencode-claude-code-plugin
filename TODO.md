@@ -114,6 +114,12 @@ Nothing parked.
   Still with the maintainer, both outside any API: the GitHub Support "detach fork" request (the
   form needs their login; the text is in the 2026-10-02 session report) and the repo social preview
   upload (site/public/social-preview.png, Settings > General > Social preview).
+  Follow-up the same evening, on master: the replay streams each reply a word at a time and
+  ends on the opencode line; lines not yet spoken are transparent, not removed, so the panel is
+  full height from the first frame and nothing below it moves between turns; from 80rem the replay
+  takes the wider column (11fr/13fr). Measured on the built site: at 1440x900 the whole held turn
+  ends at 833px, at 1280x800 only the reply's footnote dips 29px under the fold, at 390x844 the
+  fold is title, tagline, install block, actions, then the replay. No horizontal scroll at 390.
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
