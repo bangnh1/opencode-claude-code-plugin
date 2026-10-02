@@ -61,10 +61,6 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       <span class="occ-proof__value">{formatCount(stats.contributors)}</span>
       <span class="occ-proof__label">contributors, with authorship preserved</span>
     </p>
-    <p class="occ-proof__made">
-      <span class="occ-proof__made-bar" aria-hidden="true" />
-      Made and maintained by <a href="https://github.com/khalilgharbaoui" rel="noopener">@khalilgharbaoui</a> (Khalil Gharbaoui), with these people:
-    </p>
     <ul class="occ-proof__people" role="list">
       {
         contributors.map((person) => (
@@ -206,30 +202,5 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     .occ-proof {
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
-  }
-  .occ-proof__made {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75ch;
-    margin: var(--occ-space-3) 0 var(--occ-space-2);
-    font-family: var(--__sl-font-mono);
-    font-size: var(--sl-text-xs);
-    color: var(--occ-ink-2);
-  }
-  .occ-proof__made a {
-    color: var(--sl-color-text-accent);
-    font-weight: 600;
-    text-decoration: none;
-  }
-  .occ-proof__made a:hover {
-    text-decoration: underline;
-  }
-  .occ-proof__made-bar {
-    flex: none;
-    align-self: center;
-    inline-size: 3px;
-    block-size: 0.9em;
-    border-radius: 1px;
-    background: var(--occ-bar);
   }
 </style>
