@@ -145,6 +145,12 @@ Nothing parked.
   README's What-you-get table gained the skill row. Social preview upload still needs the
   maintainer: port 9222 here is not a DevTools endpoint, so no browser automation could reach the
   logged-in GitHub session.
+  Measured in the Docs workflow: the Actions GITHUB_TOKEN is refused by REST `star+json` (403) and
+  by GraphQL `stargazers` ("Resource not accessible by integration"), while `repos/<r>` works, so CI
+  draws the snapshot's dates padded to the live count. To get per-star dates on CI, add a repo secret
+  (a fine-grained PAT with public read) and pass it as GITHUB_TOKEN to the build step; otherwise
+  refresh `site/src/data/stars.snapshot.json` now and then (`gh api -H 'Accept:
+  application/vnd.github.star+json' --paginate repos/<r>/stargazers --jq '.[].starred_at'`).
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
