@@ -59,6 +59,7 @@ Nothing in the picker? [Troubleshooting](./docs/troubleshooting/symptoms.md) is 
 | **Subagents: your account, their model** | `forceModel`, `reasoningEffort` and `cacheTtl` in an agent file, inheriting the caller's account. `task_batch` runs several subagents at once. [Subagents](./docs/configuration/subagents.md) |
 | **18 models, reasoning variants, fast mode** | Haiku 4.5 through Opus 5.5, Fable and Mythos, each with a `(N×)` list-price suffix, `low` to `max` effort variants, and a fallback chain for a model this account cannot run today. [Models](./docs/models.md) |
 | **`/btw` and `/claude-code-doctor`** | Side questions on the live process, and a health report whose `bundle` form is redacted by allowlist so it is safe to paste into a public issue. [`/btw`](./docs/guides/btw.md) · [Doctor](./docs/guides/doctor.md) |
+| **Ships its own setup skill** | Ask Claude to configure it. The bundled `claude-code-plugin` skill knows every option, env var, model id and troubleshooting rule, is staged into Claude Code on every spawn, and tests keep it in step with the code. [Skills](./docs/configuration/skills.md) |
 | **Read-only preset, plan mode** | `"permissionPreset": "read-only"` holds at the CLI, the proxy and the permission layer at once. [Permissions](./docs/configuration/permissions.md) |
 
 ## How this compares

@@ -797,3 +797,68 @@ site-search mark {
   outline: 2px solid var(--sl-color-accent);
   outline-offset: 2px;
 }
+
+/* ---------- Star history (credits page) ---------- */
+.occ-stars {
+  margin: var(--occ-space-6) 0;
+  padding: var(--occ-space-4) var(--occ-space-3) var(--occ-space-3);
+  border: 1px solid var(--occ-line);
+  border-radius: var(--occ-radius);
+  background: var(--occ-panel);
+  box-shadow: inset 0 1px 0 var(--occ-highlight);
+}
+.occ-stars svg {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+}
+.occ-stars text {
+  font-family: var(--__sl-font-mono);
+  font-size: 11px;
+  fill: var(--occ-ink-3);
+}
+.occ-stars__grid {
+  stroke: var(--occ-line);
+  stroke-width: 1;
+}
+.occ-stars__axis {
+  stroke: var(--occ-line-strong);
+  stroke-width: 1;
+}
+.occ-stars__area {
+  fill: var(--sl-color-accent);
+  fill-opacity: 0.12;
+}
+.occ-stars__line {
+  fill: none;
+  stroke: var(--sl-color-accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.occ-stars__end {
+  fill: var(--sl-color-accent);
+}
+.occ-stars__total {
+  fill: var(--occ-ink-1);
+  font-weight: 700;
+  font-size: 14px;
+}
+.occ-stars figcaption {
+  display: block;
+  margin-block-start: var(--occ-space-3);
+  line-height: 1.6;
+  font-family: var(--__sl-font-mono);
+  font-size: var(--sl-text-xs);
+  color: var(--occ-ink-3);
+}
+.occ-stars__bar {
+  display: inline-block;
+  inline-size: 3px;
+  block-size: 0.9em;
+  margin-inline-end: 0.75ch;
+  vertical-align: -0.1em;
+  border-radius: 1px;
+  background: var(--occ-bar);
+}
+

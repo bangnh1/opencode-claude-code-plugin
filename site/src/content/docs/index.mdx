@@ -88,11 +88,32 @@ import Support from '../../components/Support.astro';
         body: "The default export carries both entrypoints and the same config works on both majors. opencode 2's tool vocabulary (shell, subagent) is translated per model, never process-wide.",
         href: '/opencode-2/',
       },
+      {
+        eyebrow: 'skill',
+        title: 'Ships the skill that configures it',
+        body: "Ask Claude to set it up. The package bundles a claude-code-plugin skill that knows every option, env var, model id and troubleshooting rule, staged into Claude Code on every spawn and kept in step with the code by tests.",
+        code: 'use the claude-code-plugin skill to add a work account',
+        href: '/configuration/skills/',
+      },
+      {
+        eyebrow: 'doctor',
+        title: 'A health report safe to paste',
+        body: "/claude-code-doctor reports versions, live processes, pending calls and what the CLI skipped. Its bundle form redacts by allowlist: nothing survives unless the plugin can name it, so a bug report never carries a prompt or a key.",
+        code: '/claude-code-doctor bundle',
+        href: '/guides/doctor/',
+      },
+      {
+        eyebrow: 'cache',
+        title: 'Forks keep the cache warm',
+        body: "forkSessions forks the Claude session instead of replaying the transcript. Measured on a fork's first turn: 814 prompt-cache writes against 22,355, 27x fewer, and the parent untouched.",
+        code: '"forkSessions": true',
+        href: '/configuration/options/',
+      },
     ]}
   />
 
   <p class="occ-also">
-    Also in the box: <a href="guides/btw/"><code>/btw</code></a> side questions on the live process, <a href="guides/doctor/"><code>/claude-code-doctor</code></a> with a redacted bundle for bug reports, a <a href="configuration/permissions/">read-only permission preset</a>, 18 registered models with reasoning variants and fast mode, and a <a href="configuration/subagents/#fallback-model-chain">fallback model chain</a>.
+    Also in the box: <a href="guides/btw/"><code>/btw</code></a> side questions on the live process, a <a href="configuration/permissions/">read-only permission preset</a>, 18 registered models with reasoning variants and fast mode, <a href="guides/background-subagents/">background subagents</a> with status and cancel, and a <a href="configuration/subagents/#fallback-model-chain">fallback model chain</a>.
   </p>
 </LandingSection>
 

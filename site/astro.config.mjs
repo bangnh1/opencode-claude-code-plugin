@@ -12,6 +12,8 @@ import starlight from '@astrojs/starlight';
 import { satteri } from '@astrojs/markdown-satteri';
 import { repoLinks } from './src/markdown/repo-links.mjs';
 import { focusableTables } from './src/markdown/focusable-tables.mjs';
+import { starHistory } from './src/markdown/star-history.mjs';
+import { loadStarHistory } from './src/data/stars.mjs';
 import { responsiveTables } from './src/markdown/responsive-tables.mjs';
 import { BASE, SITE } from './site-config.mjs';
 
@@ -23,6 +25,12 @@ const docsRoot = path.join(repoRoot, 'docs');
 
 /** Every slug `docs/` contributes to the collection, so a link can be told from a file. */
 const pageSlugs = new Set(listPages(docsRoot, ''));
+
+/** When each star arrived, for the credits page's chart (src/markdown/star-history.mjs). */
+const stars = await loadStarHistory({
+  repo: 'khalilgharbaoui/opencode-claude-code-plugin',
+  snapshotPath: path.join(repoRoot, 'site/src/data/stars.snapshot.json'),
+});
 
 function listPages(dir, prefix) {
   const slugs = [];
@@ -53,6 +61,7 @@ export default defineConfig({
           isPage: (slug) => pageSlugs.has(slug),
         }),
         focusableTables(),
+        starHistory({ dates: stars.dates, source: stars.source, repoUrl: REPO }),
         responsiveTables(),
       ],
     }),

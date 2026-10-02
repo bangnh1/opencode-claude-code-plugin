@@ -136,6 +136,15 @@ Nothing parked.
   line at 1440); and the page no longer jumps while a replay plays: the moving cursor was an
   inline block that wrapped a new row at the end of a full line (stage height 635 vs 617 px,
   measured), now a zero-width block via a negative end margin.
+  Then ("the star history is broken", "anything cool to brag with"): the credits page's star chart
+  is drawn at build time from the real stargazer dates (GitHub `star+json`, committed snapshot as
+  fallback) as inline SVG in the site's type and colours, so it follows the theme toggle; the
+  star-history.com picture picked dark or light by the OS, not the site, and showed a white chart
+  on the dark site. GitHub's render of credits.md keeps a star-history image link. The landing grid
+  is 3x3 with three new items (the bundled skill, the doctor bundle, warm-cache forks) and the
+  README's What-you-get table gained the skill row. Social preview upload still needs the
+  maintainer: port 9222 here is not a DevTools endpoint, so no browser automation could reach the
+  logged-in GitHub session.
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
