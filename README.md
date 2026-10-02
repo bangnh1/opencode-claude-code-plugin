@@ -103,12 +103,12 @@ This README used to hold all of the above. Release notes and bookmarks point at 
 
 ## Credits
 
-This plugin absorbs work from its forks directly, cherry-picked with the original authorship preserved or reimplemented with the author named in the commit. The people behind the features you are using, and what each built, are on the [Credits](./docs/credits.md) page; `git log --author` on this repo shows the preserved authorship.
+Made and maintained by [Khalil Gharbaoui (@khalilgharbaoui)](https://github.com/khalilgharbaoui). This plugin absorbs work from its forks directly, cherry-picked with the original authorship preserved or reimplemented with the author named in the commit. The people behind the features you are using, and what each built, are on the [Credits](./docs/credits.md) page; `git log --author` on this repo shows the preserved authorship.
 
-Free and MIT-licensed. If the plugin saves you time, you can buy its maintainer a coffee:
+Free and MIT-licensed. If the plugin saves you time, you can buy [its maintainer](https://github.com/khalilgharbaoui) a coffee:
 
 <a href="https://www.buymeacoffee.com/khalilgharbaoui"><img src="site/public/buy-me-a-coffee.png" alt="Buy me a coffee" width="214" height="60"></a>
 
 ## License
 
-MIT. See [LICENSE](./LICENSE). The first version was written by Émilien ([@unixfox](https://github.com/unixfox)); everything since by Khalil Gharbaoui and the people in [Credits](./docs/credits.md).
+MIT. See [LICENSE](./LICENSE). The first version was written by Émilien ([@unixfox](https://github.com/unixfox)); everything since by [Khalil Gharbaoui](https://github.com/khalilgharbaoui) and the people in [Credits](./docs/credits.md).

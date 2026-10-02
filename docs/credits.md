@@ -5,10 +5,11 @@ sidebar:
   order: 2
 ---
 
-This plugin absorbs work from its forks directly, cherry-picked with the original authorship preserved or reimplemented with the author named in the commit, rather than waiting on pull requests. The people behind the features you are using:
+Made and maintained by [@khalilgharbaoui](https://github.com/khalilgharbaoui) (Khalil Gharbaoui). This plugin absorbs work from its forks directly, cherry-picked with the original authorship preserved or reimplemented with the author named in the commit, rather than waiting on pull requests. The people behind the features you are using:
 
 | Who | What | Where |
 |---|---|---|
+| [@khalilgharbaoui](https://github.com/khalilgharbaoui) (Khalil Gharbaoui) | Maintainer. Everything after the first version: the opencode-side tool proxy and its broker, accounts and failover, the model registry, the background subagents, the skill bridge, the doctor and its bundle, the two-major support, the tests and the measurement discipline in `AGENTS.md`, this site. Reviews, merges and credits every contribution. | `git log --author` on this repository, 430 commits and counting |
 | [@unixfox](https://github.com/unixfox) (Émilien) | Wrote the first version of this plugin in March 2026, and with it the idea it still runs on: an opencode provider that drives the official `claude` CLI as a subprocess instead of calling the API. This repository began as a fork of that work, and its tool mapping, session manager and message builder still carry his code. | `b03fa8e` (the initial commit) and four more, to 2026-04-06 |
 | [@galvani](https://github.com/galvani) (Jan Kozak) | Per-session working directory for `opencode serve`, so one server spawns each project's `claude` in the right place. Also found the stale `toolCallMap` re-emission three months before it was fixed here. | `9e02ce4`, `2238ed0` |
 | [@HeikoAtGitHub](https://github.com/HeikoAtGitHub) | Stopped sending `AGENTS.md` to the model twice (opencode already forwards it). Independently diagnosed the 5-minute proxy wall. | `25260a4`, `42f426d` |
