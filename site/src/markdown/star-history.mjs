@@ -21,6 +21,7 @@ const text = (value) => ({ type: 'text', value: String(value) });
  * @param {string} options.repoUrl the repository's GitHub URL
  */
 export function starHistory({ dates, source, repoUrl }) {
+  // `padded` stars (newer than the snapshot) sit on today; the caption says so above.
   return {
     name: 'occ-star-history',
     element: {
@@ -95,7 +96,7 @@ function chart(dates, source, repoUrl) {
       h('span', { class: 'occ-stars__bar', 'aria-hidden': 'true' }),
       text(`${label}. `),
       h('a', { href: `${repoUrl}/stargazers` }, [text('The stargazers on GitHub')]),
-      text(source === 'live' ? '. Drawn at build time from each star’s date.' : '. From the committed snapshot; the API was not reachable at build time.'),
+      text(source === 'snapshot' ? '. Dates from the committed snapshot, the count from GitHub at build time.' : '. Drawn at build time from each star\'s date.'),
     ]),
   ]);
 }
