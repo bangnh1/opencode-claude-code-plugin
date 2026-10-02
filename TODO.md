@@ -78,6 +78,13 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
+- 2026-10-02: the maintainer is arranging a separate domain for the docs site. When it is ready:
+  set it as the project Pages custom domain (Settings, Pages, or `gh api -X PUT
+  repos/khalilgharbaoui/opencode-claude-code-plugin/pages -f cname=<domain>`), change `site` (and
+  `base` to `/` if it serves at the root) in `site/astro.config.mjs`, then the README docs link,
+  `homepage` in package.json, the tests badge URL and the `ref_docs_site` memory.
+- 2026-10-02: the widget's colour stays the maintainer's `#FF813F` (BMC orange); the designer
+  suggests `#E8A33A` to match the site's amber. Change it, or keep?
 - 2026-10-02: the docs site's `github.io` address redirects to **plain http** on
   `khalilgharbaoui.codez.it`, because the user site `khalilgharbaoui.github.io` (which owns that
   custom domain) has HTTPS not enforced, though its certificate is approved. Enforcing it changes
@@ -107,6 +114,12 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-02: **done** (v0.36.2): Buy Me a Coffee, as asked ("add where appropriate like the readme
+  and the website header and footer, for the website also the widget"). PR #78 by @designer: a
+  badge and the yellow button in the README (served from `site/public`), a header pill in the
+  site's own style plus the yellow button in the footer, the widget with the maintainer's values
+  (`defer`, through Starlight `head`), `.github/FUNDING.yml` (GitHub Sponsor button, confirmed by
+  the GraphQL `fundingLinks`) and `package.json` `funding`. Live and verified on the site.
 - 2026-10-02: **done** (v0.36.0, v0.36.1): "go". PR #76 `forkSessions` (opt-in): a forked opencode
   session forks the Claude session (`--resume <parent> --fork-session`), first turn 8x cheaper
   (814 vs 22,355 cache-write tokens); off by default because the fork keeps the parent's system
