@@ -65,6 +65,39 @@ interface Turn {
 
 const words = (text: string): string[] => text.match(/\S+\s*/g) ?? [text];
 
+/**
+ * Syntax colour for a replayed line, at build time: JSON keys and strings, argv
+ * flags, `<placeholders>`, numbers and punctuation. One pass over the text; what
+ * the regex does not claim stays plain. The colours live in custom.css (Code
+ * tokens) and follow the theme.
+ */
+type TokenClass = 'key' | 'str' | 'flag' | 'ph' | 'num' | 'p';
+interface Token {
+  cls?: TokenClass;
+  text: string;
+}
+const TOKEN =
+  /("(?:[^"\\]|\\.)*")(\s*:)|("(?:[^"\\]|\\.)*")|(--[\w-]+)|(<[^>]+>)|((?<![\w-])(?:true|false|null|\d[\d,.]*)(?![\w-]))|([{}[\]:,\u2026]|\u2192)/g;
+function tokenize(text: string): Token[] {
+  const out: Token[] = [];
+  let last = 0;
+  for (const match of text.matchAll(TOKEN)) {
+    const at = match.index ?? 0;
+    if (at > last) out.push({ text: text.slice(last, at) });
+    if (match[1] !== undefined) {
+      out.push({ cls: 'key', text: match[1] });
+      out.push({ cls: 'p', text: match[2] });
+    } else if (match[3] !== undefined) out.push({ cls: 'str', text: match[3] });
+    else if (match[4] !== undefined) out.push({ cls: 'flag', text: match[4] });
+    else if (match[5] !== undefined) out.push({ cls: 'ph', text: match[5] });
+    else if (match[6] !== undefined) out.push({ cls: 'num', text: match[6] });
+    else out.push({ cls: 'p', text: match[0] });
+    last = at + match[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
+}
+
 const turns: Turn[] = [
   {
     id: 'proxy',
@@ -250,11 +283,12 @@ const turns: Turn[] = [
   aria-label="Three turns, replayed: what opencode, the plugin and claude --print each do"
 >
   <figcaption class="occ-replay__cap">
-    <span class="occ-replay__title">three turns</span>
-    <span class="occ-replay__lanes" aria-hidden="true">
-      <span class="occ-lane occ-lane--opencode">opencode</span>
-      <span class="occ-lane occ-lane--plugin">plugin</span>
-      <span class="occ-lane occ-lane--claude">claude</span>
+    <span class="occ-replay__flow" aria-hidden="true">
+      <span class="occ-lane--opencode">Opencode</span>
+      <svg class="occ-flow__mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="8" height="26" rx="2" fill="var(--occ-bar)"></rect><path d="M16 8 L25 16 L16 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="occ-lane--plugin">Plugin</span>
+      <svg class="occ-flow__mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="8" height="26" rx="2" fill="var(--occ-bar)"></rect><path d="M16 8 L25 16 L16 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="occ-lane--claude">Claude</span>
     </span>
     <span class="occ-replay__controls">
       <button type="button" class="occ-replay__btn occ-replay__pause" aria-pressed="false" hidden>pause</button>
@@ -312,7 +346,7 @@ const turns: Turn[] = [
                 <span class="occ-line__lane">{line.lane}</span>
                 <span class="occ-line__bar" aria-hidden="true" />
                 <span class="occ-line__body">
-                  {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.tag === 'you' ? Array.from(line.text).map((char) => <span class="occ-char">{char}</span>) : line.stream ? words(line.text).map((word) => <span class="occ-word">{word}</span>) : line.text}</span>
+                  {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.tag === 'you' ? Array.from(line.text).map((char) => <span class="occ-char">{char}</span>) : line.stream ? words(line.text).map((word) => <span class="occ-word">{word}</span>) : tokenize(line.text).map((token) => (token.cls ? <span class={`occ-tok--${token.cls}`}>{token.text}</span> : token.text))}</span>
                   {line.note && <span class="occ-line__note"> · {line.note}</span>}
                 </span>
               </li>
@@ -588,20 +622,21 @@ const turns: Turn[] = [
     text-transform: uppercase;
     color: var(--occ-ink-3);
   }
-  .occ-replay__lanes {
-    display: flex;
-    gap: var(--occ-space-3);
-    margin-inline-start: auto;
+  /* The caption is the pipeline itself: Opencode, the mark, Plugin, the mark, Claude,
+     in the three voices' colours, so it is the legend too. */
+  .occ-replay__flow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6ch;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: none;
   }
-  .occ-lane::before {
-    content: '';
-    display: inline-block;
-    inline-size: 0.5em;
-    block-size: 0.5em;
-    margin-inline-end: 0.45em;
-    border-radius: 50%;
-    background: currentColor;
-    vertical-align: 0.05em;
+  .occ-flow__mark {
+    flex: none;
+    inline-size: 1.25em;
+    block-size: 1.25em;
+    color: var(--occ-ink-2);
   }
   .occ-lane--opencode {
     color: var(--occ-lane-opencode);
@@ -614,6 +649,7 @@ const turns: Turn[] = [
   }
   .occ-replay__controls {
     display: flex;
+    margin-inline-start: auto;
   }
   .occ-replay__btn {
     margin: 0;
@@ -903,9 +939,6 @@ const turns: Turn[] = [
   @media (max-width: 26rem) {
     .occ-replay__cap {
       padding-inline-start: var(--occ-space-3);
-    }
-    .occ-replay__lanes {
-      display: none;
     }
     .occ-replay__controls {
       margin-inline-start: auto;

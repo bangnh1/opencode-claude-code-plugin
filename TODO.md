@@ -126,6 +126,12 @@ Nothing parked.
   loaded); every `you` line in the replays is typed out character by character; every other
   line shows its speaker a beat (240 ms) before what it said. The install head is a grid so the
   version and copy button stay on the right at 390, 768 and 1440.
+  Then: the caption is the pipeline ("Opencode", mark, "Plugin", mark, "Claude", in the lane
+  colours, so it is the legend too); the tagline names the Claude Code CLI; the label reads "just
+  install, and support with a coffee"; replay bodies are syntax-coloured at build time by a
+  one-pass tokenizer (JSON keys and strings, argv flags, placeholders, numbers, punctuation)
+  and the install snippet shares the same token colours, defined once per theme in custom.css
+  (accent, teal, lavender; light-theme teal #0f6e66 and lavender #5b3fbf pass 4.5:1 on the panel).
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB

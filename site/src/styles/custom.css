@@ -103,6 +103,15 @@
   --occ-lane-opencode: var(--occ-ink-1);
   --occ-lane-plugin: var(--sl-color-text-accent);
   --occ-lane-claude: var(--occ-ink-3);
+  /* Code tokens, shared by the install snippet and the replay bodies. Three hues
+     only: the accent for names and flags, teal for strings, lavender for numbers;
+     placeholders in ink, punctuation receding. Each pair passes 4.5:1 on its panel. */
+  --occ-tok-key: var(--sl-color-text-accent);
+  --occ-tok-flag: var(--sl-color-text-accent);
+  --occ-tok-str: #8fd3c9;
+  --occ-tok-num: #c9b8ff;
+  --occ-tok-ph: var(--occ-ink-2);
+  --occ-tok-p: var(--occ-ink-3);
   --occ-radius: 10px;
   --occ-radius-sm: 6px;
   --occ-space-1: 0.25rem;
@@ -145,6 +154,29 @@
   --occ-glow: rgb(194 115 14 / 0.1);
   --occ-highlight: rgb(255 255 255 / 0.6);
   --occ-glass: rgb(252 251 248 / 0.86);
+  --occ-tok-str: #0f6e66;
+  --occ-tok-num: #5b3fbf;
+}
+
+/* ---------- Code tokens ---------- */
+.occ-tok--key {
+  color: var(--occ-tok-key);
+}
+.occ-tok--flag {
+  color: var(--occ-tok-flag);
+}
+.occ-tok--str {
+  color: var(--occ-tok-str);
+}
+.occ-tok--num {
+  color: var(--occ-tok-num);
+}
+.occ-tok--ph {
+  color: var(--occ-tok-ph);
+  font-style: italic;
+}
+.occ-tok--p {
+  color: var(--occ-tok-p);
 }
 
 /* ---------- Type ---------- */

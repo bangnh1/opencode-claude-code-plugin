@@ -40,8 +40,8 @@ const stats = isHome ? await loadStats() : undefined;
         <div class="occ-install">
           <div class="occ-install__head">
             <span>
-              <strong class="occ-install__tldr">tl;dr</strong> just install, then{' '}
-              <a class="occ-install__coffee" href="https://www.buymeacoffee.com/khalilgharbaoui" rel="noopener">buy me a coffee</a>{'\u00a0'}
+              <strong class="occ-install__tldr">tl;dr</strong> just install, and{' '}
+              <a class="occ-install__coffee" href="https://www.buymeacoffee.com/khalilgharbaoui" rel="noopener">support with a coffee</a>{'\u00a0'}
               <span class="occ-install__face" aria-hidden="true">😌</span>
             </span>
             {stats && (
@@ -58,7 +58,7 @@ const stats = isHome ? await loadStats() : undefined;
             </button>
             <span class="sr-only" role="status" aria-live="polite" id="occ-copy-status" />
           </div>
-          <pre class="occ-install__code" id="occ-install-code" tabindex="0" aria-label="opencode.json installation snippet"><code><span class="occ-json-p">{'{'}</span>{'\n  '}<span class="occ-json-key">"plugin"</span><span class="occ-json-p">: [</span><span class="occ-json-str">"@khalilgharbaoui/opencode-claude-code-plugin"</span><span class="occ-json-p">]</span>{'\n'}<span class="occ-json-p">{'}'}</span></code></pre>
+          <pre class="occ-install__code" id="occ-install-code" tabindex="0" aria-label="opencode.json installation snippet"><code><span class="occ-tok--p">{'{'}</span>{'\n  '}<span class="occ-tok--key">"plugin"</span><span class="occ-tok--p">: [</span><span class="occ-tok--str">"@khalilgharbaoui/opencode-claude-code-plugin"</span><span class="occ-tok--p">]</span>{'\n'}<span class="occ-tok--p">{'}'}</span></code></pre>
           <p class="occ-install__foot">
             Add to <code>opencode.json</code>, then relaunch.
             Requires <code>claude</code> installed and logged in.
@@ -259,18 +259,8 @@ const stats = isHome ? await loadStats() : undefined;
     border: 0;
     padding: 0;
   }
-  /* The snippet's three token kinds, in the site's own vocabulary: the key in the
-     accent, the value in ink, the punctuation receding. No highlighter is loaded for
-     eleven tokens. */
-  .occ-json-key {
-    color: var(--sl-color-text-accent);
-  }
-  .occ-json-str {
-    color: var(--occ-ink-1);
-  }
-  .occ-json-p {
-    color: var(--occ-ink-3);
-  }
+  /* The snippet's tokens use the site's shared code-token colours (custom.css, Code
+     tokens), the same ones the replay bodies use, in both themes. */
   .occ-copy {
     flex: none;
     display: inline-flex;
