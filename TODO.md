@@ -107,6 +107,13 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-02: **done**: design pass 3 (PR #81, docs deploy green, live). "yes to all": the widget
+  colour is the designer's #E8A33A (landed with pass 2, confirmed live). The designer's session hit
+  its limit before committing pass 3; the maintainer's session reviewed the worktree (build, 0
+  broken links, 0 em dashes, screenshots at 1440 dark/light and 390) and landed it unchanged.
+  Still with the maintainer, both outside any API: the GitHub Support "detach fork" request (the
+  form needs their login; the text is in the 2026-10-02 session report) and the repo social preview
+  upload (site/public/social-preview.png, Settings > General > Social preview).
 - 2026-10-02: **done** (site only, no release needed): design pass 2 (#80, @designer, "every factor
   of it needs to be awesome"). The transcript is the interface: the hero replays one real turn across
   opencode, the plugin and `claude --print` from real argv and frame shapes; Geist Mono (OFL, 38 KB
