@@ -1,9 +1,9 @@
 ---
 /*
   Overrides Starlight's Hero (astro.config.mjs: components.Hero). On the landing page it
-  renders the plugin's own hero: a bar-led monospace title, the one-line tagline, the
-  install block and the turn replay, all meant to fit the first screen at 1440x900 and
-  at 390x844. On every other page that declares `hero:` it defers to Starlight's default,
+  renders the plugin's own hero: a bar-led monospace title, the two-sentence tagline,
+  the install block and the turn replay, all meant to fit the first screen at 1440x900
+  and at 390x844. On every other page that declares `hero:` it defers to Starlight's default,
   so the override never changes a docs page.
 
   Reads the same frontmatter fields as the default Hero (title, tagline, actions), so
@@ -140,13 +140,13 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
 
   /* The title is set the way the plugin writes a note into a transcript:
      a thick left bar, then the line. Monospace so it reads as output, not marketing.
-     Capped so "Claude Code is" fits one line beside the replay at 1440. */
+     Capped so "Claude Code is" fits one line in the narrower copy column from 80rem up. */
   .occ-hero__title {
     margin: 0;
     padding-inline-start: 0.5em;
     border-inline-start: 0.28em solid var(--occ-bar);
     font-family: var(--__sl-font-mono);
-    font-size: clamp(1.875rem, 1rem + 2.9vw, 3.6rem);
+    font-size: clamp(1.875rem, 1rem + 2.9vw, 3.25rem);
     font-weight: 700;
     line-height: 1.06;
     letter-spacing: -0.04em;
@@ -295,12 +295,14 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
   }
 
   /* Stacked below 64rem: a tablet column is too narrow for both the title and the
-     replay's lines. Two equal columns from there. */
+     replay's lines. Two equal columns from there, and from 80rem the replay takes the
+     larger share: its longest lines wrap less, so the whole first turn stays above the
+     fold at 1440x900, while the copy column still holds "Claude Code is" on one line. */
   @media (min-width: 64rem) {
     .occ-hero {
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: var(--occ-space-8);
-      padding-block: clamp(var(--occ-space-6), 4vw, 3.5rem) var(--occ-space-8);
+      padding-block: clamp(var(--occ-space-4), 2.5vw, 2.5rem) var(--occ-space-8);
     }
     .occ-hero__copy {
       gap: var(--occ-space-6);
@@ -308,6 +310,7 @@ const snippet = '{\n  "plugin": ["@khalilgharbaoui/opencode-claude-code-plugin"]
   }
   @media (min-width: 80rem) {
     .occ-hero {
+      grid-template-columns: minmax(0, 11fr) minmax(0, 13fr);
       gap: var(--occ-space-12);
     }
   }

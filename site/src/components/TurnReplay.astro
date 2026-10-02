@@ -1,9 +1,9 @@
 ---
 /*
-  The hero's panel: three turns, replayed, each a lane-tagged transcript spoken by
-  opencode, the plugin and `claude --print`, and each ending on the line the user
-  sees in opencode. These are explicitly illustrative, abbreviated examples, not
-  recordings. They use the opencode 1.x vocabulary and its inline /btw delivery.
+  The hero's panel: three turns, each replayed line by line the way a transcript is
+  written, and each ending on the line the user sees in opencode. Illustrative,
+  abbreviated examples built from real line shapes, not recordings. They use the
+  opencode 1.x vocabulary (`filePath`, inline /btw); src/host-tools.ts renames on 2.x.
 
   1. A proxied tool. The spawn flags from src/session-manager.ts (`buildCliArgs`, which
      pushes every disallowed tool as its own argument), the built-ins each proxied tool
@@ -12,25 +12,36 @@
      keepalive (docs/internals/how-a-proxied-call-ends.md). The one number in it, the
      test count, is the live figure stats.ts reads from the suite's own summary line.
   2. Claude's own tool. A second turn in the same conversation: the process is reused
-     and only the new message is written to its stdin (docs/internals/how-a-turn-works.md);
-     `Read` runs inside Claude Code rather than through the proxy (docs/guides/tool-proxy.md);
-     the answer is docs/introduction.md's own sentence about tokens.
+     and only the new message is written to its stdin (docs/internals/how-a-turn-works.md).
+     `Read` runs inside Claude Code and reaches opencode as a tool part whose result
+     carries the same name (docs/guides/tool-proxy.md, PR #46). The answer is
+     docs/introduction.md's own sentence about tokens.
   3. /btw while a turn runs. The `side_question` control request and where its answer
-     sits on the wire (AGENTS.md, /btw), the receipt and the inline block exactly as
-     docs/guides/btw.md renders them, and an answer whose substance is the proxy deadline
-     guard (AGENTS.md, h #g27). The proxied edit's input key is opencode 1.x's `filePath`
-     (src/host-tools.ts renames it on 2.x).
+     sits on the wire (src/side-question.ts), the receipt and the inline block as
+     docs/guides/btw.md renders them, and an answer whose substance is the proxy
+     deadline guard (AGENTS.md, h #g27).
 
   No cost, duration or token figure appears: those would be invented.
 
-  The compact lists show the whole story at every width. The full protocol excerpts
-  remain in an always-accessible static transcript, revealed visually by its anchor.
-  One timer owns step emphasis, the four-second final hold and cycling. No CSS animation
-  can outlive Pause. Reduced motion and no JavaScript are complete stills.
+  Markup: one ordered list per turn, one item per line, each a three-column grid
+  (speaker, bar, body). Not a <pre>: there the template's own newlines render, and a
+  grid inside it stacks every span. The three lists share one grid cell, so the panel
+  keeps the tallest turn's height and nothing below it moves when the turn changes.
+  A line that has not been spoken yet is transparent, not removed: the panel is full
+  height from the first frame and every line stays in the accessibility tree.
+
+  Motion: one clock in the script reveals a line per tick, each line carrying its own
+  pacing, streams the final answer a word at a time, holds, then moves to the next turn
+  and starts over. The cursor sits after the newest word. Pause stops the clock. A mouse
+  over the panel, or focus inside it, holds a finished turn so it can be read. A turn
+  picked by hand plays and then stays. Without scripting the first turn plays once in
+  CSS (animation-delay), exactly as the pass-2 panel did. Under prefers-reduced-motion
+  every line is simply visible and the tabs still switch turns.
 */
 import { loadStats } from '../data/stats';
 
 const stats = await loadStats();
+const tests = stats.tests.toLocaleString('en-US');
 
 type Lane = 'opencode' | 'plugin' | 'claude';
 interface Line {
@@ -40,28 +51,27 @@ interface Line {
   note?: string;
   /** The transcript bar: on every plugin line, and on what opencode shows the user. */
   bar?: boolean;
+  /** Streams a word at a time, the way a reply arrives in opencode. */
+  stream?: boolean;
+  /** Milliseconds the clock waits after this line. The script's default is 520. */
+  wait?: number;
 }
-interface Replay {
+interface Turn {
   id: string;
   label: string;
   title: string;
-  preview: Line[];
   lines: Line[];
 }
 
-const replays: Replay[] = [
+const words = (text: string): string[] => text.match(/\S+\s*/g) ?? [text];
+
+const turns: Turn[] = [
   {
     id: 'proxy',
     label: 'Tool proxy',
-    title: 'Turn 1: a proxied tool runs in opencode',
-    preview: [
-      { lane: 'opencode', tag: 'you', text: 'Run the suite.' },
-      { lane: 'plugin', tag: 'proxy', text: 'bash → opencode. Permission: allow once.', bar: true },
-      { lane: 'opencode', tag: 'bash', text: 'npm test → result back to Claude.' },
-      { lane: 'opencode', tag: 'reply', text: `${stats.tests.toLocaleString('en-US')} tests pass. Broker coverage: test-broker.ts + test-proxy-task.ts.`, bar: true },
-    ],
+    title: 'A proxied tool runs in opencode, under its permissions',
     lines: [
-      { lane: 'opencode', tag: 'you', text: 'run the suite. which test files cover the proxy broker?' },
+      { lane: 'opencode', tag: 'you', text: 'run the suite. which test files cover the proxy broker?', wait: 900 },
       {
         lane: 'plugin',
         tag: 'spawn',
@@ -73,121 +83,152 @@ const replays: Replay[] = [
         tag: 'with',
         text: '--mcp-config <0600, bearer token inside> --append-system-prompt-file <0600> --disallowedTools Bash Edit MultiEdit Write WebFetch Agent',
         bar: true,
+        wait: 700,
       },
       {
         lane: 'claude',
         text: '{"type":"system","subtype":"init", … "mcp_servers":[{"name":"opencode_proxy","status":"connected"}]}',
+        wait: 420,
       },
       {
         lane: 'claude',
         text: '{"type":"assistant", … {"type":"tool_use","name":"Grep","input":{"pattern":"queuePendingProxyCall"}}}',
         note: 'ran inside Claude Code',
+        wait: 700,
       },
       {
         lane: 'claude',
         text: '{"type":"assistant", … {"type":"tool_use","name":"mcp__opencode_proxy__bash","input":{"command":"npm test"}}}',
+        wait: 420,
       },
       {
         lane: 'plugin',
         tag: 'tool-call',
         text: "bash → opencode. The CLI's HTTP request stays open, with a keepalive every 15 s.",
         bar: true,
+        wait: 700,
       },
-      { lane: 'opencode', tag: 'permission', text: 'run npm test?  allow once' },
+      { lane: 'opencode', tag: 'permission', text: 'run npm test?', wait: 1100 },
+      { lane: 'opencode', tag: 'you', text: 'allow once', wait: 700 },
       {
         lane: 'opencode',
         tag: 'bash',
-        text: `ran here, under opencode's own permissions and audit log · tests ${stats.tests}`,
+        text: `ran here, under opencode's own permissions and audit log · ${tests} tests`,
+        wait: 800,
       },
-      { lane: 'plugin', tag: 'tool-result', text: '→ claude. The held request resolves; the model carries on.', bar: true },
+      {
+        lane: 'plugin',
+        tag: 'tool-result',
+        text: '→ claude. The held request resolves; the model carries on.',
+        bar: true,
+        wait: 600,
+      },
       {
         lane: 'claude',
         text: '{"type":"assistant", … {"type":"text","text":"test-broker.ts and test-proxy-task.ts: per-tool deadlines, the guard, stall warnings, fan-out, late results."}}',
+        wait: 420,
       },
-      { lane: 'claude', text: '{"type":"result","subtype":"success","is_error":false}' },
+      { lane: 'claude', text: '{"type":"result","subtype":"success","is_error":false}', wait: 500 },
       {
         lane: 'opencode',
         tag: 'reply',
-        text: `test-broker.ts and test-proxy-task.ts cover the broker: per-tool deadlines, the guard, stall warnings, fan-out and late results. All ${stats.tests.toLocaleString('en-US')} tests pass.`,
-        note: 'the CLI authenticates; the plugin reads no login token',
+        text: `test-broker.ts and test-proxy-task.ts cover the broker: per-tool deadlines, the guard, stall warnings, fan-out and late results. All ${tests} tests pass.`,
+        note: 'the CLI authenticated this turn; the plugin read no token',
         bar: true,
+        stream: true,
       },
     ],
   },
   {
     id: 'read',
     label: 'Native Read',
-    title: "Turn 2: Claude's own tool, no proxy",
-    preview: [
-      { lane: 'opencode', tag: 'you', text: 'Do you read my login token?' },
-      { lane: 'plugin', tag: 'reuse', text: 'Same claude process. Context kept.', bar: true },
-      { lane: 'claude', tag: 'Read', text: 'docs/introduction.md, inside Claude Code.' },
-      { lane: 'opencode', tag: 'reply', text: 'No. The CLI holds your login. The plugin never reads or replays it.', bar: true },
-    ],
+    title: "Claude's own tool, with no proxy in the way",
     lines: [
-      { lane: 'opencode', tag: 'you', text: 'does this plugin ever touch my Claude login?' },
+      { lane: 'opencode', tag: 'you', text: 'does this plugin ever touch my Claude login?', wait: 900 },
       {
         lane: 'plugin',
         tag: 'reuse',
-        text: 'the conversation\'s claude process is still alive: nothing is spawned, only the new message is written to its stdin. Full context kept.',
+        text: "the conversation's claude process is still alive: nothing is spawned, only the new message is written to its stdin. Full context kept.",
         bar: true,
+        wait: 800,
       },
       {
         lane: 'claude',
         text: '{"type":"assistant", … {"type":"tool_use","name":"Read","input":{"file_path":"docs/introduction.md"}}}',
-        note: "ran inside Claude Code, not through the opencode tool proxy",
+        note: 'ran inside Claude Code, not through the proxy',
+        wait: 600,
+      },
+      {
+        lane: 'plugin',
+        tag: 'tool-call',
+        text: 'Read → opencode, as a tool part only: Claude Code runs it, opencode renders the row.',
+        bar: true,
+        wait: 600,
       },
       {
         lane: 'claude',
-        text: '{"type":"assistant", … {"type":"text","text":"No. The plugin never reads, stores or replays an OAuth token of its own …"}}',
+        text: '{"type":"user", … {"type":"tool_result","tool_use_id":"toolu_01…","content":"# Introduction …"}}',
+        wait: 500,
       },
-      { lane: 'claude', text: '{"type":"result","subtype":"success","is_error":false}' },
+      { lane: 'opencode', tag: 'read', text: 'docs/introduction.md · ran by Claude Code, shown here as it completes', wait: 700 },
+      {
+        lane: 'claude',
+        text: '{"type":"assistant", … {"type":"text","text":"No. The plugin never reads, stores or replays an OAuth token of its own …"}}',
+        wait: 420,
+      },
+      { lane: 'claude', text: '{"type":"result","subtype":"success","is_error":false}', wait: 500 },
       {
         lane: 'opencode',
         tag: 'reply',
         text: 'No. The claude CLI holds your login and does its own authenticating. The plugin never reads, stores or replays a token of its own: there is nothing in it to lift.',
         bar: true,
+        stream: true,
       },
     ],
   },
   {
     id: 'btw',
     label: '/btw aside',
-    title: 'Turn 3: a mid-turn side question on opencode 1.x (CLI 2.1.258+)',
-    preview: [
-      { lane: 'opencode', tag: 'you', text: '/btw why a deadline guard?' },
-      { lane: 'plugin', tag: 'aside', text: 'side_question → the live claude process.', bar: true },
-      { lane: 'opencode', tag: 'receipt', text: '▌ sent to Claude on the side', bar: true },
-      { lane: 'opencode', tag: 'reply', text: '▌ btw: time on your permission prompt must not count toward the deadline.', bar: true },
-    ],
+    title: 'A side question while the turn keeps running (opencode 1.x, CLI 2.1.258+)',
     lines: [
-      { lane: 'opencode', tag: 'you', text: 'tighten the deadline guard in the broker and run the suite' },
+      { lane: 'opencode', tag: 'you', text: 'tighten the deadline guard in the broker and run the suite', wait: 900 },
       {
         lane: 'claude',
         text: '{"type":"assistant", … {"type":"tool_use","name":"mcp__opencode_proxy__edit","input":{"filePath":"src/proxy-broker.ts", …}}}',
+        wait: 420,
       },
       {
         lane: 'plugin',
         tag: 'tool-call',
         text: 'edit → opencode. Runs here, under your permission rules; the request is held open while it does.',
         bar: true,
+        wait: 800,
       },
-      { lane: 'opencode', tag: 'you', text: '/btw why a guard instead of a longer deadline?', note: 'typed while the turn is still running' },
+      {
+        lane: 'opencode',
+        tag: 'you',
+        text: '/btw why a guard instead of a longer deadline?',
+        note: 'typed while the turn is still running',
+        wait: 900,
+      },
       {
         lane: 'plugin',
         tag: 'side_question',
-        text: '{"type":"control_request","request":{"subtype":"side_question", …}} → the same live process, same model and account, concurrent with the turn. The aside never enters Claude\'s transcript.',
+        text: "{\"type\":\"control_request\",\"request\":{\"subtype\":\"side_question\", …}} → the same live process, same model and account, concurrent with the turn. The aside never enters Claude's transcript.",
         bar: true,
+        wait: 800,
       },
       {
         lane: 'opencode',
         tag: 'receipt',
         text: '▌ btw: why a guard instead of a longer deadline?  ▌ sent to Claude on the side',
         bar: true,
+        wait: 800,
       },
       {
         lane: 'claude',
         text: '{"type":"control_response","response":{"response":{"response":"A fixed deadline would count the operator\'s time on a permission prompt …"}}}',
+        wait: 500,
       },
       {
         lane: 'opencode',
@@ -195,163 +236,280 @@ const replays: Replay[] = [
         text: '▌ btw: a deadline would count your time on a permission prompt. The guard keeps the call while opencode still reports it busy, re-checking on an interval, and lets the deadline end it only once it does not.',
         note: 'written into the reply you are watching; the turn goes on below it',
         bar: true,
+        stream: true,
       },
     ],
   },
 ];
 ---
 
-<figure class="occ-replay not-content" aria-labelledby="occ-replay-title">
+<figure
+  class="occ-replay not-content"
+  data-mode="css"
+  data-playback="playing"
+  aria-label="Three turns, replayed: what opencode, the plugin and claude --print each do"
+>
   <figcaption class="occ-replay__cap">
-    <span class="occ-replay__title" id="occ-replay-title">see a turn</span>
-    <button type="button" class="occ-replay__pause occ-replay__btn" aria-label="Pause autoplay" hidden>Pause</button>
-    <button type="button" class="occ-replay__restart occ-replay__btn" aria-label="Replay this example" hidden>Replay</button>
+    <span class="occ-replay__title">three turns</span>
+    <span class="occ-replay__lanes" aria-hidden="true">
+      <span class="occ-lane occ-lane--opencode">opencode</span>
+      <span class="occ-lane occ-lane--plugin">plugin</span>
+      <span class="occ-lane occ-lane--claude">claude</span>
+    </span>
+    <span class="occ-replay__controls">
+      <button type="button" class="occ-replay__btn occ-replay__pause" aria-pressed="false" hidden>pause</button>
+      <button type="button" class="occ-replay__btn occ-replay__restart" hidden>replay</button>
+    </span>
   </figcaption>
 
-  <div class="occ-replay__tabs" role="group" aria-label="Choose an illustrative replay">
+  <div class="occ-replay__tabs" role="tablist" aria-label="Which turn to replay">
     {
-      replays.map((replay, index) => (
-        <button type="button" class="occ-replay__tab" aria-pressed={index === 0 ? 'true' : 'false'} data-replay={index} disabled>
-          <span class="occ-replay__tab-n">{String(index + 1).padStart(2, '0')}</span>
-          <span class="occ-replay__tab-label">{replay.label}</span>
+      turns.map((turn, index) => (
+        <button
+          type="button"
+          role="tab"
+          id={`occ-tab-${turn.id}`}
+          class="occ-replay__tab"
+          aria-selected={index === 0 ? 'true' : 'false'}
+          aria-controls={`occ-turn-${turn.id}`}
+          tabindex={index === 0 ? 0 : -1}
+          title={turn.title}
+          disabled
+        >
+          <span class="occ-replay__tab-n" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
+          <span class="occ-replay__tab-label">{turn.label}</span>
+          <span class="occ-replay__tab-bar" aria-hidden="true" />
         </button>
       ))
     }
   </div>
 
-  <div class="occ-replay__stage" aria-hidden="true">
+  <div class="occ-replay__stage">
     {
-      replays.map((replay, index) => (
-        <ol class:list={['occ-replay__lines', { 'is-active': index === 0 }]} data-replay={index} role="list">
-          {replay.preview.map((line) => (
-            <li class:list={['occ-line', `occ-line--${line.lane}`, { 'occ-line--bar': line.bar, 'occ-line--reply': line.tag === 'reply' }]}>
-              <span class="occ-line__lane">{line.lane}</span>
-              <span class="occ-line__bar" />
-              <span class="occ-line__body">
-                {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.text}</span>
-                {line.note && <span class="occ-line__note"> · {line.note}</span>}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ))
-    }
-  </div>
-
-  <a class="occ-replay__source" href="#occ-replay-transcripts">Illustrative · opencode 1.x · full transcripts ↗</a>
-  <div class="occ-replay__transcripts" id="occ-replay-transcripts" tabindex="-1">
-    <h2>Three illustrative transcripts</h2>
-    <p>Abbreviated protocol examples, not recordings. Inline /btw requires opencode 1.x and Claude Code CLI 2.1.258 or newer; opencode 2 queues the command.</p>
-    <a href="#_top">Back to the overview</a>
-    {
-      replays.map((replay) => (
-        <>
-          <h3>{replay.title}</h3>
-          <ol>
-            {replay.lines.map((line) => (
-              <li>
-                {line.lane}
-                {line.tag ? `, ${line.tag}` : ''}: {line.text}
-                {line.note ? ` (${line.note})` : ''}
+      turns.map((turn, index) => (
+        <div
+          id={`occ-turn-${turn.id}`}
+          role="tabpanel"
+          aria-labelledby={`occ-tab-${turn.id}`}
+          class:list={['occ-replay__panel', { 'is-active': index === 0 }]}
+        >
+          <ol class="occ-replay__lines" role="list">
+            {turn.lines.map((line, lineIndex) => (
+              <li
+                class:list={[
+                  'occ-line',
+                  `occ-line--${line.lane}`,
+                  { 'occ-line--bar': line.bar, 'occ-line--reply': line.tag === 'reply', 'occ-line--stream': line.stream },
+                ]}
+                style={`--i:${lineIndex}`}
+                data-wait={line.wait}
+              >
+                <span class="occ-line__lane">{line.lane}</span>
+                <span class="occ-line__bar" aria-hidden="true" />
+                <span class="occ-line__body">
+                  {line.tag && <span class="occ-line__tag">{line.tag}</span>}<span class="occ-line__text">{line.stream ? words(line.text).map((word) => <span class="occ-word">{word}</span>) : line.text}</span>
+                  {line.note && <span class="occ-line__note"> · {line.note}</span>}
+                </span>
               </li>
             ))}
+            <li class="occ-line occ-line--cursor" aria-hidden="true" style={`--i:${turn.lines.length}`}>
+              <span class="occ-line__lane" />
+              <span class="occ-line__bar" />
+              <span class="occ-cursor" />
+            </li>
           </ol>
-        </>
+        </div>
       ))
     }
   </div>
 </figure>
 
 <script>
-  // A single clock for emphasis, the final hold and switching scenarios. All text
-  // stays readable even mid-play; pause freezes the clock, not the user's reading.
+  // One clock. Each tick reveals the next line of the current turn, or the next word
+  // of its final answer, waits that line's own pacing, holds at the end of the turn,
+  // then moves to the next turn. Every pause and resume goes through the same clock,
+  // so nothing can run on while the panel says it is paused.
   const root = document.querySelector<HTMLElement>('.occ-replay');
-  const panels = root ? Array.from(root.querySelectorAll<HTMLOListElement>('.occ-replay__lines')) : [];
-  const tabs = root ? Array.from(root.querySelectorAll<HTMLButtonElement>('.occ-replay__tab')) : [];
-  const replayButton = root?.querySelector<HTMLButtonElement>('.occ-replay__restart');
-  const pauseButton = root?.querySelector<HTMLButtonElement>('.occ-replay__pause');
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-  if (root && replayButton && pauseButton && panels.length > 1) {
-    const STEP_MS = 1200;
-    const HOLD_MS = 4000;
+  if (root) {
+    root.dataset.mode = 'js';
+    const panels = Array.from(root.querySelectorAll<HTMLElement>('.occ-replay__panel'));
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('.occ-replay__tab'));
+    const stage = root.querySelector<HTMLElement>('.occ-replay__stage');
+    const pauseButton = root.querySelector<HTMLButtonElement>('.occ-replay__pause');
+    const restartButton = root.querySelector<HTMLButtonElement>('.occ-replay__restart');
+
+    const FIRST_MS = 400;
+    const LINE_MS = 520;
+    const WORD_MS = 46;
+    const HOLD_MS = 6000;
+
+    interface Step {
+      line: HTMLElement;
+      word?: HTMLElement;
+      /** The step that completes its line: a whole line, or the last word of one. */
+      ends: boolean;
+      wait: number;
+    }
+    const scripts: Step[][] = panels.map((panel) => {
+      const steps: Step[] = [];
+      panel.querySelectorAll<HTMLElement>('.occ-line:not(.occ-line--cursor)').forEach((line) => {
+        const wait = Number(line.dataset.wait) || LINE_MS;
+        const lineWords = Array.from(line.querySelectorAll<HTMLElement>('.occ-word'));
+        if (lineWords.length === 0) {
+          steps.push({ line, ends: true, wait });
+          return;
+        }
+        lineWords.forEach((word, index) => {
+          const ends = index === lineWords.length - 1;
+          steps.push({ line, word, ends, wait: ends ? wait : WORD_MS });
+        });
+      });
+      return steps;
+    });
+    const totals = scripts.map((steps) => steps.reduce((sum, step) => sum + step.wait, 0));
+
     let current = 0;
-    let step = 0;
-    let timer = 0;
-    let deadline = 0;
-    let remaining = STEP_MS;
-    let manualPause = false;
+    let done = 0; // steps of the current turn already on screen
+    let elapsed = 0; // their pacing, summed, for the progress bar
+    let manual = false; // a turn picked by hand plays and then stays
+    let paused = false;
     let hovering = false;
     let focused = false;
     let visible = true;
+    let timer = 0;
+    let deadline = 0;
+    let remaining = FIRST_MS;
+    let cursor: HTMLElement | null = null;
+
+    const atEnd = () => done >= scripts[current].length;
 
     const stopClock = () => {
-      if (timer) remaining = Math.max(0, deadline - performance.now());
+      if (!timer) return;
+      remaining = Math.max(0, deadline - performance.now());
       window.clearTimeout(timer);
       timer = 0;
     };
-    const paint = () => {
-      panels.forEach((panel, index) => {
-        panel.classList.toggle('is-active', index === current);
-        panel.querySelectorAll('.occ-line').forEach((line, lineIndex) => {
-          line.classList.toggle('is-current', !reduce.matches && index === current && lineIndex === step);
-        });
-      });
-      tabs.forEach((tab, index) => tab.setAttribute('aria-pressed', String(index === current)));
-      root.dataset.replay = String(current);
-      root.dataset.step = String(step);
+
+    const setCursor = (element: HTMLElement | null) => {
+      cursor?.classList.remove('is-cursor');
+      cursor = element;
+      cursor?.classList.add('is-cursor');
     };
+
+    const paint = () => {
+      tabs.forEach((tab, index) => {
+        const selected = index === current;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        const progress = reduce.matches ? 1 : Math.min(1, elapsed / totals[index]);
+        tab.style.setProperty('--p', selected ? String(progress) : '0');
+      });
+      panels.forEach((panel, index) => panel.classList.toggle('is-active', index === current));
+      const blocked = paused || !visible || document.hidden;
+      root.dataset.playback = reduce.matches ? 'static' : blocked ? 'paused' : atEnd() ? 'holding' : 'playing';
+    };
+
+    const clear = (index: number) => {
+      scripts[index].forEach((step) => {
+        step.line.classList.remove('is-shown', 'is-done');
+        step.word?.classList.remove('is-shown');
+      });
+    };
+    const showAll = (index: number) => {
+      scripts[index].forEach((step) => {
+        step.line.classList.add('is-shown', 'is-done');
+        step.word?.classList.add('is-shown');
+      });
+    };
+
     const syncClock = () => {
       stopClock();
-      const paused = reduce.matches || manualPause || hovering || focused || !visible || document.hidden;
-      root.dataset.playback = reduce.matches ? 'static' : paused ? 'paused' : 'playing';
-      if (paused) return;
-      deadline = performance.now() + remaining;
-      timer = window.setTimeout(() => {
-        timer = 0;
-        if (step < panels[current].children.length - 1) {
-          step += 1;
-        } else {
-          current = (current + 1) % panels.length;
-          step = 0;
-        }
-        remaining = step === panels[current].children.length - 1 ? HOLD_MS : STEP_MS;
-        paint();
-        syncClock();
-      }, remaining);
-    };
-    const select = (index: number) => {
-      stopClock();
-      current = index;
-      step = 0;
-      remaining = STEP_MS;
       paint();
+      if (reduce.matches || paused || !visible || document.hidden) return;
+      if (atEnd() && (manual || hovering || focused)) return;
+      deadline = performance.now() + remaining;
+      timer = window.setTimeout(tick, remaining);
+    };
+
+    const tick = () => {
+      timer = 0;
+      if (atEnd()) {
+        select((current + 1) % panels.length, false);
+        return;
+      }
+      const step = scripts[current][done];
+      done += 1;
+      elapsed += step.wait;
+      step.line.classList.add('is-shown');
+      step.word?.classList.add('is-shown');
+      if (step.ends) step.line.classList.add('is-done');
+      setCursor(step.word ?? step.line.querySelector<HTMLElement>('.occ-line__text'));
+      remaining = atEnd() ? HOLD_MS : step.wait;
       syncClock();
     };
+
+    const select = (index: number, byHand: boolean) => {
+      stopClock();
+      clear(current);
+      setCursor(null);
+      current = index;
+      done = 0;
+      elapsed = 0;
+      remaining = FIRST_MS;
+      if (byHand) manual = true;
+      if (reduce.matches) {
+        showAll(current);
+        done = scripts[current].length;
+      }
+      syncClock();
+    };
+
+    const setPaused = (value: boolean) => {
+      paused = value;
+      if (pauseButton) {
+        pauseButton.textContent = paused ? 'play' : 'pause';
+        pauseButton.setAttribute('aria-pressed', String(paused));
+      }
+      syncClock();
+    };
+
     tabs.forEach((tab, index) => {
       tab.disabled = false;
-      tab.addEventListener('click', () => select(index));
+      tab.addEventListener('click', () => select(index, true));
       tab.addEventListener('keydown', (event) => {
-        const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-        const target = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + offset + tabs.length) % tabs.length;
-        if (!offset && event.key !== 'Home' && event.key !== 'End') return;
+        const targets: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 };
+        const target = targets[event.key];
+        if (target === undefined) return;
         event.preventDefault();
-        tabs[target].focus();
-        select(target);
+        const next = (target + tabs.length) % tabs.length;
+        tabs[next].focus();
+        select(next, true);
       });
     });
-    replayButton.addEventListener('click', () => select(current));
-    pauseButton.addEventListener('click', () => {
-      manualPause = !manualPause;
-      pauseButton.textContent = manualPause ? 'Resume' : 'Pause';
-      pauseButton.setAttribute('aria-label', manualPause ? 'Resume autoplay after leaving the controls' : 'Pause autoplay');
-      syncClock();
+    pauseButton?.addEventListener('click', () => setPaused(!paused));
+    restartButton?.addEventListener('click', () => {
+      paused = false;
+      if (pauseButton) {
+        pauseButton.textContent = 'pause';
+        pauseButton.setAttribute('aria-pressed', 'false');
+      }
+      select(current, false);
     });
-    root.addEventListener('mouseenter', () => {
+    // A click on the transcript itself pauses or resumes it, unless the click was a
+    // text selection. Selecting a line to copy it must never restart the clock.
+    stage?.addEventListener('click', () => {
+      if (window.getSelection()?.toString()) return;
+      setPaused(!paused);
+    });
+    root.addEventListener('pointerenter', (event) => {
+      if (event.pointerType !== 'mouse') return;
       hovering = true;
       syncClock();
     });
-    root.addEventListener('mouseleave', () => {
+    root.addEventListener('pointerleave', (event) => {
+      if (event.pointerType !== 'mouse') return;
       hovering = false;
       syncClock();
     });
@@ -366,10 +524,9 @@ const replays: Replay[] = [
     });
     document.addEventListener('visibilitychange', syncClock);
     reduce.addEventListener('change', () => {
-      replayButton.hidden = reduce.matches;
-      pauseButton.hidden = reduce.matches;
-      paint();
-      syncClock();
+      if (pauseButton) pauseButton.hidden = reduce.matches;
+      if (restartButton) restartButton.hidden = reduce.matches;
+      select(current, false);
     });
     if ('IntersectionObserver' in window) {
       new IntersectionObserver(
@@ -381,10 +538,9 @@ const replays: Replay[] = [
       ).observe(root);
     }
 
-    replayButton.hidden = reduce.matches;
-    pauseButton.hidden = reduce.matches;
-    paint();
-    syncClock();
+    if (pauseButton) pauseButton.hidden = reduce.matches;
+    if (restartButton) restartButton.hidden = reduce.matches;
+    select(0, false);
   }
 </script>
 
@@ -404,9 +560,10 @@ const replays: Replay[] = [
   }
   .occ-replay__cap {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--occ-space-2);
-    padding: 0 var(--occ-space-3);
+    gap: 0 var(--occ-space-4);
+    padding: 0 var(--occ-space-2) 0 var(--occ-space-4);
     min-block-size: 2.75rem;
     border-bottom: 1px solid var(--occ-line);
     font-size: var(--sl-text-2xs);
@@ -414,42 +571,67 @@ const replays: Replay[] = [
     text-transform: uppercase;
     color: var(--occ-ink-3);
   }
-  .occ-replay__title {
-    margin-inline-end: auto;
+  .occ-replay__lanes {
+    display: flex;
+    gap: var(--occ-space-3);
+    margin-inline-start: auto;
+  }
+  .occ-lane::before {
+    content: '';
+    display: inline-block;
+    inline-size: 0.5em;
+    block-size: 0.5em;
+    margin-inline-end: 0.45em;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 0.05em;
+  }
+  .occ-lane--opencode {
+    color: var(--occ-lane-opencode);
+  }
+  .occ-lane--plugin {
+    color: var(--occ-lane-plugin);
+  }
+  .occ-lane--claude {
+    color: var(--occ-lane-claude);
+  }
+  .occ-replay__controls {
+    display: flex;
   }
   .occ-replay__btn {
     margin: 0;
     padding: 0 var(--occ-space-2);
     min-block-size: 2.75rem;
-    min-inline-size: 4rem;
+    min-inline-size: 2.75rem;
     border: 0;
-    border-radius: 4px;
     background: transparent;
     color: var(--occ-ink-2);
     font: inherit;
     letter-spacing: inherit;
+    text-transform: inherit;
     cursor: pointer;
-    transition:
-      border-color var(--occ-duration),
-      color var(--occ-duration);
+    transition: color var(--occ-duration);
   }
   .occ-replay__btn:hover {
-    border-color: var(--occ-ink-3);
     color: var(--sl-color-white);
   }
-  .occ-replay__btn[hidden] {
-    visibility: hidden;
-    display: block;
+  .occ-replay__btn[aria-pressed='true'] {
+    color: var(--sl-color-text-accent);
+  }
+  .occ-replay__btn:focus-visible,
+  .occ-replay__tab:focus-visible {
+    outline-offset: -3px;
   }
 
-  /* The three turns as a segmented row. Each is a 44 px target; the chosen one carries
-     the bar along its bottom edge, the same mark that says "current" everywhere else. */
+  /* The three turns as a segmented row. Each is a 44 px target. The chosen one carries
+     a track along its bottom edge, and the bar fills it as the turn plays. */
   .occ-replay__tabs {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     border-bottom: 1px solid var(--occ-line);
   }
   .occ-replay__tab {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -464,64 +646,85 @@ const replays: Replay[] = [
     font: inherit;
     font-size: var(--sl-text-2xs);
     letter-spacing: 0.02em;
+    white-space: nowrap;
     cursor: pointer;
-    box-shadow: inset 0 -2px 0 transparent;
     transition:
       color var(--occ-duration),
-      background-color var(--occ-duration),
-      box-shadow var(--occ-duration);
+      background-color var(--occ-duration);
   }
   .occ-replay__tab:first-child {
     border-inline-start: 0;
+  }
+  .occ-replay__tab:disabled {
+    cursor: default;
   }
   .occ-replay__tab:hover {
     color: var(--sl-color-white);
     background: color-mix(in srgb, var(--sl-color-white) 4%, transparent);
   }
-  .occ-replay__tab[aria-pressed='true'] {
+  .occ-replay__tab[aria-selected='true'] {
     color: var(--sl-color-white);
-    box-shadow: inset 0 -2px 0 var(--occ-bar);
-  }
-  .occ-replay__tab:focus-visible {
-    outline-offset: -3px;
   }
   .occ-replay__tab-n {
     font-weight: 700;
     color: var(--sl-color-text-accent);
     font-variant-numeric: tabular-nums;
   }
-  .occ-replay__tab-label {
-    white-space: normal;
+  .occ-replay__tab-bar {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: 0;
+    block-size: 2px;
+    background: var(--occ-line-strong);
+    opacity: 0;
+    transition: opacity var(--occ-duration);
+  }
+  .occ-replay__tab[aria-selected='true'] .occ-replay__tab-bar {
+    opacity: 1;
+  }
+  .occ-replay__tab-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--occ-bar);
+    transform-origin: left;
+    transform: scaleX(var(--p, 0));
+    transition: transform 320ms linear;
+  }
+  [data-mode='css'] .occ-replay__tab[aria-selected='true'] .occ-replay__tab-bar::after {
+    transform: none;
   }
 
-  /* All three lists share one grid cell, so the panel keeps the tallest one's height
-     and nothing on the page moves when the turns cycle. */
+  /* All three turns share one grid cell, so the panel keeps the tallest one's height
+     and nothing on the page moves when the turn changes. */
   .occ-replay__stage {
     display: grid;
-    padding: var(--occ-space-2) var(--occ-space-3);
+    padding: var(--occ-space-3) var(--occ-space-4) var(--occ-space-4);
   }
-  .occ-replay__lines {
+  .occ-replay__panel {
     grid-area: 1 / 1;
+    min-width: 0;
+    visibility: hidden;
+  }
+  .occ-replay__panel.is-active {
+    visibility: visible;
+  }
+  /* 12 px on 18 px: the longest turn is 14 lines, and at the hero's column width it
+     has to end above the fold at 1440x900 for the answer to play in view. */
+  .occ-replay__lines {
     margin: 0;
     padding: 0;
     list-style: none;
-    font-size: var(--sl-text-xs);
+    font-size: 0.75rem;
     line-height: 1.5;
     color: var(--occ-ink-2);
-    visibility: hidden;
-    pointer-events: none;
-  }
-  .occ-replay__lines.is-active {
-    visibility: visible;
-    pointer-events: auto;
   }
   .occ-line {
     display: grid;
     grid-template-columns: 8ch 3px minmax(0, 1fr);
     column-gap: var(--occ-space-2);
     margin: 0;
-    padding-block: var(--occ-space-2);
-    border-bottom: 1px solid var(--occ-line);
+    padding-block: 0.15rem;
   }
   .occ-line__lane {
     font-weight: 600;
@@ -561,93 +764,150 @@ const replays: Replay[] = [
   .occ-line--bar .occ-line__text {
     color: var(--occ-ink-1);
   }
+  .occ-line--reply .occ-line__text {
+    font-weight: 500;
+  }
   .occ-line__note {
     color: var(--occ-ink-3);
   }
-  .occ-line--reply {
-    border-bottom: 0;
-    font-weight: 500;
-  }
-  .occ-line.is-current .occ-line__lane {
-    color: var(--sl-color-text-accent);
-    text-decoration: underline;
-    text-underline-offset: 0.25em;
-  }
-  .occ-line.is-current .occ-line__bar {
+  .occ-cursor {
+    display: block;
+    inline-size: 0.6em;
+    block-size: 1.1em;
+    margin-top: 0.25em;
+    border-radius: 1px;
     background: var(--occ-bar);
   }
-  .occ-replay__source {
-    display: flex;
-    align-items: center;
-    min-block-size: 2.75rem;
-    padding-inline: var(--occ-space-3);
-    border-top: 1px solid var(--occ-line);
-    color: var(--occ-ink-3);
-    font-size: var(--sl-text-2xs);
-    text-decoration: none;
+
+  /* The cursor the script moves: a block after the newest line or word. Solid while a
+     turn plays, blinking while it holds or is paused, like a terminal waiting. */
+  .is-cursor::after {
+    content: '';
+    display: inline-block;
+    inline-size: 0.6em;
+    block-size: 1.05em;
+    margin-inline-start: 0.15ch;
+    vertical-align: -0.15em;
+    border-radius: 1px;
+    background: var(--occ-bar);
   }
-  .occ-replay__source:hover {
-    color: var(--sl-color-text-accent);
-    text-decoration: underline;
+  [data-playback='holding'] .is-cursor::after,
+  [data-playback='paused'] .is-cursor::after {
+    animation: occ-blink 1.2s steps(1) infinite;
   }
-  .occ-replay__source:focus-visible,
-  .occ-replay__btn:focus-visible {
-    outline-offset: -3px;
-  }
-  .occ-replay__transcripts:not(:target) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .occ-replay__transcripts:target {
-    padding: var(--occ-space-4);
-    border-top: 1px solid var(--occ-line);
-    font-family: var(--__sl-font);
-    overflow-wrap: anywhere;
-    scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
-  }
-  .occ-replay__transcripts h2 {
-    font-size: var(--sl-text-xl);
-  }
-  .occ-replay__transcripts h3 {
-    font-size: var(--sl-text-lg);
-    margin-top: var(--occ-space-6);
-  }
-  .occ-replay__transcripts li {
-    margin-top: var(--occ-space-2);
-  }
-  .occ-replay__transcripts a {
-    color: var(--sl-color-text-accent);
-  }
-  .occ-replay__transcripts:not(:target) a {
+  [data-playback='static'] .is-cursor::after {
     display: none;
   }
 
+  /* Without scripting: the staged reveal of the pass-2 panel, 320 ms between lines, a
+     240 ms fade and rise each. The cursor arrives with the last line, blinks eight times
+     and holds. Nothing loops. */
+  [data-mode='css'] .occ-line {
+    opacity: 0;
+    animation: occ-reveal 240ms var(--occ-ease) forwards;
+    animation-delay: calc(0.4s + var(--i) * 0.32s);
+  }
+  [data-mode='css'] .occ-cursor {
+    animation: occ-blink 1.2s steps(1) 8;
+    animation-delay: calc(0.4s + var(--i) * 0.32s + 0.24s);
+  }
+
+  /* With scripting: the clock shows each line and each streamed word; the same fade
+     and rise, triggered one at a time. The static cursor row is the script's job now. */
+  [data-mode='js'] .occ-line {
+    opacity: 0;
+    translate: 0 4px;
+    transition:
+      opacity 240ms var(--occ-ease),
+      translate 240ms var(--occ-ease);
+  }
+  [data-mode='js'] .occ-line.is-shown {
+    opacity: 1;
+    translate: none;
+  }
+  [data-mode='js'] .occ-line--cursor {
+    display: none;
+  }
+  [data-mode='js'] .occ-word {
+    opacity: 0;
+    transition: opacity 90ms linear;
+  }
+  [data-mode='js'] .occ-word.is-shown {
+    opacity: 1;
+  }
+  [data-mode='js'] .occ-line--stream .occ-line__note {
+    opacity: 0;
+    transition: opacity 240ms var(--occ-ease);
+  }
+  [data-mode='js'] .occ-line--stream.is-done .occ-line__note {
+    opacity: 1;
+  }
+
+  /* occ-reveal and occ-blink are the site's keyframes (custom.css, Motion). */
+
   @media (prefers-reduced-motion: reduce) {
+    [data-mode='css'] .occ-line,
+    [data-mode='css'] .occ-cursor {
+      animation: none;
+      opacity: 1;
+      translate: none;
+    }
+    [data-mode='js'] .occ-line,
+    [data-mode='js'] .occ-word,
+    [data-mode='js'] .occ-line__note,
+    .occ-replay__tab-bar::after {
+      transition: none;
+    }
     .occ-replay__btn {
-      visibility: hidden;
+      display: none;
     }
   }
 
-  /* Keep the speaker beside the compact line on phones; never clip or ellipsize
-     the final answer, and never use a nested scrolling terminal to fake the fold. */
+  /* On a phone the speaker goes above its line instead of beside it: an 8-character
+     column would leave 26 characters for the text. The bar still spans the whole line.
+     The legend goes: every line names its speaker anyway. */
   @media (max-width: 26rem) {
-    .occ-replay__stage {
-      padding: var(--occ-space-1) var(--occ-space-2);
+    .occ-replay__cap {
+      padding-inline-start: var(--occ-space-3);
+    }
+    .occ-replay__lanes {
+      display: none;
+    }
+    .occ-replay__controls {
+      margin-inline-start: auto;
     }
     .occ-replay__tab-n {
       display: none;
+    }
+    .occ-replay__stage {
+      padding: var(--occ-space-3);
     }
     .occ-replay__lines {
       font-size: var(--sl-text-2xs);
     }
     .occ-line {
-      padding-block: var(--occ-space-1);
-      column-gap: var(--occ-space-1);
+      grid-template-columns: 3px minmax(0, 1fr);
+      grid-template-areas:
+        'bar lane'
+        'bar body';
+      row-gap: 0.1rem;
+      padding-block: 0.3rem;
+    }
+    .occ-line__bar {
+      grid-area: bar;
+    }
+    .occ-line__lane {
+      grid-area: lane;
+      font-size: 0.9em;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .occ-line__body,
+    .occ-cursor {
+      grid-area: body;
+    }
+    .occ-line--cursor .occ-line__lane {
+      display: none;
     }
   }
 </style>
