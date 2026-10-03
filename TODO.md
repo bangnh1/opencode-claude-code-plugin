@@ -78,9 +78,6 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
-- 2026-10-03: the `default` Claude account's login has expired ("OAuth session expired and could
-  not be refreshed"); every turn on it fails and offers the switch form. Needs the maintainer at a
-  browser: `claude auth login` (the default config dir), or keep using `appical`.
 - 2026-10-03: ten opencode processes are running, started 2026-09-22 to 2026-10-03, each on the
   plugin build that was current when it started (opencode loads a plugin once). The 2026-09-22,
   -26 and -27 ones predate the 0.29.2 failover-answer fix, so an account switch cannot work in
@@ -121,6 +118,9 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-03: **done**: the maintainer logged the `default` account back in ("claude is logged
+  in"); verified: `claude auth status` reports claude.ai on the Max plan, and a real `-p` request on
+  it answered.
 - 2026-10-03: **done**: `claude update` ("go"), 2.1.280 to **2.1.288** through the native updater
   (Aikido's npm age filter does not apply to it). Verified live on 2.1.288: Claude Sonnet 5.5 with no
   `unrecognized_model` line and a 1,000,000-token context window (was 200k), and a turn through
