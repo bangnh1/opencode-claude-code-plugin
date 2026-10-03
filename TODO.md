@@ -78,11 +78,14 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
-- 2026-10-03: ten opencode processes are running, started 2026-09-22 to 2026-10-03, each on the
-  plugin build that was current when it started (opencode loads a plugin once). The 2026-09-22,
-  -26 and -27 ones predate the 0.29.2 failover-answer fix, so an account switch cannot work in
-  them. Restart them when convenient (they may hold live work, so not done for you). The 0.37.0
-  notice cannot speak for them: they run code from before it existed.
+- 2026-10-03: opencode processes run the plugin build they started with. 23:26-23:28, after
+  0.37.1: 17 idle Herdr panes restarted onto their own sessions by `/tmp/oc-restart/
+  restart-opencode-panes.py` (quit with `ctrl+x q`, relaunch `opencode -s <id>` in the same pane;
+  each verified by process start time and argv). Still on an older build, left for the maintainer:
+  Herdr `wA:p4` (alwasiyyah, mid-turn, started 10:48), `wA:pK` (Stashcut, since Oct 1, input box
+  unreadable), `wA:p5` (the session that did the restart, 22:37), and pid 14428, a terminal outside
+  Herdr (`ttys017`, `~/code/Appical/webapp`, since Sep 24). Per pane: `ctrl+x q`, then the
+  `opencode -s` line opencode prints on exit.
 - 2026-10-02: the repository is still a GitHub fork of unixfox/opencode-claude-code-plugin.
   **Filed 2026-10-03 as GitHub Support ticket #4818005** (maintainer: "1", then "go"), from the
   maintainer's login in a throwaway debug-Chrome profile, deleted afterwards. Findings first:
