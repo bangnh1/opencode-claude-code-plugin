@@ -119,6 +119,14 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-04: **done** (v0.38.0, PR #85): usage limits end the turn on one `▌ usage limit:` note
+  and the account-switch form is opt-in (`accountFailover: "ask"`). Maintainer: "when a limit is hit we
+  need to show a clean and simple warning in the conversation it self ... not do this failover thing
+  because its failing". Root cause of the failing switch, from the raw log bytes: opencode-dcp appends
+  `<dcp-message-id>` to tool outputs in flight, so every pick was refused as `unrecognised answer`
+  (fixed for the form and the plan-mode bridge). The "two go's": typing while the form is open
+  dismisses it and that message hits the limit again. Live-checked on the real exhausted appical
+  window: one note per limited turn, local reset time, names the other account. 1,150 tests.
 - 2026-10-03: **done** (v0.37.1, PR #84): plugin WARN/ERROR lines drawn over the opencode TUI
   (maintainer: "can we fix this first?"). Measured: opencode 1.18.34 runs a plugin in the TUI's
   server worker thread (`isMainThread: false`), where stderr is the terminal; `run` and `serve`
