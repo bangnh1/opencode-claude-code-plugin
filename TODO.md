@@ -78,6 +78,16 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
+- 2026-10-03: the `default` Claude account's login has expired ("OAuth session expired and could
+  not be refreshed"); every turn on it fails and offers the switch form. Needs the maintainer at a
+  browser: `claude auth login` (the default config dir), or keep using `appical`.
+- 2026-10-03: ten opencode processes are running, started 2026-09-22 to 2026-10-03, each on the
+  plugin build that was current when it started (opencode loads a plugin once). The 2026-09-22,
+  -26 and -27 ones predate the 0.29.2 failover-answer fix, so an account switch cannot work in
+  them. Restart them when convenient (they may hold live work, so not done for you).
+- 2026-10-03: idea from the same incident: the plugin could notice that the build on disk is newer
+  than the one it loaded (compare `package.json` version, or the dist mtime, per turn) and say so
+  once in the transcript, so a stale opencode explains itself. Build it, or leave?
 - 2026-10-02: the repository is still a GitHub fork of unixfox/opencode-claude-code-plugin.
   **Filed 2026-10-03 as GitHub Support ticket #4818005** (maintainer: "1", then "go"), from the
   maintainer's login in a throwaway debug-Chrome profile, deleted afterwards. Findings first:
@@ -111,6 +121,13 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-03: **done**: `claude update` ("go"), 2.1.280 to **2.1.288** through the native updater
+  (Aikido's npm age filter does not apply to it). Verified live on 2.1.288: Claude Sonnet 5.5 with no
+  `unrecognized_model` line and a 1,000,000-token context window (was 200k), and a turn through
+  opencode 1.18.34 and the plugin with a CLI-run `Read` and a proxied `bash`, no new warnings.
+  Same morning: the account-block note and form fired live for the first time (an expired `default`
+  login, #g30); the "unrecognised answer" that followed came from an opencode process still running
+  a pre-0.29.2 build, not from current code (replayed both answer paths against the source).
 - 2026-10-03: **done** (v0.36.5): the compatibility sweep ("ok now what?", then "go"). PR #82
   measured Claude Code 2.1.286 (2.1.287 and 2.1.288 are blocked here by Aikido's minimum age) and
   opencode 2.0.22 (sandbox moved from 2.0.16) against 1.18.34; every live check passed on both. Two
@@ -120,7 +137,7 @@ Nothing parked.
   it also corrected #g104: one `-p` run can emit two `result` frames). The four unread `system`
   events and ten new ones measured, no parser for any, with a verdict each. Reviewed at merge: the
   placeholder result cannot reach the CLI as a second `tool_result`. 1,083 tests. Still with the
-  maintainer: `claude update` (2.1.280 runs Claude Sonnet 5.5 on a 200k window).
+  maintainer: `claude update` (2.1.280 runs Claude Sonnet 5.5 on a 200k window); done 2026-10-03, see below.
 - 2026-10-02: **done**: design pass 3 (PR #81, docs deploy green, live). "yes to all": the widget
   colour is the designer's #E8A33A (landed with pass 2, confirmed live). The designer's session hit
   its limit before committing pass 3; the maintainer's session reviewed the worktree (build, 0
