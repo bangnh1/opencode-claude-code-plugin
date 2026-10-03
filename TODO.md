@@ -119,6 +119,16 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-04: **done** (PR #86, site only): "keep the website up to date especially version and
+  all the numbers preferably live and automatic", and the install line "too much on 1 line". The
+  live page showed v0.37.1 while npm served 0.38.0, because a release pushes a tag and the docs
+  workflow only ran on docs pushes and daily. `docs.yml` now also runs after every successful
+  Publish (waiting until npm serves the version), on pushes to `src/**`, `test-*.ts`,
+  `package.json` and `skills/**`, and every six hours. README "18 models" replaced by a
+  `/badges/models.json` badge. Install block: the sentence on its own line, the snippet in a code
+  window with `opencode.json`, an `npm vX` pill and the copy button in its title bar. The
+  post-publish trigger is verified only at the next release. Two lanes died on the session
+  limit; the maintainer session finished both.
 - 2026-10-04: **done** (v0.38.0, PR #85): usage limits end the turn on one `▌ usage limit:` note
   and the account-switch form is opt-in (`accountFailover: "ask"`). Maintainer: "when a limit is hit we
   need to show a clean and simple warning in the conversation it self ... not do this failover thing
