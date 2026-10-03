@@ -81,10 +81,8 @@ raised, so they survive context compaction; removed when answered, done or dropp
 - 2026-10-03: ten opencode processes are running, started 2026-09-22 to 2026-10-03, each on the
   plugin build that was current when it started (opencode loads a plugin once). The 2026-09-22,
   -26 and -27 ones predate the 0.29.2 failover-answer fix, so an account switch cannot work in
-  them. Restart them when convenient (they may hold live work, so not done for you).
-- 2026-10-03: idea from the same incident: the plugin could notice that the build on disk is newer
-  than the one it loaded (compare `package.json` version, or the dist mtime, per turn) and say so
-  once in the transcript, so a stale opencode explains itself. Build it, or leave?
+  them. Restart them when convenient (they may hold live work, so not done for you). The 0.37.0
+  notice cannot speak for them: they run code from before it existed.
 - 2026-10-02: the repository is still a GitHub fork of unixfox/opencode-claude-code-plugin.
   **Filed 2026-10-03 as GitHub Support ticket #4818005** (maintainer: "1", then "go"), from the
   maintainer's login in a throwaway debug-Chrome profile, deleted afterwards. Findings first:
@@ -118,6 +116,13 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-03: **done** (v0.37.0, PR #83): the stale-build notice ("do the recommended with most
+  benefit"). A turn in a conversation whose opencode process runs an older plugin build than the
+  one on disk starts with one `▌ restart opencode:` note (new version, or `rebuilt` for a file://
+  dist), once per session, never in subagents, compaction, titles or doGenerate; a doctor row and
+  one WARN per build. Review caught the baseline being taken on first use instead of at import
+  (fixed, red/green test, live rebuilt-before-first-turn check). 1,107 tests; live on 1.18.34 and
+  2.0.22 with Claude Code 2.1.288.
 - 2026-10-03: **done**: the maintainer logged the `default` account back in ("claude is logged
   in"); verified: `claude auth status` reports claude.ai on the Max plan, and a real `-p` request on
   it answered.
