@@ -78,12 +78,6 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
-- 2026-10-03: plugin WARN/ERROR lines are drawn over the opencode TUI. `src/logger.ts` sends
-  every warn and error to stderr (`shouldTui`), and in opencode 1.18.34 that stderr reaches the
-  terminal, so the lines sit on top of the TUI until it redraws. Seen in a Herdr pane (Stashcut,
-  20:46): two skill-bridge `herdr` name-clash WARNs and a proxy-deadline WARN covered the input box.
-  Options: keep warn on stderr only outside a TUI, or route it to the log file plus a doctor row.
-  Fix it, or leave it?
 - 2026-10-03: ten opencode processes are running, started 2026-09-22 to 2026-10-03, each on the
   plugin build that was current when it started (opencode loads a plugin once). The 2026-09-22,
   -26 and -27 ones predate the 0.29.2 failover-answer fix, so an account switch cannot work in
@@ -122,6 +116,13 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-03: **done** (v0.37.1, PR #84): plugin WARN/ERROR lines drawn over the opencode TUI
+  (maintainer: "can we fix this first?"). Measured: opencode 1.18.34 runs a plugin in the TUI's
+  server worker thread (`isMainThread: false`), where stderr is the terminal; `run` and `serve`
+  run it on the main thread with stderr piped. Inside a TUI the logger now writes nothing to
+  stderr: every surfaced line goes to `client.app.log`, warn/error also to one toast per message
+  per process (at most 3 per 2 s plus a held-back summary). Off the TUI, and on opencode 2,
+  unchanged. 1,130 tests; CI published 0.37.1, checksum matches.
 - 2026-10-03: **done** (v0.37.0, PR #83): the stale-build notice ("do the recommended with most
   benefit"). A turn in a conversation whose opencode process runs an older plugin build than the
   one on disk starts with one `▌ restart opencode:` note (new version, or `rebuilt` for a file://
