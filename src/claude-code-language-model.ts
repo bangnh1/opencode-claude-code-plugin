@@ -102,6 +102,7 @@ import {
   sessionKey,
   effortSessionKey,
   invalidateOtherEffortSessions,
+  handOffConversation,
   describeSessionKey,
 } from "./session-manager.js"
 import { spawnInteractiveProcess } from "./claude-session-wrapper.js"
@@ -1106,6 +1107,29 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       return { stream, request: { body: { text: "" } } }
     }
 
+    // The Claude conversation follows the opencode session, not the agent:
+    // a plan-to-build switch (or an effort change) lands on a new key, and
+    // this moves the session id the conversation last ran on over to it so
+    // the turn resumes instead of replaying a clipped transcript. Before the
+    // effort retirement below, which would otherwise delete that id first.
+    // The interactive transport has no `--resume` path, so it is left out.
+    const handoff =
+      compactionMode || useInteractive
+        ? ({ kind: "none" } as const)
+        : handOffConversation(sk, { cliPath })
+    if (handoff.kind === "handed-off") {
+      log.notice("agent or effort changed; resuming the same claude conversation", {
+        sessionKey: sk,
+        fromKey: handoff.fromKey,
+      })
+    } else if (handoff.kind === "refused") {
+      log.notice("agent or effort changed; replaying the conversation instead of resuming it", {
+        sessionKey: sk,
+        fromKey: handoff.fromKey,
+        reason: handoff.reason,
+      })
+    }
+
     if (!compactionMode) invalidateOtherEffortSessions(baseKey, reasoningEffort)
 
     const hasPriorConversation =
@@ -1194,6 +1218,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       })
       cliPath = failover.cliPath
       asideTransportRef.cliPath = cliPath
+      // A conversation handed over this turn has no live process for the
+      // account check below to catch, and its transcript stays with the
+      // account that wrote it.
+      if (handoff.kind === "handed-off") deleteClaudeSessionId(sk)
       failoverNote = formatFailoverNote({
         sourceAccount: failoverAnswer.sourceAccount,
         target: failoverAnswer.target,

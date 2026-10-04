@@ -552,6 +552,7 @@ export function deleteActiveProcessesForSession(sessionID: string): string[] {
   // Every key this call released, whether it had a live process or only a
   // remembered session id: a deleted opencode session must leave no ledger.
   for (const key of released) clearBackgroundTasks(key)
+  forgetConversationsForSession(sessionID)
   return released
 }
 
@@ -739,6 +740,135 @@ export function effortSessionKey(baseKey: string, effort?: ReasoningEffort): str
   return effort ? `${baseKey}::effort=${effort}` : baseKey
 }
 
+/**
+ * Work that still belongs to this key's process: a proxied call in the air, a
+ * recovered completion not yet delivered, an unanswered plan-mode question, a
+ * turn attached to its stream, or a `/btw` waiting on it. Read from the map
+ * directly so a scan never refreshes LRU order or cancels an idle timer.
+ */
+function sessionKeyHasPendingWork(key: string): boolean {
+  const active = activeProcesses.get(key)
+  return Boolean(
+    getPendingProxyCalls(key).length ||
+      hasExitPlanModeQuestions(key) ||
+      active?.pendingProxyCompletions?.size ||
+      (active && (active.lineEmitter.listenerCount("line") > 0 || isSideQuestionPending(active))),
+  )
+}
+
+/**
+ * The part of a session key that names ONE opencode conversation: cwd, model,
+ * scope, affinity and provider (the provider is the account). What it leaves
+ * out is the opencode agent, the agent's cache TTL and the effort tail, which
+ * change the spawn but not whose conversation it is. `null` for a compaction
+ * key, a malformed key and the shared `"default"` bucket, none of which may
+ * ever hand a conversation to another key.
+ */
+export function conversationSignature(key: string): string | null {
+  const parts = key.split("::")
+  if (parts.length < 5) return null
+  const [cwd, model, scope, affinity, context] = parts
+  if (scope === "compaction") return null
+  if (!affinity || affinity === "default") return null
+  if (!context.startsWith("context=")) return null
+  let provider: unknown
+  try {
+    provider = (JSON.parse(context.slice("context=".length)) as unknown[])[0]
+  } catch {
+    return null
+  }
+  if (typeof provider !== "string") return null
+  return [cwd, model, scope, affinity, provider].join("::")
+}
+
+/**
+ * The key each opencode conversation last ran a turn on. A Claude session id
+ * is stored per key, and a key carries the agent, so without this an agent
+ * switch (plan to build) found no id, threw the Claude conversation away and
+ * replayed a clipped transcript instead, and switching back resumed the OLD
+ * agent's conversation, which had never seen the turns in between.
+ */
+const currentKeyByConversation = new Map<string, string>()
+const MAX_CONVERSATION_ENTRIES = 256
+
+export type ConversationHandoff =
+  | { kind: "none" }
+  | { kind: "handed-off"; fromKey: string; claudeSessionId: string }
+  | { kind: "refused"; fromKey: string; reason: "busy" | "other-account" }
+
+/**
+ * Make `key` the one this opencode conversation continues on, moving the
+ * Claude session id over from the key the conversation last ran on when that
+ * key differs only in agent, cache TTL or effort.
+ *
+ * The previous key's process is killed, because two children must never
+ * write one transcript, and its id is removed WITHOUT `deleteClaudeSessionId`,
+ * which would clear the todo ledger the same Claude session still owns.
+ *
+ * Refused when the previous key still has work in the air (its results belong
+ * to that process) or its live child runs under another account's binary
+ * (a transcript cannot cross accounts). A refusal leaves the previous key
+ * untouched and drops whatever id THIS key still holds, because that id is
+ * older than the conversation it would resume: the turn replays instead.
+ */
+export function handOffConversation(
+  key: string,
+  opts: { cliPath?: string } = {},
+): ConversationHandoff {
+  const signature = conversationSignature(key)
+  if (!signature) return { kind: "none" }
+  const fromKey = currentKeyByConversation.get(signature)
+  currentKeyByConversation.delete(signature)
+  currentKeyByConversation.set(signature, key)
+  while (currentKeyByConversation.size > MAX_CONVERSATION_ENTRIES) {
+    const oldest = currentKeyByConversation.keys().next().value
+    if (oldest === undefined) break
+    currentKeyByConversation.delete(oldest)
+  }
+  if (!fromKey || fromKey === key) return { kind: "none" }
+  const claudeSessionId = claudeSessions.get(fromKey)
+  if (!claudeSessionId) return { kind: "none" }
+
+  const fromProcess = activeProcesses.get(fromKey)
+  let refusal: "busy" | "other-account" | undefined
+  if (sessionKeyHasPendingWork(fromKey)) refusal = "busy"
+  else if (fromProcess?.cliPath && opts.cliPath && fromProcess.cliPath !== opts.cliPath) {
+    refusal = "other-account"
+  }
+  if (refusal) {
+    deleteActiveProcess(key)
+    deleteClaudeSessionId(key)
+    return { kind: "refused", fromKey, reason: refusal }
+  }
+
+  deleteActiveProcess(fromKey)
+  clearExitPlanModeQuestions(fromKey)
+  clearAccountFailoverQuestions(fromKey)
+  forgetForkFingerprint(fromKey)
+  claudeSessions.delete(fromKey)
+  // This key's own id, if it has one, is a conversation the previous key has
+  // since moved past. Its process goes with it for the same reason.
+  deleteActiveProcess(key)
+  const stale = claudeSessions.get(key)
+  if (stale && stale !== claudeSessionId) clearLedger(stale)
+  setClaudeSessionId(key, claudeSessionId)
+  return { kind: "handed-off", fromKey, claudeSessionId }
+}
+
+/** Forget every conversation's current key for a deleted opencode session. */
+function forgetConversationsForSession(sessionID: string): void {
+  for (const [signature, key] of [...currentKeyByConversation]) {
+    if (describeSessionKey(key).session === sessionID) {
+      currentKeyByConversation.delete(signature)
+    }
+  }
+}
+
+/** Test seam. */
+export function _resetConversationHandoffs(): void {
+  currentKeyByConversation.clear()
+}
+
 /** Retire sibling effort sessions before deciding whether to replay history. */
 export function invalidateOtherEffortSessions(
   baseKey: string,
@@ -754,13 +884,7 @@ export function invalidateOtherEffortSessions(
   // Refuse the transition atomically. Tool results and recovery completions
   // still belong to the old process; they must finish at its original effort.
   for (const key of staleKeys) {
-    const active = activeProcesses.get(key)
-    if (
-      getPendingProxyCalls(key).length ||
-      hasExitPlanModeQuestions(key) ||
-      active?.pendingProxyCompletions?.size ||
-      (active && (active.lineEmitter.listenerCount("line") > 0 || isSideQuestionPending(active)))
-    ) {
+    if (sessionKeyHasPendingWork(key)) {
       throw new Error(
         "Cannot change reasoning effort while the previous effort session has pending work. Finish that work at its original effort first.",
       )

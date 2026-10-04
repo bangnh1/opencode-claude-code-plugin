@@ -18,6 +18,8 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "account failover declined; ending the turn",
   "agent effort override refused: unknown level",
   "agent model override refused: unknown model",
+  "agent or effort changed; replaying the conversation instead of resuming it",
+  "agent or effort changed; resuming the same claude conversation",
   "agent prompt cache ttl refused: unknown value",
   "auto-continuation stopped",
   "auto-continuing incomplete claude result",

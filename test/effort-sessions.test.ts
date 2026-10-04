@@ -231,14 +231,20 @@ for (const method of ["doStream", "doGenerate"] as const) {
     }
   })
 
-  test(`${method}: high -> low -> high replays intervening context without stale resume`, { timeout: 15_000 }, async () => {
+  // The Claude conversation follows the opencode session across an effort
+  // change: each switch resumes the id the previous turn ran on, so going
+  // back to high continues the conversation the low turn extended rather than
+  // the older one high had left behind, and no transcript is replayed.
+  test(`${method}: high -> low -> high resumes one conversation without stale resume`, { timeout: 15_000 }, async () => {
     const { cwd, modelId, provider, base, options } = fixture()
     const high = effortSessionKey(base, "high")
     const low = effortSessionKey(base, "low")
+    let lastSessionId: string | undefined
     try {
       for (const [index, effort] of ["high", "low", "high", "high"].entries()) {
         options.providerOptions!["claude-code"].reasoningEffort = effort
         const previous = getActiveProcess(high)
+        const resumeFrom = lastSessionId
         // Separate model instances must share the same transition boundary.
         const model = provider.languageModel(modelId)
         const response = await model[method](options)
@@ -251,21 +257,23 @@ for (const method of ["doStream", "doGenerate"] as const) {
         const currentKey = effortSessionKey(base, effort as "high" | "low")
         assert.ok(getClaudeSessionId(currentKey), "the fixture must establish a remembered transcript")
         if (method === "doStream") assert.ok(getActiveProcess(currentKey), "streaming must leave a reusable process")
-        if (index === 1) {
-          assert.equal(getActiveProcess(high), undefined)
-          assert.equal(getClaudeSessionId(high), undefined)
-        }
-        if (index === 2) {
-          assert.equal(getActiveProcess(low), undefined)
-          assert.equal(getClaudeSessionId(low), undefined)
-          assert.match(body, /conversation_history/)
-          assert.match(body, /low-effort detail to remember/)
-          assert.equal(getActiveProcess(high)?.cliArgs?.includes("--resume") ?? false, false)
+        if (index === 1 || index === 2) {
+          const other = index === 1 ? high : low
+          assert.equal(getActiveProcess(other), undefined)
+          assert.equal(getClaudeSessionId(other), undefined)
+          assert.doesNotMatch(body, /conversation_history/)
+          if (method === "doStream") {
+            const args = getActiveProcess(currentKey)?.cliArgs ?? []
+            const at = args.indexOf("--resume")
+            assert.ok(at >= 0, "an effort switch resumes instead of replaying")
+            assert.equal(args[at + 1], resumeFrom, "and it resumes the id the previous turn ran on")
+          }
         }
         if (index === 3 && method === "doStream") {
           assert.equal(getActiveProcess(high), previous)
           assert.doesNotMatch(body, /conversation_history/)
         }
+        lastSessionId = getClaudeSessionId(currentKey)
         options.prompt.push(
           { role: "assistant", content: [{ type: "text", text: effort === "low" ? "low-effort detail to remember" : "high answer" }] },
           { role: "user", content: [{ type: "text", text: `next request ${index}` }] },
