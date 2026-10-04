@@ -119,6 +119,10 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-04: **done** (PR #87, site only, designer pass): install line "tl;dr just install it,
+  and support it", the pill reads "latest v0.38.0", and teal (the string token, `--occ-live`) has
+  one meaning, live / current / done: the pill dot, the copied state, the replay tab while a
+  finished turn holds, and the stats dot when every figure was live. Amber stays the brand.
 - 2026-10-04: **done** (PR #86, site only): "keep the website up to date especially version and
   all the numbers preferably live and automatic", and the install line "too much on 1 line". The
   live page showed v0.37.1 while npm served 0.38.0, because a release pushes a tag and the docs
