@@ -8,7 +8,7 @@
   1. A proxied tool. The spawn flags from src/session-manager.ts (`buildCliArgs`, which
      pushes every disallowed tool as its own argument), the built-ins each proxied tool
      disables (src/proxy-mcp.ts, docs/guides/tool-proxy.md), the stream-json frames the
-     fake CLI in test-proxy-task.ts emits, the held HTTP request and its 15-second
+     fake CLI in test/proxy-task.test.ts emits, the held HTTP request and its 15-second
      keepalive (docs/internals/how-a-proxied-call-ends.md). The one number in it, the
      test count, is the live figure stats.ts reads from the suite's own summary line.
   2. Claude's own tool. A second turn in the same conversation: the process is reused
@@ -158,14 +158,14 @@ const turns: Turn[] = [
       },
       {
         lane: 'claude',
-        text: '{"type":"assistant", … {"type":"text","text":"test-broker.ts and test-proxy-task.ts: per-tool deadlines, the guard, stall warnings, fan-out, late results."}}',
+        text: '{"type":"assistant", … {"type":"text","text":"test/broker.test.ts and test/proxy-task.test.ts: per-tool deadlines, the guard, stall warnings, fan-out, late results."}}',
         wait: 420,
       },
       { lane: 'claude', text: '{"type":"result","subtype":"success","is_error":false}', wait: 500 },
       {
         lane: 'opencode',
         tag: 'reply',
-        text: `test-broker.ts and test-proxy-task.ts cover the broker: per-tool deadlines, the guard, stall warnings, fan-out and late results. All ${tests} tests pass.`,
+        text: `test/broker.test.ts and test/proxy-task.test.ts cover the broker: per-tool deadlines, the guard, stall warnings, fan-out and late results. All ${tests} tests pass.`,
         note: 'the CLI authenticated this turn; the plugin read no token',
         bar: true,
         stream: true,

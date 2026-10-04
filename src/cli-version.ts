@@ -54,7 +54,7 @@ function killedByDeadline(error: unknown): boolean {
  * Drop a cached answer that only described how loaded the machine was.
  *
  * Measured on 2026-10-01 at a load average of 66 to 76, with 40 concurrent
- * copies of `test-side-question.ts`: 6 of 40 `claude --version` probes were
+ * copies of `test/side-question.test.ts`: 6 of 40 `claude --version` probes were
  * killed by the deadline. Each `null` was then cached for the life of the
  * opencode process, and because every version gate reads that one answer, a
  * single busy moment during the first turn silently and permanently withheld

@@ -5,7 +5,7 @@
  * Split out of `claude-code-language-model.ts` verbatim. The decision is
  * pure (state plus a snapshot of the turn in, a verdict out), which is why
  * it moved first: `shouldAutoContinueIncompleteTurn` is exercised directly
- * by `test-auto-continue.ts` and by the corpus runner under `sim/`.
+ * by `test/auto-continue.test.ts` and by the corpus runner under `sim/`.
  */
 
 const AUTO_CONTINUE_MAX_ATTEMPTS = 8

@@ -35,7 +35,7 @@ on:
       - 'README.md'
       - 'AGENTS.md'
       - 'src/**'
-      - 'test-*.ts'
+      - 'test/**'
       - 'package.json'
       - 'skills/**'
       - '.github/workflows/docs.yml'

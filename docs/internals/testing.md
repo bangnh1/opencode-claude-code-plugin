@@ -30,8 +30,10 @@ current in the same change as the code.
 
 ## Three ways a run can mislead you
 
-- **`npm test` enumerates its files explicitly.** A new `test-*.ts` that is not added to the
-  `test` script in `package.json` silently never runs.
+- **Tests live in `test/`, one `<name>.test.ts` per area, and `npm test` runs the glob
+  `test/*.test.ts`.** A new file runs without being registered anywhere. Fixtures are in
+  `test/fixtures/`. `test/integration.ts` and `test/e2e-claude-session-bun.ts` are manual runs
+  against a real `claude` and are deliberately outside the glob.
 - **Never pipe `npm test` into `grep` inside an `&&` chain.** The pipeline exits with grep's
   status, not the runner's, so a red suite reads as green and the chain continues. Redirect and
   check instead: `npm test > /tmp/run.log 2>&1; echo "EXIT=$?"`, then grep the file.
@@ -42,6 +44,6 @@ current in the same change as the code.
 Two further traps are about load rather than correctness. A spec must never race the CLI
 version probe's 5-second deadline, because on a loaded machine it loses and the feature under
 test is refused as "CLI too old"; resolve the probe up front instead. And the fake-CLI recovery
-tests in `test-proxy-task.ts` derive every wait from the start watchdog, so under load they
+tests in `test/proxy-task.test.ts` derive every wait from the start watchdog, so under load they
 fail identically on master and on a released tag: run the same file at the last known-green tag
 before suspecting your change.

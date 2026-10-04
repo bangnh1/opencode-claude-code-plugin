@@ -170,14 +170,14 @@ function gitFirstCommit(): string {
   return dates[0] as string;
 }
 
-/** Every `test-*.ts` beside package.json, and the lines they add up to. */
+/** Every `test/*.test.ts` beside package.json, and the lines they add up to. */
 function testSuiteSize(): { files: number; lines: number } {
-  const root = repoRoot();
-  const files = readdirSync(root).filter((name) => /^test-.*\.ts$/.test(name));
-  if (files.length === 0) throw new Error('no test-*.ts files found');
+  const dir = path.join(repoRoot(), 'test');
+  const files = readdirSync(dir).filter((name) => /\.test\.ts$/.test(name));
+  if (files.length === 0) throw new Error('no test/*.test.ts files found');
   let lines = 0;
   for (const file of files) {
-    const text = readFileSync(path.join(root, file), 'utf8');
+    const text = readFileSync(path.join(dir, file), 'utf8');
     lines += text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
   }
   return { files: files.length, lines };

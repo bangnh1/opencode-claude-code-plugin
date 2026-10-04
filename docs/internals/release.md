@@ -19,7 +19,7 @@ Nothing on [the site](https://opencode-claude-code-plugin.dev/) is fetched in a 
 | Trigger | When | Why |
 |---|---|---|
 | `workflow_run` on `Publish` | after a successful publish | A release pushes a tag, not a branch, and bumps `package.json`. Without this the site kept announcing the previous version. The run first polls `registry.npmjs.org` until it serves the version in `package.json`, bounded at ten minutes, because the version document lags the publish itself; a timeout builds anyway and logs a warning. |
-| `push` to `master` | `docs/**`, `site/**`, `README.md`, `AGENTS.md`, `src/**`, `test-*.ts`, `package.json`, `skills/**` | Every path that feeds a page or a number. |
+| `push` to `master` | `docs/**`, `site/**`, `README.md`, `AGENTS.md`, `src/**`, `test/*.test.ts`, `package.json`, `skills/**` | Every path that feeds a page or a number. |
 | `schedule` | every six hours | Stars, forks, contributors and downloads move without a commit here. |
 | `workflow_dispatch` | by hand | For a rebuild that none of the above covers. |
 
@@ -37,7 +37,7 @@ Where each number comes from, all of it in `site/src/data/stats.ts`:
 | tests in the suite | `OCC_STAT_TESTS`, parsed from the runner's own `tests N` summary line in the workflow, never grepped out of source |
 | models registered | `OCC_STAT_MODELS`, the entries of `defaultModels` in `src/models.ts` |
 | commits, first commit date | `git` in the checkout, which the workflow takes with `fetch-depth: 0` |
-| test files and their line count | `test-*.ts` read off the repository |
+| test files and their line count | `test/*.test.ts` read off the repository |
 
 Each source is attempted on its own and falls back to `site/src/data/stats.snapshot.json`, so one slow API cannot blank the strip. A build that fell back says which fields did, in the build log and in the strip's own footnote. Refresh that snapshot when it drifts far enough that a fallback build would read as wrong.
 

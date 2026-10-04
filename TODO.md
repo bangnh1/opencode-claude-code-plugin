@@ -119,6 +119,10 @@ Nothing parked.
 
 ## Done
 
+- 2026-10-04: **done** (no release): the 65 `test-*.ts` files and `test-fixtures/` moved out of the
+  repository root into `test/<name>.test.ts` and `test/fixtures/`, plus the two manual scripts as
+  `test/integration.ts` and `test/e2e-claude-session-bun.ts`, so the README is no longer below the
+  fold on GitHub. `npm test` runs the glob `test/*.test.ts` (same 1,150 tests). (h #g195)
 - 2026-10-04: **done** (PR #87, site only, designer pass): install line "tl;dr just install it,
   and support it", the pill reads "latest v0.38.0", and teal (the string token, `--occ-live`) has
   one meaning, live / current / done: the pill dot, the copied state, the replay tab while a

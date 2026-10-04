@@ -383,7 +383,7 @@ export function redactForPaste(text: string, context: RedactionContext): string 
 /**
  * The character classes each kind is defined by. They are deliberately tighter
  * than "a short string", because the adversarial fixtures in
- * `test-diagnostic-bundle.ts` showed that a length cap alone lets a header, a
+ * `test/diagnostic-bundle.test.ts` showed that a length cap alone lets a header, a
  * PEM block and an English sentence through a field declared as a name.
  *
  * - a **name** is a whitespace-free identifier starting with a letter or digit:

@@ -18,7 +18,7 @@ const ledger = [
   { value: formatCount(stats.releases), label: 'tagged releases', source: 'api.github.com' },
   { value: formatCount(stats.mergedPrs), label: 'merged pull requests', source: 'api.github.com' },
   { value: formatCount(stats.tests), label: 'tests in the suite', source: 'npm test, this build' },
-  { value: formatCount(stats.testLines), label: `lines of test code, in ${stats.testFiles} files`, source: 'test-*.ts, this build' },
+  { value: formatCount(stats.testLines), label: `lines of test code, in ${stats.testFiles} files`, source: 'test/*.test.ts, this build' },
   { value: formatCount(stats.contributors), label: 'contributors, authorship preserved', source: 'api.github.com' },
   { value: formatCount(stats.downloadsTotal), label: `npm downloads since ${stats.downloadsSince}`, source: 'api.npmjs.org' },
 ];

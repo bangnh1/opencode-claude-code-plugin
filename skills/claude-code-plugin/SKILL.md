@@ -42,7 +42,7 @@ under its permissions instead of inside the CLI.
 This file ships with the package, so upgrading that package updates the bundled
 reference without a separate skill install. Do not copy it into a personal skill
 directory: a user override can shadow the bundled version. Match guidance to the
-version actually loaded, not a newer checkout. `test-configure-skill.ts` checks name
+version actually loaded, not a newer checkout. `test/configure-skill.test.ts` checks name
 coverage against source declarations; it does not verify defaults or runtime
 semantics or regenerate prose. For behavior, inspect the matching version's
 `src/types.ts`, consumers in `src/index.ts` / `src/claude-code-language-model.ts`, and
