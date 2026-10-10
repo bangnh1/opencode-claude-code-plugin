@@ -16,7 +16,11 @@ import type {
   ReasoningEffort,
 } from "./types.js"
 import { translateStreamForHost } from "./host-tools.js"
-import { getClaudeUserMessage, getTrailingUserMessages } from "./message-builder.js"
+import {
+  getClaudeUserMessage,
+  getTrailingUserMessages,
+  renderMissedConversation,
+} from "./message-builder.js"
 import {
   getAgentRegistry,
   qualifyModelName,
@@ -143,6 +147,7 @@ import {
 import { interactivePermissionPosture, isReadOnlyPermissionMode } from "./permission-presets.js"
 import { hasInteractiveTransport, requestedTransport, selectTransport } from "./transport.js"
 import { findForkParent, recordForkFingerprint } from "./session-fork.js"
+import { findMissedConversation, noteConversationSent } from "./session-catch-up.js"
 import {
   findForeignAccountSibling,
   findResumePoint,
@@ -1953,9 +1958,61 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             conversationOnTarget,
           )
         : options.prompt
+    // The messages this key's Claude session never saw, because another
+    // opencode agent answered them under its own session key (h #g236). Only
+    // on a turn that resumes a session or reuses a child and sends a fresh
+    // message: a replay already carries everything, and a tool-result turn or
+    // a plan approval answers a call the CLI is parked inside.
+    let missedConversation: string | undefined
+    if (
+      this.config.catchUpMissedMessages !== false &&
+      !compactionMode &&
+      !includeHistoryContext &&
+      (hasExistingSession || hasActiveProcess) &&
+      failoverAnswer?.kind !== "switch" &&
+      !exitPlanModeQuestionResult &&
+      previousPendingProxyCalls.length === 0
+    ) {
+      const missed = findMissedConversation(sk, options.prompt)
+      // The `accountGroups` guard holds here too: what another account
+      // answered in this conversation must not reach an account outside its
+      // group by this route either (h #g226).
+      const foreign =
+        missed.kind === "missed" && groups && accountProviders.size > 0
+          ? findForeignAccountSibling({
+              sessionKey: sk,
+              accountProviders,
+              extraKeys: listClaudeSessionKeys(),
+            })
+          : null
+      if (foreign && !accountsShareGroup(sourceAccount, foreign.account, groups)) {
+        log.notice("not catching the claude session up: another account group answered", {
+          sessionKey: sk,
+          reason: "another-account-group",
+        })
+      } else if (missed.kind === "missed") {
+        const rendered = renderMissedConversation(missed.messages, {
+          stripContextReminders: this.stripContextRemindersEnabled(),
+        })
+        if (rendered) {
+          missedConversation = rendered.text
+          log.notice("catching the claude session up on messages another agent answered", {
+            sessionKey: sk,
+            messages: rendered.messages,
+            historyLength: rendered.text.length,
+            dropped: rendered.dropped,
+          })
+        }
+      } else if (missed.kind === "diverged") {
+        log.info("conversation no longer starts with what this claude session was sent", {
+          sessionKey: sk,
+        })
+      }
+    }
     const userMsg =
       exitPlanModeQuestionResult ??
       getClaudeUserMessage(effectivePrompt, includeHistoryContext, {
+        missedConversation,
         compactionMode,
         compactionInstructions: useInteractive && compactionMode
           ? extractSystemMessages(effectivePrompt).join("\n\n")
@@ -3632,6 +3689,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // here an abort is an abort of work this turn owns: the handler above
           // takes its mid-turn branches, exactly as it did before.
           state.cliAskedForWork = true
+          noteConversationSent(sk, options.prompt)
           // The prompt that carried these results can also carry user
           // messages the host promoted beside them (a background-PTY or mail
           // notice, a steered prompt). Resolving a proxy call writes no user
@@ -3800,6 +3858,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
 
         // Send the user message for a fresh turn.
         state.cliAskedForWork = true
+        if (!compactionMode) noteConversationSent(sk, options.prompt)
         if (state.activeProcess) {
           noteTurnStarted(state.activeProcess)
           // A new ordinary turn sends its own trailing messages: forget the boundary.

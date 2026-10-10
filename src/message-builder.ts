@@ -454,6 +454,84 @@ export function compactConversationHistory(
   return historyParts.join("\n\n")
 }
 
+/**
+ * The cap on the catch-up block (`renderMissedConversation`). Above it the
+ * block keeps only what was said, not what tools returned, and above it again
+ * it keeps the newest messages, because the current message most likely
+ * answers the last thing the other agent asked.
+ */
+export const MAX_MISSED_CONVERSATION_CHARS = 30_000
+
+function renderTextOnly(msg: any): string {
+  if (typeof msg.content === "string") return msg.content
+  if (!Array.isArray(msg.content)) return ""
+  return (msg.content as any[])
+    .filter((part) => part?.type === "text" && part.text)
+    .map((part) => part.text)
+    .join("\n")
+}
+
+/**
+ * Render the messages a resumed Claude session never saw (see
+ * `src/session-catch-up.ts`) with the replay's own renderer and clipping, then
+ * fit the result under `MAX_MISSED_CONVERSATION_CHARS`.
+ */
+export function renderMissedConversation(
+  missed: Prompt,
+  opts: { stripContextReminders?: boolean } = {},
+): { text: string; messages: number; condensed: boolean; dropped: number } | null {
+  let prompt = filterSideQuestionHistory(missed)
+  if (opts.stripContextReminders) prompt = stripContextReminders(prompt).prompt
+  const conversation = prompt.filter(
+    (m) => m.role === "user" || m.role === "assistant" || m.role === "tool",
+  )
+  let lastAssistant = -1
+  for (let i = conversation.length - 1; i >= 0; i--) {
+    if (conversation[i].role === "assistant") {
+      lastAssistant = i
+      break
+    }
+  }
+  const label = (role: string) =>
+    role === "user" ? "User" : role === "assistant" ? "Assistant" : "Tool"
+  const render = (textOnly: boolean): string[] => {
+    const entries: string[] = []
+    conversation.forEach((msg, i) => {
+      if (textOnly && msg.role === "tool") return
+      const text = textOnly ? renderTextOnly(msg) : renderMessageContentForCompaction(msg).text
+      if (!text.trim()) return
+      const max = i === lastAssistant ? MAX_REPLAY_LAST_REPLY_CHARS : MAX_REPLAY_MESSAGE_CHARS
+      entries.push(`${label(msg.role)}: ${clipMiddle(text, max)}`)
+    })
+    return entries
+  }
+  const size = (entries: string[]) =>
+    entries.reduce((total, entry) => total + entry.length + 2, 0)
+
+  let entries = render(false)
+  let condensed = false
+  if (size(entries) > MAX_MISSED_CONVERSATION_CHARS) {
+    entries = render(true)
+    condensed = true
+  }
+  let dropped = 0
+  while (entries.length > 1 && size(entries) > MAX_MISSED_CONVERSATION_CHARS) {
+    entries.shift()
+    dropped++
+  }
+  if (entries.length === 0) return null
+
+  const notes: string[] = []
+  if (condensed) notes.push("Tool calls and their output are left out to keep this short.")
+  if (dropped > 0) notes.push(`The ${dropped} oldest of these messages are left out as well.`)
+  return {
+    text: [notes.join(" "), entries.join("\n\n")].filter(Boolean).join("\n\n"),
+    messages: entries.length,
+    condensed,
+    dropped,
+  }
+}
+
 function buildCompactionHistory(prompt: Prompt): string | null {
   // Iterate newest-first, accumulate up to MAX_HISTORY_CHARS, then reverse
   // to chronological order. Oldest messages get dropped when the budget
@@ -530,6 +608,12 @@ export function getClaudeUserMessage(
     compactionInstructions?: string
     cliToolCallIds?: ReadonlySet<string>
     stripContextReminders?: boolean
+    /**
+     * Messages of this conversation the resumed Claude session never saw,
+     * already rendered by `renderMissedConversation`. Ignored when the whole
+     * thread is replayed or on compaction, which both carry them anyway.
+     */
+    missedConversation?: string
   } = {},
 ): string {
   const compactionMode = opts.compactionMode === true
@@ -630,6 +714,20 @@ Now continuing with the current message:
 `,
       })
     }
+  } else if (opts.missedConversation) {
+    content.push({
+      type: "text",
+      text: `<conversation_you_missed>
+These messages were exchanged in this conversation while another opencode agent was answering, so they are not in your context yet. Read them before you answer: the current message may refer to them.
+
+${opts.missedConversation}
+
+</conversation_you_missed>
+
+Now continuing with the current message:
+
+`,
+    })
   }
 
   // Find messages since last assistant message
