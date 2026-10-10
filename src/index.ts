@@ -314,6 +314,7 @@ export function createClaudeCode(
       forkSessions: settings.forkSessions === true,
       resumeAfterRestart: settings.resumeAfterRestart !== false,
       resumeAcrossModelChanges: settings.resumeAcrossModelChanges !== false,
+      catchUpMissedMessages: settings.catchUpMissedMessages !== false,
       crossAccountResume: settings.crossAccountResume !== false,
       transport: settings.transport,
       interactive: settings.interactive,

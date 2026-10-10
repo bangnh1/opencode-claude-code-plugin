@@ -118,6 +118,8 @@ export interface ClaudeCodeConfig {
   resumeAfterRestart?: boolean
   /** Carry a conversation's Claude session over when its model or effort changes. Default true. */
   resumeAcrossModelChanges?: boolean
+  /** Send a resumed Claude session the messages another agent answered. Default true. */
+  catchUpMissedMessages?: boolean
   /** Carry a conversation's Claude transcript over on an account switch. Default true. */
   crossAccountResume?: boolean
   logging?: LoggingConfig
@@ -645,6 +647,23 @@ export interface ClaudeCodeProviderSettings {
    * false` turns this off too.
    */
   resumeAcrossModelChanges?: boolean
+
+  /**
+   * Send a resumed Claude session the messages of this opencode conversation
+   * it never saw, ahead of the current message. Default `true`.
+   *
+   * The opencode agent is part of the session key, so plan and build each have
+   * their own Claude session. Switching back to an agent that already has one
+   * used to send it only the newest message, so everything the other agent was
+   * asked and answered in between was missing from its context. The plugin
+   * remembers what each session was sent and inserts what it missed, rendered
+   * like the fresh-session replay and capped at 30,000 characters (tool output
+   * is dropped first, then the oldest messages). Not on compaction, a
+   * tool-result turn, an account-failover switch, or across `accountGroups`.
+   * Log: `catching the claude session up on messages another agent answered`
+   * (NOTICE).
+   */
+  catchUpMissedMessages?: boolean
 
   /**
    * Continue the same Claude conversation when it moves to another account,

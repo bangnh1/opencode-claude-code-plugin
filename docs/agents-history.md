@@ -5316,3 +5316,33 @@ Measured, in order, each step ruling out the previous suspect:
 Fix: `spawnMcpTimeoutEnv` fills `MCP_TIMEOUT=120000` on both transports unless the user set it, so
 a subagent waits out a stall instead of running toolless. The stall itself is not fixed; attributing
 it needs a fresh-session comparison. `test/spawn-env.test.ts`.
+
+<a id="g236"></a>
+
+#### Switching back to an agent lost what the other agent answered (2026-10-10)
+
+Reported on an opencode 2 session (Claude Opus 5.5, headless): plan turns, then build, then plan
+again (the operator asked a follow-up and plan answered with three numbered questions), then build,
+where the operator answered `1 -> ok 2 -> ok 3 -> no`. Build replied that the previous message had
+no numbered questions, then guessed and started committing unrelated work.
+
+Cause: the opencode agent is in the session key's context blob, deliberately (h #g223: a resumed
+Claude conversation answers under the system prompt recorded on its first request, so plan and build
+must not share one). The first switch to an agent replays the whole thread because its key has
+nothing yet. On the SECOND return its key already holds a Claude session (and usually a live
+child), so `includeHistoryContext` is false and `getClaudeUserMessage` sends only the trailing
+segment. Messages 150-177 of that session existed only in plan's Claude session.
+
+Fix: `src/session-catch-up.ts` records the strict digest chain of every prompt written to a key
+(both write sites), and the prologue inserts the prompt's messages past that prefix (minus the
+session's own reply, up to the last assistant message) as a `<conversation_you_missed>` block,
+rendered like the fresh-session replay and capped at 30,000 characters. Default on
+(`catchUpMissedMessages`). Never drops a session: a record that no longer prefixes the prompt
+(compaction, revert) inserts nothing, which is the old behaviour. Not measured live yet; the proof is
+`test/session-catch-up.test.ts`, whose end-to-end case drives plan -> build -> plan -> build through
+real `doStream` turns and a fake CLI.
+
+A model-facing `session_history` tool was considered and left as a follow-up: the plugin knows
+exactly when and how large the gap is, while the model in the reported session never noticed it was
+missing context, so a tool alone would not have fixed it.
+
