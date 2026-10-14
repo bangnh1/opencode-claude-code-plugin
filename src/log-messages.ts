@@ -31,6 +31,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "carried this conversation's claude transcript to the other account",
   "carrying the claude conversation over to the new session key",
   "claude --version output unparseable",
+  "claude account cannot serve this turn; continuing it on the next account automatically",
   "claude account is out of usage; the turn ends with a note",
   "claude already registers a different skill under this name; not bridging ours",
   "claude cli < 2.1.142 detected; Opus 4.7 thinking summaries unavailable. Run `npm i -g @anthropic-ai/claude-code` to upgrade.",

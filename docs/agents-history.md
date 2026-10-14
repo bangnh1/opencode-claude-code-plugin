@@ -5316,3 +5316,59 @@ Measured, in order, each step ruling out the previous suspect:
 Fix: `spawnMcpTimeoutEnv` fills `MCP_TIMEOUT=120000` on both transports unless the user set it, so
 a subagent waits out a stall instead of running toolless. The stall itself is not fixed; attributing
 it needs a fresh-session comparison. `test/spawn-env.test.ts`.
+
+<a id="g236"></a>
+
+#### `accountFailover: "auto"`: the form's switch, without the form (2026-10-14)
+
+Requested as an opt-in third mode beside `"off"` and `"ask"`: ordered failover
+after the existing exact limit and account-block signals, not rotation of
+healthy requests. Built on the form's own switch rather than a second router.
+`runAccountFailover` wraps `runModelChain` (outside it, so a switch starts the
+target account's chain from the top) and returns it untouched for anything but
+`"auto"`. The failed attempt's `completeResult` sets `run.switchTo` beside the
+form's branch, on the same facts, and closes with no `finish`; the next
+attempt's prologue takes it first and reads it as the form's `switch` answer,
+so `setAccountOverride`, `resolveFailoverSpawn`, the transcript carry (h #g218),
+the replay and `buildFailoverContinuationPrompt` are the form's code unchanged.
+
+Three things only the wiring showed, each pinned by a fake-CLI test:
+
+- A first message has `hasPriorConversation` false, and the prologue's "new
+  session" reset then deleted the session id the failed attempt had just
+  created, so the carry had nothing to carry. A retry skips that reset.
+- The failing account's own prose (the CLI's limit sentence, the
+  `authentication_failed` reply, the result text, the account-block note) would
+  sit in the same assistant message as the next account's answer. The parser
+  drops all four when `failoverAutoActive`; `completeResult` switches on the
+  same three facts the parser reads.
+- The parser attributed a limit to the provider's account even when an
+  override had it spawn another, so a limit on the target was remembered under
+  the source. Under `"auto"` that is what decides what to skip, so `"auto"`
+  attributes it to the account that ran (`limitAccount`); `"off"` and `"ask"`
+  keep the old attribution untouched. The form still names the provider's
+  account after a chained override and offers the account that just failed;
+  that is pre-existing and was left alone.
+
+Scope decisions, made deliberately rather than inherited from the form: the
+form skips `doGenerate`, the interactive transport (before h #g209) and child
+sessions because a question there could not be answered. `"auto"` asks
+nothing, so it applies to all three; `doGenerate` gets no note in its returned
+text, for the reason the usage-limit note is not written there. Compaction is
+excluded (its answer is a stored summary), and a title request never spawns.
+
+Bound: `run.tried` holds every account spawned or switched to, and the target
+is added at the switch, so even a target whose runtime cannot be prepared
+(`resolveFailoverSpawn` stays put) is never picked twice. Known-unavailable is
+`isAccountKnownUnavailable`: an unexpired override moving the account's own
+work elsewhere, or a remembered limit whose reset is still ahead, both on their
+existing expiry rules.
+
+Not measured live: no second limited login was available and no paid probe was
+authorised. Tests: `test/account-failover.test.ts` (limit, block, three-account
+chain, exhaustion, known-unavailable skip and expiry, never on a server error,
+a served-after-rejected turn, a title or a compaction, precedence over
+`fallbackModels`, `accountGroups`, carry, replay, abort, `doGenerate`) and
+`test/interactive-pty.test.ts` (the PTY switch carrying the transcript). 11 of
+the 13 new tests failed before the change; the two that passed are the
+never-switch guards and the abort, which assert that nothing moves.

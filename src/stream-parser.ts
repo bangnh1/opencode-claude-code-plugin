@@ -91,8 +91,16 @@ export interface StreamParserContext {
   /** Whether a usage limit should end the turn on the switch form. */
   failoverAskActive: boolean
   /**
+   * Whether a usage limit or an account block on this turn moves the same
+   * request to another account (`accountFailover: "auto"`). When it does, the
+   * failing account's own prose must stay out of the turn: the other
+   * account's answer follows it in the same assistant message.
+   */
+  failoverAutoActive: boolean
+  /**
    * Whether a usage limit should end the turn on the `▌ **usage limit:**`
-   * note, the complement of `failoverAskActive` (h #g194). The limit itself is
+   * note, the complement of `failoverAskActive || failoverAutoActive`
+   * (h #g194, h #g236). The limit itself is
    * not known until the `result` frame, which is where this becomes
    * `TurnState.usageLimitNote`.
    */
@@ -725,6 +733,12 @@ export function createLineHandler(
             }))
         // Only the note replaces the sentence; the form asks below it.
         const limitErrorReply = limitFromReply && ctx.usageLimitNoteActive
+        // The automatic switch drops the sentence too, and the account-block
+        // reply's as well (it is not flagged `is_api_error_message`, so only
+        // its `error` kind says what it is): either would otherwise sit in
+        // the middle of the next account's answer. (`accountFailover: "auto"`)
+        const autoFailoverReply =
+          ctx.failoverAutoActive && (limitFromReply || accountBlockKind(msg) !== null)
         // On a compaction turn every failure reply the CLI writes is
         // suppressed, whatever it is about: this stream's text is what
         // opencode stores as the summary, so the CLI's prose would become the
@@ -774,7 +788,7 @@ export function createLineHandler(
             // The usage-limit note says this better and names the account,
             // which the CLI's sentence does not. Dropped rather than
             // rendered, so a limited turn carries exactly one block.
-            if (limitErrorReply) continue
+            if (limitErrorReply || autoFailoverReply) continue
             if (compactionApiError) {
               state.compactionFailureText ??= block.text
               continue
@@ -1077,6 +1091,15 @@ export function createLineHandler(
           state.accountLimitHit = recallAccountLimit(ctx.sourceAccount)
         }
 
+        // This failed turn is about to be moved to another account
+        // (`accountFailover: "auto"`), so nothing below may write about it:
+        // not the CLI's text, not the account-block note. `completeResult`
+        // makes the switch on the same three facts.
+        const autoFailoverResult =
+          ctx.failoverAutoActive &&
+          msg.is_error === true &&
+          (!!state.accountLimitHit || !!state.accountBlock)
+
         // The one place this is decided; see `TurnState.usageLimitNote`.
         state.usageLimitNote =
           ctx.usageLimitNoteActive &&
@@ -1133,6 +1156,7 @@ export function createLineHandler(
             msg.result.trim() === state.apiErrorTextShown.trim()
           ) &&
           !state.usageLimitNote &&
+          !autoFailoverResult &&
           typeof msg.result === "string" &&
           msg.result.trim().length > 0
         ) {
@@ -1163,7 +1187,8 @@ export function createLineHandler(
           // The note is for the operator to read, and on a compaction turn
           // nobody reads it: it would be stored as the summary instead. The
           // WARN below says the same thing where it can be seen (h #g214).
-          if (!compactionFailure) {
+          // An automatic switch names the block in its own note instead.
+          if (!compactionFailure && !autoFailoverResult) {
             state.controller.enqueue({
               type: "text-delta",
               id: state.startTextBlock(),
@@ -1195,8 +1220,9 @@ export function createLineHandler(
         if (failure) {
           state.resultFailure = msg.subtype
           // Same reason as the account note above: on a compaction turn this
-          // would be stored as the summary rather than read (h #g214).
-          if (!compactionFailure) {
+          // would be stored as the summary rather than read (h #g214), and an
+          // automatically switched turn is not this account's to describe.
+          if (!compactionFailure && !autoFailoverResult) {
             state.controller.enqueue({
               type: "text-delta",
               id: state.startTextBlock(),
