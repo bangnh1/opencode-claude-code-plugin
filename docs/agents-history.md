@@ -5340,8 +5340,8 @@ Three things only the wiring showed, each pinned by a fake-CLI test:
 - The failing account's own prose (the CLI's limit sentence, the
   `authentication_failed` reply, the result text, the account-block note) would
   sit in the same assistant message as the next account's answer. The parser
-  drops all four when `failoverAutoActive`; `completeResult` switches on the
-  same three facts the parser reads.
+  drops all four when `autoFailoverTarget()` names an account; `completeResult`
+  switches on the same memoised answer.
 - The parser attributed a limit to the provider's account even when an
   override had it spawn another, so a limit on the target was remembered under
   the source. Under `"auto"` that is what decides what to skip, so `"auto"`
@@ -5364,11 +5364,38 @@ is added at the switch, so even a target whose runtime cannot be prepared
 work elsewhere, or a remembered limit whose reset is still ahead, both on their
 existing expiry rules.
 
+The independent verifier's first pass rejected four things, each reproduced
+first as a failing fake-CLI test at the caller boundary:
+
+- **The choice was frozen in the prologue.** Beta learned a future limit while
+  alpha was still waiting on its own, and alpha's failure still moved to beta.
+  The target is now chosen when the failure arrives (`autoFailoverTarget`,
+  memoised, so the parser's suppression and `completeResult`'s switch agree),
+  and `usageLimitNoteActive` is the form's complement again, with the parser
+  dropping the note for a turn that moves.
+- **A runtime that could not be prepared re-ran the failed account.**
+  `resolveFailoverSpawn` returns the source spawn unchanged when
+  `ensureAccountRuntime` refuses (EEXIST on a config dir that is a file), and
+  the retry ran alpha twice. The retry now walks on to the next account chosen
+  then; with none left it ends the turn on the note and an error finish, and
+  clears the override pointing at the account it could not start.
+- **An exhausted `doGenerate` turn finished `stop`**, because the usage-limit
+  note, the only thing that set `resultFailure`, is not written there. Under
+  `"auto"` a failed limited turn finishes `usage_limit` regardless. The same is
+  still true of `"off"` and `"ask"` on `doGenerate`, and was left alone.
+- **`reader.cancel()` did not stop the walk.** The turn's own `cancel()` is a
+  no-op, so a cancel reached nothing and the next account still ran. Every
+  attempt now gets `AbortSignal.any([abortSignal, cancel])`, and the loop starts
+  no account once either has fired.
+
 Not measured live: no second limited login was available and no paid probe was
 authorised. Tests: `test/account-failover.test.ts` (limit, block, three-account
 chain, exhaustion, known-unavailable skip and expiry, never on a server error,
 a served-after-rejected turn, a title or a compaction, precedence over
 `fallbackModels`, `accountGroups`, carry, replay, abort, `doGenerate`) and
 `test/interactive-pty.test.ts` (the PTY switch carrying the transcript). 11 of
-the 13 new tests failed before the change; the two that passed are the
-never-switch guards and the abort, which assert that nothing moves.
+the first 13 new tests failed before the change; the two that passed are the
+never-switch guards and the abort, which assert that nothing moves. The four
+added for the verifier's findings (`doGenerate` exhaustion, a runtime that
+cannot be prepared, a limit learned mid-turn, `reader.cancel()`) all failed
+before their fixes.

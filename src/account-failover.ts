@@ -590,6 +590,23 @@ export function isAccountKnownUnavailable(account: string, now = Date.now()): bo
 }
 
 /**
+ * The account the automatic switch moves a request to next: the first of
+ * `candidates` (configured order, already group-filtered) that this request
+ * has not tried and that is not known to be out. Read at the moment it is
+ * needed, never earlier, because another session can learn that an account is
+ * out while this one is still waiting on its own failure.
+ */
+export function nextAutoFailoverAccount(
+  candidates: readonly string[],
+  tried: ReadonlySet<string>,
+  now = Date.now(),
+): string | undefined {
+  return candidates.find(
+    (account) => !tried.has(account) && !isAccountKnownUnavailable(account, now),
+  )
+}
+
+/**
  * One request's automatic switch (`accountFailover: "auto"`). A mutable bag
  * for the reason `ModelFallbackAttempt` is one: the failure is read by a
  * synchronous line handler long after the turn returned its stream.
@@ -609,9 +626,18 @@ export interface AutoFailoverRun {
     target: string
     /** The account the override is keyed on, as the form's pick is. */
     sourceAccount: string
-    /** The account that actually failed, which the note names. */
+    /** The account that actually failed, which the notes name. */
     failedAccount: string
+    /**
+     * `"usage_limit"`, or the `AccountBlockKind`. What the turn finishes with
+     * if no account is left to take it after all.
+     */
+    cause: string
     resetsAt?: number
+    /** The CLI's raw `rateLimitType`, for the usage-limit note. */
+    window?: string
+    /** The failed account's config dir, for the account-block note's login command. */
+    failedConfigDir?: string
     /** `describeAccountBlock`, when the account was blocked rather than limited. */
     reason?: string
   }

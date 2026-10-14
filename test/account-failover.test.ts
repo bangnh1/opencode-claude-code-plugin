@@ -1044,6 +1044,7 @@ function createFakeCli() {
   const cwd = mkdtempSync(join(tmpdir(), "opencode-failover-"))
   const cliPath = join(cwd, "fake-claude.cjs")
   const record = join(cwd, "spawns.jsonl")
+  const controls = join(cwd, "controls.jsonl")
   const source = `#!/usr/bin/env node
 const fs = require("node:fs")
 const readline = require("node:readline")
@@ -1327,6 +1328,16 @@ function scriptedLines() {
 const rl = readline.createInterface({ input: process.stdin })
 let answered = false
 rl.on("line", (line) => {
+  // Scripted runs only: an interrupt the plugin sends to stop the turn in
+  // flight, recorded so a test can tell a stopped attempt from one left
+  // running.
+  if (accountScript && line.includes('"control_request"')) {
+    fs.appendFileSync(
+      ${JSON.stringify(controls)},
+      JSON.stringify({ configDir: process.env.CLAUDE_CONFIG_DIR || null, line }) + "\\n",
+    )
+    return
+  }
   if (answered && !repeat) return
   answered = true
   fs.appendFileSync(
@@ -1368,6 +1379,13 @@ rl.on("line", (line) => {
     spawns: (): any[] =>
       existsSync(record)
         ? readFileSync(record, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [],
+    controls: (): any[] =>
+      existsSync(controls)
+        ? readFileSync(controls, "utf8")
             .split("\n")
             .filter(Boolean)
             .map((line) => JSON.parse(line))
@@ -2655,5 +2673,100 @@ test("auto: a doGenerate caller is switched too, and gets the other account's an
     assert.equal(text.includes(FAILOVER_MARKER), false)
     assert.equal(text.includes("You've hit your individual spend limit"), false)
     assert.equal(result.finishReason.unified, "stop")
+  })
+})
+
+test("auto: a doGenerate caller whose every account is out gets an error finish, not an answer", async () => {
+  await withScriptedAccounts({ appical: "limit", alpha: "limit" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha"], "auto")
+    const result = await model.doGenerate({ prompt: autoPrompt, tools: TOOLS } as any)
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+    assert.equal(result.finishReason.unified, "error")
+    assert.equal(result.finishReason.raw, "usage_limit")
+  })
+})
+
+test("auto: an account whose runtime cannot be prepared is skipped, and the account that failed is never run again", async () => {
+  // A regular file where the account's config dir has to be: `mkdir` fails
+  // with EEXIST, so `ensureAccountRuntime` refuses and `resolveFailoverSpawn`
+  // would stay on the account that just failed.
+  const blocker = join(HOME, ".claude-broken")
+  try {
+    await withScriptedAccounts({ appical: "limit", broken: "ok", gamma: "ok" }, async (fake) => {
+      writeFileSync(blocker, "not a directory")
+      const model = await buildFailoverModel(fake, ["appical", "broken", "gamma"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical", "gamma"])
+      assert.match(textOf(parts), /answered by gamma/)
+      assert.equal(finishesOf(parts)[0].finishReason.unified, "stop")
+      assert.equal(resolveAccountOverride("appical"), "gamma")
+    })
+
+    // Nothing preparable left: the turn fails honestly, and no override is
+    // left pointing at an account that cannot be started.
+    await withScriptedAccounts({ appical: "limit", broken: "ok" }, async (fake) => {
+      writeFileSync(blocker, "not a directory")
+      const model = await buildFailoverModel(fake, ["appical", "broken"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+      const finishes = finishesOf(parts)
+      assert.equal(finishes.length, 1)
+      assert.equal(finishes[0].finishReason.unified, "error")
+      assert.equal(finishes[0].finishReason.raw, "usage_limit")
+      const notes = notesIn(parts)
+      assert.ok(notes[notes.length - 1]!.startsWith(USAGE_LIMIT_MARKER), textOf(parts))
+      assert.match(notes[notes.length - 1]!, /"appical" is out of usage/)
+      assert.equal(textOf(parts).includes("You've hit your individual spend limit"), false)
+      assert.equal(resolveAccountOverride("appical"), undefined)
+    })
+  } finally {
+    rmSync(blocker, { force: true })
+  }
+})
+
+test("auto: the next account is chosen when the failure arrives, so a limit learned mid-turn is skipped", async () => {
+  await withScriptedAccounts({ appical: "slow-limit", beta: "ok", gamma: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "beta", "gamma"], "auto")
+    // While appical is still working on the request, another session learns
+    // that beta is out until well after this turn.
+    const learned = setTimeout(
+      () => rememberAccountLimit("beta", { resetsAt: LIMIT_RESETS_AT, window: "five_hour" }),
+      100,
+    )
+    try {
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical", "gamma"])
+      assert.match(textOf(parts), /answered by gamma/)
+    } finally {
+      clearTimeout(learned)
+    }
+  })
+})
+
+test("auto: cancelling the returned stream stops the walk, and no other account is started", async () => {
+  await withScriptedAccounts({ appical: "slow-limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const response = await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any)
+    const reader = response.stream.getReader()
+    const first = await reader.read()
+    assert.equal(first.value?.type, "stream-start")
+    // Cancel only once appical has the request, so it lands on a turn in flight.
+    for (let waited = 0; fake.spawns().length === 0 && waited < 3000; waited += 10) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+    await reader.cancel("the caller went away")
+    // Long enough for the limit the fake was still holding to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    assert.equal(fake.spawns().some((spawn: any) => accountOf(spawn) === "default"), false)
+    assert.equal(resolveAccountOverride("appical"), undefined)
+    // The cancel reached the attempt in flight: it was stopped like any
+    // stopped turn, not left running to finish on its own.
+    assert.ok(
+      fake
+        .controls()
+        .some((control: any) => accountOf(control) === "appical" && /"interrupt"/.test(control.line)),
+      JSON.stringify(fake.controls()),
+    )
   })
 })

@@ -64,17 +64,20 @@ import {
   consumeAccountFailoverAnswer,
   createAccountFailoverQuestionCall,
   describeAccountBlock,
+  clearAccountOverride,
   failoverCandidates,
   failoverUntil,
+  formatAccountBlockNote,
   formatAutoFailoverNote,
   formatFailoverNote,
   formatFailoverStopNote,
   formatUsageLimitNote,
   isAccountFailoverQuestionActive,
-  isAccountKnownUnavailable,
+  nextAutoFailoverAccount,
   resolveFailoverSpawn,
   setAccountOverride,
   stripAccountSuffix,
+  type AccountBlockKind,
   type AutoFailoverRun,
   type FailoverSpawn,
 } from "./account-failover.js"
@@ -906,6 +909,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
    *
    * The bound is `run.tried`, as it is `tried` for the model chain: every
    * account spawned or switched to goes in, and none in it is picked again.
+   *
+   * Cancelling the returned stream is a stop, for every attempt: this loop is
+   * the plugin starting more work on the caller's behalf, so a caller that
+   * has gone away must reach all of it. Each attempt gets a signal that the
+   * caller's own `abortSignal` and a `cancel()` both abort, and the loop
+   * starts no further account once either has happened.
    */
   private async runAccountFailover(
     options: LanguageModelV3CallOptions,
@@ -915,15 +924,24 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
 
     const self = this
     const run: AutoFailoverRun = { tried: new Set() }
-    let inner = await this.runModelChain(options, mode, run)
+    const cancelled = new AbortController()
+    const attemptOptions: LanguageModelV3CallOptions = {
+      ...options,
+      abortSignal: options.abortSignal
+        ? AbortSignal.any([options.abortSignal, cancelled.signal])
+        : cancelled.signal,
+    }
+    const stopped = () => attemptOptions.abortSignal!.aborted
+    let inner = await this.runModelChain(attemptOptions, mode, run)
     const request = inner.request
+    let reader: ReadableStreamDefaultReader<LanguageModelV3StreamPart> | undefined
 
     const stream = new ReadableStream<LanguageModelV3StreamPart>({
       async start(controller) {
         let started = false
         try {
           for (;;) {
-            const reader = inner.stream.getReader()
+            reader = inner.stream.getReader()
             try {
               for (;;) {
                 const { done, value } = await reader.read()
@@ -939,24 +957,28 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             }
 
             if (!run.switchTo) break
-            // A stop that landed while the failed attempt was ending is the
-            // operator's last word: no further account is spawned, billed or
-            // switched to.
-            if (options.abortSignal?.aborted) {
+            // A stop or a cancel that landed while the failed attempt was
+            // ending is the caller's last word: no further account is
+            // spawned, billed or switched to.
+            if (stopped()) {
               log.info("turn stopped before the automatic account switch; not switching", {
                 target: run.switchTo.target,
               })
               break
             }
-            inner = await self.runModelChain(options, mode, run)
+            inner = await self.runModelChain(attemptOptions, mode, run)
           }
         } catch (error) {
-          controller.enqueue({ type: "error", error })
+          if (!stopped()) controller.enqueue({ type: "error", error })
         } finally {
           try {
             controller.close()
           } catch {}
         }
+      },
+      async cancel(reason) {
+        cancelled.abort(reason)
+        await reader?.cancel(reason).catch(() => undefined)
       },
     })
 
@@ -1614,6 +1636,90 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         cliPath: this.config.cliPath,
         modelId: effectiveModelId,
       })
+      // `"auto"` only. A target whose runtime could not be prepared leaves
+      // `resolveFailoverSpawn` on the account that just failed, which this
+      // request already ran: walk on to the next eligible account instead,
+      // chosen now, and with none left end the turn the way the failed
+      // attempt would have ended had it known. Never a second run of an
+      // account this request already tried.
+      while (autoSwitch && accountRun && failover.target !== failoverAnswer.target) {
+        log.notice("automatic account switch skipped an account whose runtime could not be prepared", {
+          sessionKey: sk,
+          target: failoverAnswer.target,
+        })
+        const next = nextAutoFailoverAccount(
+          failoverCandidates(this.config.failoverAccounts, sourceAccount, groups),
+          accountRun.tried,
+        )
+        if (!next) {
+          // The override just set names an account that cannot be started,
+          // so it goes too.
+          clearAccountOverride(failoverAnswer.sourceAccount)
+          log.warn("no configured account could take this turn; it ends here", {
+            sessionKey: sk,
+            account: autoSwitch.failedAccount,
+            cause: autoSwitch.cause,
+          })
+          // Not on `doGenerate`, whose text is a return value, for the reason
+          // no other note is.
+          const note =
+            mode === "generate"
+              ? null
+              : autoSwitch.cause === "usage_limit"
+                ? formatUsageLimitNote({
+                    sourceAccount: autoSwitch.failedAccount,
+                    candidates: [],
+                    resetsAt: autoSwitch.resetsAt,
+                    window: autoSwitch.window,
+                  })
+                : formatAccountBlockNote({
+                    kind: autoSwitch.cause as AccountBlockKind,
+                    account: autoSwitch.failedAccount,
+                    configDir: autoSwitch.failedConfigDir,
+                    offeringSwitch: false,
+                    candidates: [],
+                  })
+          const cause = autoSwitch.cause
+          const exhausted = new ReadableStream<LanguageModelV3StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: "stream-start", warnings })
+              if (note) {
+                const id = generateId()
+                controller.enqueue({ type: "text-start", id } as any)
+                controller.enqueue({ type: "text-delta", id, delta: note })
+                controller.enqueue({ type: "text-end", id })
+              }
+              controller.enqueue({
+                type: "finish",
+                finishReason: { unified: "error" as const, raw: cause },
+                usage: toUsage({ input_tokens: 0, output_tokens: 0 }),
+                providerMetadata: {
+                  "claude-code": {
+                    path: "account-failover-exhausted",
+                    synthetic: true,
+                    usageUnavailable: true,
+                  },
+                },
+              })
+              controller.close()
+            },
+          })
+          return { stream: exhausted, request: { body: { text: "" } } }
+        }
+        accountRun.tried.add(next)
+        failoverAnswer.target = next
+        setAccountOverride(
+          failoverAnswer.sourceAccount,
+          next,
+          failoverUntil(failoverAnswer.resetsAt),
+        )
+        failover = await resolveFailoverSpawn({
+          account: sourceAccount,
+          baseCliPath,
+          cliPath: this.config.cliPath,
+          modelId: effectiveModelId,
+        })
+      }
       cliPath = failover.cliPath
       asideTransportRef.cliPath = cliPath
       // The automatic switch's note is written below the carry, because it
@@ -1745,10 +1851,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     }
     // Not on a `doGenerate` turn, for the reason the usage-limit note is not:
     // its text is aggregated into a return value rather than shown.
-    if (autoSwitch && mode !== "generate") {
+    if (autoSwitch && failoverAnswer?.kind === "switch" && mode !== "generate") {
       failoverNote = formatAutoFailoverNote({
         failedAccount: autoSwitch.failedAccount,
-        target: autoSwitch.target,
+        target: failoverAnswer.target,
         resetsAt: autoSwitch.resetsAt,
         reason: autoSwitch.reason,
         carried: conversationOnTarget,
@@ -2203,9 +2309,15 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
 
     // The automatic switch (`accountFailover: "auto"`). `accountRun` exists
     // only with that setting (`runAccountFailover`), so `"off"` and `"ask"`
-    // never get past the first check. The candidates are the form's, minus
-    // every account this request already spawned on or switched to (the
-    // running one included) and every account already known to be out.
+    // never get a target. The candidates are the form's, minus every account
+    // this request already spawned on or switched to (the running one
+    // included) and every account known to be out.
+    //
+    // Chosen when the failure arrives, not here, and once: another session can
+    // learn that an account is out while this one is still waiting on its own
+    // limit, and the parser (which keeps the failing account's prose out of
+    // the turn) and `completeResult` (which makes the switch) must agree.
+    // Nothing calls this on a turn that did not fail on its account.
     //
     // Deliberately NOT gated on `doGenerate`, the transport or a parent
     // session, which the form is: those exclusions exist because a form there
@@ -2215,13 +2327,16 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // its answer is a stored summary and a second account would rewrite it.
     const spawnedAccount = failover.target ?? sourceAccount
     accountRun?.tried.add(spawnedAccount)
-    const failoverAutoAccounts =
-      accountRun && !compactionMode
-        ? failoverAccounts.filter(
-            (account) => !accountRun.tried.has(account) && !isAccountKnownUnavailable(account),
-          )
-        : []
-    const failoverAutoActive = failoverAutoAccounts.length > 0
+    let autoFailoverChoice: string | null | undefined
+    const autoFailoverTarget = (): string | undefined => {
+      if (autoFailoverChoice === undefined) {
+        autoFailoverChoice =
+          accountRun && !compactionMode
+            ? (nextAutoFailoverAccount(failoverAccounts, accountRun.tried) ?? null)
+            : null
+      }
+      return autoFailoverChoice ?? undefined
+    }
     // Which account a limit on this attempt belongs to. `"off"` and `"ask"`
     // keep the provider's own account, as they always have; the automatic
     // switch needs the account that really ran, because that is the one it
@@ -2244,11 +2359,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // refusal is in hand; `completeResult` reads this after the chain's own
     // branch has had its chance to return.
     //
-    // The automatic switch takes a limited turn the same way the form does,
-    // so it is in the complement too; once no account is left to switch to,
-    // the note is back, and it is the whole of the turn's honest failure.
+    // The automatic switch is not in this complement, because whether it
+    // takes the turn is only known at the failure: the parser drops the note
+    // for a turn it switches (`autoFailoverTarget`), and with no account left
+    // the note is the whole of the turn's honest failure.
     const usageLimitNoteActive =
-      !compactionMode && mode !== "generate" && !failoverAskActive && !failoverAutoActive
+      !compactionMode && mode !== "generate" && !failoverAskActive
 
     // Whether this turn tells the operator that the opencode process they are
     // talking to is running an older plugin build than the one on disk
@@ -3308,19 +3424,21 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // the form leaves them, because the next attempt's prologue carries
           // the conversation from them. The parser has already kept this
           // account's own error prose out of the turn.
-          if (
-            (state.accountLimitHit || state.accountBlock) &&
-            failoverAutoActive &&
-            accountRun &&
-            msg.is_error === true
-          ) {
-            const target = failoverAutoAccounts[0]!
+          const autoTarget =
+            (state.accountLimitHit || state.accountBlock) && msg.is_error === true
+              ? autoFailoverTarget()
+              : undefined
+          if (autoTarget && accountRun) {
+            const target = autoTarget
             accountRun.tried.add(target)
             accountRun.switchTo = {
               target,
               sourceAccount,
               failedAccount: limitAccount,
+              cause: state.accountLimitHit ? "usage_limit" : state.accountBlock!,
               resetsAt: state.accountLimitHit?.resetsAt,
+              window: state.accountLimitHit?.window,
+              failedConfigDir: self.skillBridgeSpawn(failover).configDir,
               reason:
                 state.accountLimitHit || !state.accountBlock
                   ? undefined
@@ -3396,9 +3514,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // thing on screen.
           if (state.usageLimitNote) {
             // With `"auto"`, every account it could have moved to was tried or
-            // is known to be out, so none is offered (`failoverAutoAccounts`
-            // is empty here), and the account named is the one that ran.
-            const noteCandidates = accountRun ? failoverAutoAccounts : failoverAccounts
+            // is known to be out (`autoFailoverTarget` found none), so none is
+            // offered, and the account named is the one that ran.
+            const noteCandidates = accountRun ? [] : failoverAccounts
             log.warn("claude account is out of usage; the turn ends with a note", {
               sessionKey: sk,
               account: limitAccount,
@@ -3426,6 +3544,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             // agree. The note is still the whole of what is on screen, and
             // every branch above returned before reaching here, so the switch
             // form and the fallback chain are untouched (h #g214).
+            state.resultFailure ??= "usage_limit"
+          }
+          // `"auto"` out of accounts on a `doGenerate` turn, which writes no
+          // note (its text is a return value): the turn still failed and must
+          // finish as one, or the caller is handed the limit as an answer.
+          if (accountRun && state.accountLimitHit && msg.is_error === true) {
             state.resultFailure ??= "usage_limit"
           }
 
@@ -3553,10 +3677,13 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           planModeQuestionActive,
           interactive: useInteractive,
           sourceAccount: limitAccount,
+          accountConfigDir: accountRun ? self.skillBridgeSpawn(failover).configDir : self.config.configDir,
           failoverAskActive,
-          failoverAutoActive,
+          autoFailoverTarget,
           usageLimitNoteActive,
-          failoverAccounts: accountRun ? failoverAutoAccounts : failoverAccounts,
+          // Read only when no switch takes the turn, which under `"auto"`
+          // means no account is left to offer.
+          failoverAccounts: accountRun ? [] : failoverAccounts,
           modelFallbackArmed,
           attempt,
           handleControlRequest,
