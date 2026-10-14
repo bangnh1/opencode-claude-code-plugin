@@ -5353,8 +5353,8 @@ Three things only the wiring showed, each pinned by a fake-CLI test:
 Scope decisions, made deliberately rather than inherited from the form: the
 form skips `doGenerate`, the interactive transport (before h #g209) and child
 sessions because a question there could not be answered. `"auto"` asks
-nothing, so it applies to all three; `doGenerate` gets no note in its returned
-text, for the reason the usage-limit note is not written there. Compaction is
+nothing, so it applies to all three; `doGenerate` gets no switch note in its
+returned text, for the reason the usage-limit note is not written there. Compaction is
 excluded (its answer is a stored summary), and a title request never spawns.
 
 Bound: `run.tried` holds every account spawned or switched to, and the target
@@ -5387,6 +5387,18 @@ first as a failing fake-CLI test at the caller boundary:
   no-op, so a cancel reached nothing and the next account still ran. Every
   attempt now gets `AbortSignal.any([abortSignal, cancel])`, and the loop starts
   no account once either has fired.
+
+The second pass rejected only the documentation: it said an exhausted
+`doGenerate` turn carries no plugin line at all, and a probe exhausting two
+accounts on `authentication_failed` got the `▌ **claude account:**` note in
+`result.content`. The parser writes that note on any `doGenerate` turn (it is
+gated on compaction and on a switch, never on `TurnMode`), as it did before
+`"auto"`. The docs now say what happens: no usage-limit or failover line, an
+error finish, and at most the CLI's own error text plus, for a block, that note.
+(That text can be the authentication sentence twice: its reply frame is not
+flagged `is_api_error_message`, so the result's copy is not deduplicated. That
+is true of every mode and was left alone.)
+The code was left as it is.
 
 Not measured live: no second limited login was available and no paid probe was
 authorised. Tests: `test/account-failover.test.ts` (limit, block, three-account

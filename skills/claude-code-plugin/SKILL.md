@@ -528,8 +528,9 @@ What to tell a user who asks for it, or asks why billing moved:
   finishes as an error: the `▌ **usage limit:**` note naming the last account tried and
   offering no other (or the `▌ **claude account:**` note for a block), below one
   `▌ **account failover:**` line per switch made on the way. A `doGenerate` caller gets
-  no notes, only the error finish (`usage_limit` or the block's kind) and at most the
-  CLI's own error sentence as text, never an answer.
+  the error finish (`usage_limit` or the block's kind), never an answer, and no
+  usage-limit or failover line; its text is at most the CLI's own error text plus,
+  for a block, the `▌ **claude account:**` note with the login command.
 - **Sticky** like a pick: the override is keyed on the account the conversation was on,
   so every session on it, subagents included, follows until the limit's reset time, or
   until opencode restarts when none was reported (always the case for a block).
@@ -539,7 +540,7 @@ What to tell a user who asks for it, or asks why billing moved:
   fresh session when the carry is refused, exactly as for a pick; the note's last
   sentence says which. Work the failed account did in that turn is not re-run by the
   plugin, but a replay only has what opencode has.
-- **Scope.** Both transports, `doGenerate` callers (no note in the returned text), and
+- **Scope.** Both transports, `doGenerate` callers (no failover note in the returned text), and
   child sessions, which switch themselves because nothing is asked; the parent follows
   through the same override. Never compaction (it fails outright) and never a title
   request (no spawn). An available account beats the `fallbackModels` chain, as the form

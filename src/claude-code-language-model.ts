@@ -1660,8 +1660,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             account: autoSwitch.failedAccount,
             cause: autoSwitch.cause,
           })
-          // Not on `doGenerate`, whose text is a return value, for the reason
-          // no other note is.
+          // Not on `doGenerate`, whose text is a return value, as neither the
+          // usage-limit note nor the switch note is. (The parser does write a
+          // block's own note there; this rare path just stays quieter.)
           const note =
             mode === "generate"
               ? null
