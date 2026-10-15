@@ -31,7 +31,7 @@ import {
  * accounts are already configured and each is just another `CLAUDE_CONFIG_DIR`
  * behind a wrapper script (`src/accounts.ts`).
  *
- * There are two shapes for that, and the quiet one is the default.
+ * There are three shapes for that, and the quiet one is the default.
  *
  * **The note (`accountFailover: "off"`, the default).** The turn ends the way
  * a limited turn always ended, with one `▌ **usage limit:**` line saying which
@@ -45,6 +45,17 @@ import {
  * it: the answer arrives on the next `doStream` call as a `tool-result`, so
  * the switch happens inside the same opencode turn with no new user message.
  * Leaving it unanswered waits, and waiting costs nothing.
+ *
+ * **The automatic switch (`accountFailover: "auto"`).** The switch the form's
+ * pick makes, made without asking and inside the SAME caller turn: the failed
+ * attempt is dropped, the next eligible configured account (configured order,
+ * same `accountGroups` group, not tried yet this request, not known to be out)
+ * runs the same request, and the caller sees one turn carrying one
+ * `▌ **account failover:**` note. It moves on exactly what the form opens
+ * on, a failed turn with a usage limit or an account block, and nothing else.
+ * With no eligible account left the turn ends on the note, as `"off"` does.
+ * `AutoFailoverRun` is the per-request bound, mirroring the `tried` set of
+ * the model fallback chain.
  *
  * The form used to be the default and is opt-in now, because three things
  * about it were measured to be worse than the note on 2026-10-03
@@ -521,7 +532,7 @@ export async function resolveFailoverSpawn(input: {
  * and wedges the turn.
  */
 export function isAccountFailoverQuestionActive(input: {
-  configured: "ask" | "off" | undefined
+  configured: "ask" | "off" | "auto" | undefined
   candidates: readonly string[]
   opencodeHasQuestion: boolean
   compactionMode: boolean
@@ -563,6 +574,73 @@ export function failoverCandidates(
     out.push(name)
   }
   return out
+}
+
+/**
+ * Whether an account is already known to be unable to serve, from the two
+ * things this module keeps about accounts, each on its own existing expiry:
+ * an override moving the account's own work elsewhere (`resolveAccountOverride`
+ * deletes it once its `until` passes) and a remembered limit whose reset is
+ * still ahead (`recallAccountLimit` drops a reset that is not). Read only by
+ * the automatic switch, so it never spawns an account just to watch it fail.
+ */
+export function isAccountKnownUnavailable(account: string, now = Date.now()): boolean {
+  if (resolveAccountOverride(account, now) !== undefined) return true
+  return recallAccountLimit(account, now).resetsAt !== undefined
+}
+
+/**
+ * The account the automatic switch moves a request to next: the first of
+ * `candidates` (configured order, already group-filtered) that this request
+ * has not tried and that is not known to be out. Read at the moment it is
+ * needed, never earlier, because another session can learn that an account is
+ * out while this one is still waiting on its own failure.
+ */
+export function nextAutoFailoverAccount(
+  candidates: readonly string[],
+  tried: ReadonlySet<string>,
+  now = Date.now(),
+): string | undefined {
+  return candidates.find(
+    (account) => !tried.has(account) && !isAccountKnownUnavailable(account, now),
+  )
+}
+
+/**
+ * One request's automatic switch (`accountFailover: "auto"`). A mutable bag
+ * for the reason `ModelFallbackAttempt` is one: the failure is read by a
+ * synchronous line handler long after the turn returned its stream.
+ */
+export interface AutoFailoverRun {
+  /**
+   * Every account this request has spawned on or been switched to. An account
+   * in here is never picked again, which is the bound: each switch adds one,
+   * the configured list is finite, so the walk ends.
+   */
+  tried: Set<string>
+  /**
+   * Set by the attempt that failed; the next attempt's prologue takes it and
+   * makes exactly the switch the form's pick would have made.
+   */
+  switchTo?: {
+    target: string
+    /** The account the override is keyed on, as the form's pick is. */
+    sourceAccount: string
+    /** The account that actually failed, which the notes name. */
+    failedAccount: string
+    /**
+     * `"usage_limit"`, or the `AccountBlockKind`. What the turn finishes with
+     * if no account is left to take it after all.
+     */
+    cause: string
+    resetsAt?: number
+    /** The CLI's raw `rateLimitType`, for the usage-limit note. */
+    window?: string
+    /** The failed account's config dir, for the account-block note's login command. */
+    failedConfigDir?: string
+    /** `describeAccountBlock`, when the account was blocked rather than limited. */
+    reason?: string
+  }
 }
 
 interface PendingFailoverQuestion {
@@ -790,6 +868,32 @@ export function formatFailoverNote(input: {
   }" ${
     resets ? `until ${resets}` : "until opencode restarts"
   }. Claude cannot resume a session across accounts, so the thread is being replayed into a fresh one.\n`
+}
+
+/**
+ * The note an automatic switch leaves at the top of the turn it moved. Same
+ * marker as the form's switch note, so a rebuilt transcript strips it the same
+ * way; its own wording, because nobody picked anything, and because the
+ * operator should know which of the two ways the conversation arrived
+ * (h #g218): carried across and continued, or replayed into a fresh session.
+ */
+export function formatAutoFailoverNote(input: {
+  failedAccount: string
+  target: string
+  resetsAt?: number
+  /** `describeAccountBlock`, when the account was blocked rather than limited. */
+  reason?: string
+  carried: boolean
+}): string {
+  const resets = describeReset(input.resetsAt)
+  const arrival = input.carried
+    ? "The conversation continues where it stopped."
+    : "The conversation is replayed into a fresh Claude session there."
+  return `\n${FAILOVER_MARKER} "${input.failedAccount}" ${
+    input.reason ?? "is out of usage"
+  }, so this turn moved to "${input.target}" automatically and stays there until ${
+    resets ?? "opencode restarts"
+  }. ${arrival}\n`
 }
 
 export function formatFailoverStopNote(reason: string): string {

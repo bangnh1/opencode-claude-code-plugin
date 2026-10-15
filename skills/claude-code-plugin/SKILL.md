@@ -112,8 +112,8 @@ Defaults below describe normal headless opencode use when the key is absent.
 |---|---|---|---|
 | `cliPath` | string | `"claude"` | Executable, not a shell command with flags. Use an absolute path for a non-PATH install. The opencode config hook supplies this default; only direct `createClaudeCode()` use falls back to `CLAUDE_CLI_PATH`. Account providers wrap it; never select a generated wrapper yourself. |
 | `accounts` | string[] | unset | Unset keeps provider `claude-code`. Any array, including `[]`, expands to `claude-code-default` plus normalized, deduplicated names. Non-default accounts use `~/.claude-<name>`; default uses the CLI's normal environment/auth. |
-| `accountFailover` | `"ask"` / `"off"` | `"off"` | **Opt-in: only an explicit `"ask"` opens the switch form**, so unset and `"off"` behave identically. `"ask"` ends a usage-limited turn on opencode's native `question` form listing the other configured accounts, and continues the task on the pick inside the same opencode turn. Only ever fires with more than one account configured. The pick is sticky for the LIMITED account until the limit's reset time (or until opencode restarts when the CLI reported none), so it covers every session on that account and subagents follow their parent; child sessions are never shown the form. Leaving it unanswered waits and costs nothing. `stop`, a dismissal, or text that is not one of the offered accounts ends the turn the way a limited turn ends without the form. Triggered only by a rejected `rate_limit_event`, one of the two known account-limit error texts, or one of the five account-level failure kinds the CLI names on its own error reply (`authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`, `verification_required`, `billing_error`); never by a generic failure. Never on compaction turns; both transports (the TUI's limit reply carries the same `error: "rate_limit"` kind). A switch carries the Claude conversation to the target account's config dir and resumes it there (`crossAccountResume`, default on) and only replays the thread as text when that copy is refused; either way, MCP servers configured only in the limited account's Claude profile are gone. With the default `"off"`, a limited turn ends on one `▌ **usage limit:**` note instead (see "When an account runs out of usage"). |
-| `accountGroups` | object | – | **Off unless set**, and unset means every account behaves as one group, so nothing changes on an install that does not set it. A map from an account name in `accounts` to a group name, e.g. `{"work": "work"}`; every account not named, `default` included, is in one implicit group. With it set the plugin only moves a conversation between accounts in the SAME group, which covers all four ways one can move: the by-hand switch (picking a model under another account's provider in the same opencode session), the `accountFailover` form, the override that form sets, and `crossAccountResume`. A switch ACROSS groups sends the other account nothing at all, neither the Claude transcript nor a text replay of the thread (the replay is the same history by another route), starts fresh with only the current user message, and writes one `▌ **account group:**` note naming both accounts and both groups. The source account keeps the conversation and its transcript, so switching back continues it. The switch form offers only same-group accounts, and with none left behaves as a single-account install; `describeOtherAccounts` in the usage-limit and account-block notes is filtered the same way. An account name that is not configured is ignored with one WARN, as is a non-object value or a non-string group. Compaction is exempt and a child session follows its parent. Shown resolved (never echoed) in the startup block and `/claude-code-doctor` as `accountGroups`, names only. Log: `starting fresh on this account: it is in another account group` (NOTICE, reason `another-account-group`). It guards what the plugin moves on its own; it is not a permission system. |
+| `accountFailover` | `"ask"` / `"auto"` / `"off"` | `"off"` | **Opt-in: only an explicit `"ask"` opens the switch form**, so unset and `"off"` behave identically. `"auto"`, also opt-in, makes the same switch without a form, moving the same request to the next eligible account in configured order inside the same turn (see "Automatic failover" below). `"ask"` ends a usage-limited turn on opencode's native `question` form listing the other configured accounts, and continues the task on the pick inside the same opencode turn. Only ever fires with more than one account configured. The pick is sticky for the LIMITED account until the limit's reset time (or until opencode restarts when the CLI reported none), so it covers every session on that account and subagents follow their parent; child sessions are never shown the form. Leaving it unanswered waits and costs nothing. `stop`, a dismissal, or text that is not one of the offered accounts ends the turn the way a limited turn ends without the form. Triggered only by a rejected `rate_limit_event`, one of the two known account-limit error texts, or one of the five account-level failure kinds the CLI names on its own error reply (`authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`, `verification_required`, `billing_error`); never by a generic failure. Never on compaction turns; both transports (the TUI's limit reply carries the same `error: "rate_limit"` kind). A switch carries the Claude conversation to the target account's config dir and resumes it there (`crossAccountResume`, default on) and only replays the thread as text when that copy is refused; either way, MCP servers configured only in the limited account's Claude profile are gone. With the default `"off"`, a limited turn ends on one `▌ **usage limit:**` note instead (see "When an account runs out of usage"). |
+| `accountGroups` | object | – | **Off unless set**, and unset means every account behaves as one group, so nothing changes on an install that does not set it. A map from an account name in `accounts` to a group name, e.g. `{"work": "work"}`; every account not named, `default` included, is in one implicit group. With it set the plugin only moves a conversation between accounts in the SAME group, which covers every way one can move: the by-hand switch (picking a model under another account's provider in the same opencode session), the `accountFailover` form, the `"auto"` switch, the override either one sets, and `crossAccountResume`. A switch ACROSS groups sends the other account nothing at all, neither the Claude transcript nor a text replay of the thread (the replay is the same history by another route), starts fresh with only the current user message, and writes one `▌ **account group:**` note naming both accounts and both groups. The source account keeps the conversation and its transcript, so switching back continues it. The switch form offers only same-group accounts, the `"auto"` switch moves only to one, and with none left either behaves as a single-account install; `describeOtherAccounts` in the usage-limit and account-block notes is filtered the same way. An account name that is not configured is ignored with one WARN, as is a non-object value or a non-string group. Compaction is exempt and a child session follows its parent (under `"auto"` a child can move itself, which moves the parent with it, within the group). Shown resolved (never echoed) in the startup block and `/claude-code-doctor` as `accountGroups`, names only. Log: `starting fresh on this account: it is in another account group` (NOTICE, reason `another-account-group`). It guards what the plugin moves on its own; it is not a permission system. |
 | `failoverAccounts` | string[] | unset/derived | Account expansion supplies the resolved account list so a limited account can offer the others. Do not hand-wire it; set `accounts` instead. |
 | `baseCliPath` | string | unset/derived | The `cliPath` before the per-account wrapper substitution, so a failover can build another account's wrapper on the same binary. Supplied by the config hook. Do not hand-wire it. |
 | `accountInProcess` | boolean | unset/derived | Set by the config hook on Windows, where there is no per-account wrapper script: the spawn exports `CLAUDE_CONFIG_DIR` itself and strips the `@<account>` marker off `--model`. Do not hand-wire it. |
@@ -495,6 +495,60 @@ Tell the user what a pick actually does before recommending one:
 
 `{ "accountFailover": "off" }`, which is also the default, keeps the note.
 
+### Automatic failover
+
+**Opt-in.** `{ "accountFailover": "auto" }` and more than one account configured makes
+the switch a pick would make, without the form: the failed attempt is dropped and the
+**same request** runs on the next eligible account **inside the same opencode turn**.
+The user sees one turn with the other account's answer under one note:
+
+```text
+▌ **account failover:** "work" is out of usage, so this turn moved to "personal"
+automatically and stays there until 2026-09-20T18:00:00.000Z. The conversation
+continues where it stopped.
+```
+
+What to tell a user who asks for it, or asks why billing moved:
+
+- **Triggers** are exactly the form's, and only on a turn that **failed**
+  (`is_error: true`): a usage limit (rejected `rate_limit_event`, the CLI's
+  `rate_limit` reply, the two known limit texts) or one of the five account-block kinds.
+  A served turn with a rejected event, a generic error, a server error or a timeout
+  never switches, and healthy turns never rotate between accounts.
+- **Order** is configured order: `default` first, then `accounts` as written. It skips
+  the account that just failed, every account already tried for this request, every
+  account outside the limited account's `accountGroups` group, and every account known
+  to be out: one with an unexpired override moving its own work elsewhere, or one whose
+  remembered limit has a reset time still ahead. Both expire on their own. The choice
+  is made when the failure arrives, so a limit another session learned meanwhile
+  counts. An account whose runtime cannot be prepared (config dir or wrapper not
+  writable) is skipped and the walk moves on; an account already tried is never run
+  again.
+- **Bounded.** Each account is tried at most once per request. With none left the turn
+  finishes as an error: the `▌ **usage limit:**` note naming the last account tried and
+  offering no other (or the `▌ **claude account:**` note for a block), below one
+  `▌ **account failover:**` line per switch made on the way. A `doGenerate` caller gets
+  the error finish (`usage_limit` or the block's kind), never an answer, and no
+  usage-limit or failover line; its text is at most the CLI's own error text plus,
+  for a block, the `▌ **claude account:**` note with the login command.
+- **Sticky** like a pick: the override is keyed on the account the conversation was on,
+  so every session on it, subagents included, follows until the limit's reset time, or
+  until opencode restarts when none was reported (always the case for a block).
+- **Billing** moves to the target account for the rest of the turn and every later turn
+  on the limited account until the override expires. Opting in is the consent.
+- **The conversation** is carried (`crossAccountResume`) and resumed, or replayed into a
+  fresh session when the carry is refused, exactly as for a pick; the note's last
+  sentence says which. Work the failed account did in that turn is not re-run by the
+  plugin, but a replay only has what opencode has.
+- **Scope.** Both transports, `doGenerate` callers (no failover note in the returned text), and
+  child sessions, which switch themselves because nothing is asked; the parent follows
+  through the same override. Never compaction (it fails outright) and never a title
+  request (no spawn). An available account beats the `fallbackModels` chain, as the form
+  does. Stopping the turn, or cancelling the stream it returned, stops the attempt in
+  flight and starts no further account.
+- Verified with a scripted `claude` only; the switch path itself is the one measured
+  live for the form.
+
 ### Switching account by hand, and keeping two accounts apart
 
 Picking a model under another account's provider in the **same** opencode session
@@ -665,10 +719,10 @@ Per-agent replaces provider-level; it never merges. Unset means no chain, which 
 the default. Two triggers only, never a generic error: the CLI refusing the model
 (assistant `error: "model_not_found"`, or a failed result whose text is *"There's an
 issue with the selected model"*, measured on CLI 2.1.280, where the result `subtype`
-is misleadingly `success`), and a usage limit **only when the `accountFailover` form is
-not taking the turn**, meaning it is `"off"` (its default) or has no other account to
-offer. With `"ask"` and another account configured the switch form wins and the chain
-stays out of it: model is a capability choice, account is a billing choice.
+is misleadingly `success`), and a usage limit **only when no `accountFailover` switch is
+taking the turn**, meaning it is `"off"` (its default) or has no other account to
+offer. With `"ask"` or `"auto"` and another eligible account configured the switch wins
+and the chain stays out of it: model is a capability choice, account is a billing choice.
 An expired login, a billing hold and every other error kind are excluded because they
 fail the same way on the next model.
 

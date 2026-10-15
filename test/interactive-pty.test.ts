@@ -61,7 +61,7 @@ import {
 import { _resetForkFingerprints } from "../src/session-fork.js"
 import { _setResumeStorePath } from "../src/session-resume-store.js"
 import { _resetAgentRegistryForTests, setProviderFallbackModels } from "../src/agent-models.js"
-import { _resetAccountOverrides } from "../src/account-failover.js"
+import { _resetAccountLimitMemory, _resetAccountOverrides } from "../src/account-failover.js"
 import { ensureAccountRuntime } from "../src/accounts.js"
 import { setOpencodeClient } from "../src/runtime-status.js"
 import { armStartWatchdog } from "../src/turn-controller.js"
@@ -2066,6 +2066,104 @@ test("a usage limit on the PTY asks to switch accounts, and the switch carries t
   } finally {
     deleteActiveProcess(sk)
     _resetAccountOverrides()
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    if (previousCache === undefined) delete process.env.XDG_CACHE_HOME
+    else process.env.XDG_CACHE_HOME = previousCache
+    if (previousBun) Object.defineProperty(globalThis, "Bun", previousBun)
+    else delete (globalThis as any).Bun
+    dirs.cleanup()
+  }
+})
+
+test("with accountFailover auto, a usage limit on the PTY switches inside the same turn and carries the conversation", async () => {
+  const previousBun = Object.getOwnPropertyDescriptor(globalThis, "Bun")
+  const previousHome = process.env.HOME
+  const previousCache = process.env.XDG_CACHE_HOME
+  const dirs = scratch()
+  process.env.HOME = dirs.root
+  process.env.XDG_CACHE_HOME = path.join(dirs.root, "cache")
+  _resetAccountOverrides()
+  _resetAccountLimitMemory()
+  const baseCli = path.join(dirs.root, "fake-claude")
+  fs.writeFileSync(baseCli, "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '2.1.288\\n'; exit 0; fi\nexit 1\n", { mode: 0o755 })
+  const children: FakeTui[] = []
+  Object.defineProperty(globalThis, "Bun", { configurable: true, value: {
+    Terminal: function Terminal() {},
+    which: (command: string) => command,
+    spawn: (argv: string[], options: {
+      cwd: string; env: Record<string, string | undefined>
+      terminal: { cols: number; rows: number; data: (terminal: unknown, data: Uint8Array) => void }
+    }) => {
+      const tui = new FakeTui()
+      tui.configDir = path.join(dirs.root, ".claude")
+      const first = children.length === 0
+      tui.turns = [(child) => {
+        if (first) {
+          child.append(SESSION_LIMIT_RECORD)
+          child.append({ type: "system", subtype: "turn_duration", durationMs: 400 })
+        } else {
+          child.append(assistantRecord("served-auto", "end_turn", textBlock("carried on, on default")))
+        }
+      }]
+      children.push(tui)
+      return tui.spawner(argv, { ...options, ...options.terminal,
+        onData: (text) => options.terminal.data(undefined, Buffer.from(text)),
+      })
+    },
+  } })
+  const modelId = "claude-test-pty-auto-failover@appical"
+  const sk = sessionKey(dirs.cwd, `${modelId}::tools::default::context=["claude-code",null]`)
+  try {
+    const runtime = await ensureAccountRuntime("appical", baseCli)
+    assert.ok(runtime.configDir?.startsWith(dirs.root), "the account lives in scratch")
+    const model = createClaudeCode({
+      transport: "interactive", cliPath: runtime.cliPath, baseCliPath: baseCli,
+      configDir: runtime.configDir, account: "appical", failoverAccounts: ["default", "appical"],
+      accountFailover: "auto", cwd: dirs.cwd, bridgeOpencodeMcp: false, proxyTools: [], resumeAfterRestart: false,
+    }).languageModel(modelId)
+    const tools = [{ type: "function", name: "read", inputSchema: { type: "object" } }]
+    const prompt = [{ role: "user", content: [{ type: "text", text: "go" }] }]
+
+    // ONE caller turn: the limited TUI, then the other account's, with no
+    // form in between.
+    const parts: any[] = []
+    for await (const part of (await model.doStream({ prompt, tools } as any)).stream) parts.push(part)
+
+    assert.equal(parts.some((part) => part.type === "tool-call"), false, "nothing is asked")
+    assert.equal(children.length, 2, "the switch spawns a fresh TUI in the same turn")
+    assert.equal(children[0]!.argv[0], runtime.cliPath, "the limited account's wrapper ran first")
+    const switched = children[1]!
+    assert.equal(switched.argv[0], baseCli, "the default account is the bare binary")
+    assert.equal(switched.argv[switched.argv.indexOf("--model") + 1], "claude-test-pty-auto-failover")
+
+    const limitedId = children[0]!.argv[children[0]!.argv.indexOf("--session-id") + 1]!
+    assert.deepEqual(
+      switched.argv.slice(switched.argv.indexOf("--resume"), switched.argv.indexOf("--resume") + 2),
+      ["--resume", limitedId],
+    )
+    assert.equal(
+      fs.existsSync(interactiveTranscriptPath({
+        configDir: path.join(dirs.root, ".claude"), cwd: dirs.cwd, sessionId: limitedId,
+      })),
+      true,
+      "the transcript is under the target account",
+    )
+    const typed = switched.writes.join("")
+    assert.equal(typed.includes("<conversation_history>"), false)
+    assert.match(typed, /This is the same conversation, continued/)
+
+    const body = textOf(parts)
+    assert.match(body, /carried on, on default/)
+    assert.equal(body.includes("You've hit your session limit"), false)
+    assert.match(body, /▌ \*\*account failover:\*\* "appical" is out of usage/)
+    const finishes = parts.filter((part) => part.type === "finish")
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "stop")
+  } finally {
+    deleteActiveProcess(sk)
+    _resetAccountOverrides()
+    _resetAccountLimitMemory()
     if (previousHome === undefined) delete process.env.HOME
     else process.env.HOME = previousHome
     if (previousCache === undefined) delete process.env.XDG_CACHE_HOME

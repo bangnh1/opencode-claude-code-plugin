@@ -28,6 +28,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import { ensureAccountRuntime } from "../src/accounts.js"
+import { _resetAgentRegistryForTests, setProviderFallbackModels } from "../src/agent-models.js"
 import { configDirForAccount } from "../src/account-transcript.js"
 import { interactiveTranscriptPath } from "../src/claude-session-bun.js"
 import {
@@ -72,6 +73,7 @@ import {
 } from "../src/plan-mode-question.js"
 import { createClaudeCode } from "../src/index.js"
 import { filterSideQuestionHistory, getClaudeUserMessage } from "../src/message-builder.js"
+import { MODEL_FALLBACK_MARKER } from "../src/model-fallback.js"
 import { setOpencodeClient } from "../src/runtime-status.js"
 import {
   deleteActiveProcess,
@@ -288,6 +290,8 @@ test("the form is gated on more than one account, a question tool, and the sessi
     false,
   )
   assert.equal(isAccountFailoverQuestionActive({ ...base, configured: "off" }), false)
+  // "auto" switches without asking, so it never opens the form either.
+  assert.equal(isAccountFailoverQuestionActive({ ...base, configured: "auto" }), false)
   assert.equal(isAccountFailoverQuestionActive({ ...base, candidates: [] }), false)
   assert.equal(
     isAccountFailoverQuestionActive({ ...base, opencodeHasQuestion: false }),
@@ -314,6 +318,12 @@ test("the form is off unless the provider option explicitly asks for it", () => 
     (createClaudeCode({ accountFailover: "off" })("claude-sonnet-5") as any).config
       .accountFailover,
     "off",
+  )
+  // The automatic switch takes the same settings path, untouched.
+  assert.equal(
+    (createClaudeCode({ accountFailover: "auto" })("claude-sonnet-5") as any).config
+      .accountFailover,
+    "auto",
   )
 })
 
@@ -1034,6 +1044,7 @@ function createFakeCli() {
   const cwd = mkdtempSync(join(tmpdir(), "opencode-failover-"))
   const cliPath = join(cwd, "fake-claude.cjs")
   const record = join(cwd, "spawns.jsonl")
+  const controls = join(cwd, "controls.jsonl")
   const source = `#!/usr/bin/env node
 const fs = require("node:fs")
 const readline = require("node:readline")
@@ -1237,9 +1248,96 @@ const noRepeatEvent = process.env.FAKE_CLI_NO_REPEAT_EVENT === "1"
 const alwaysOk = process.env.FAKE_CLI_ALWAYS_OK === "1"
 let turns = 0
 
+// The automatic-failover tests script every account separately: a JSON map
+// from account name to what it does, read off the config dir its wrapper
+// exported (the default account has none). Unset, everything above keeps the
+// one-limited-account behaviour it always had.
+const accountScript = process.env.FAKE_CLI_ACCOUNTS
+  ? JSON.parse(process.env.FAKE_CLI_ACCOUNTS)
+  : null
+const accountName = process.env.CLAUDE_CONFIG_DIR
+  ? require("node:path").basename(process.env.CLAUDE_CONFIG_DIR).replace(/^\\.claude-/, "")
+  : "default"
+// A failure that belongs to the request, not the account: another account
+// would fail the same way, so nothing may switch on it.
+const SERVER_ERROR_TEXT = "API Error: 500 Internal server error"
+const SERVER_ERROR_LINES = [
+  { type: "system", subtype: "init", session_id: "error-session", tools: [] },
+  {
+    type: "assistant",
+    session_id: "error-session",
+    parent_tool_use_id: null,
+    error: "server_error",
+    is_api_error_message: true,
+    message: {
+      role: "assistant",
+      model: "<synthetic>",
+      stop_reason: "stop_sequence",
+      content: [{ type: "text", text: SERVER_ERROR_TEXT }],
+    },
+  },
+  {
+    type: "result",
+    subtype: "success",
+    session_id: "error-session",
+    is_error: true,
+    api_error_status: 500,
+    result: SERVER_ERROR_TEXT,
+    duration_ms: 10,
+    num_turns: 1,
+  },
+]
+function servedBy(account) {
+  const session = account + "-session"
+  return [
+    { type: "system", subtype: "init", session_id: session, tools: [] },
+    {
+      type: "stream_event",
+      session_id: session,
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "answered by " + account } },
+    },
+    { type: "stream_event", session_id: session, event: { type: "message_delta", delta: { stop_reason: "end_turn" } } },
+    {
+      type: "result",
+      subtype: "success",
+      session_id: session,
+      is_error: false,
+      result: "answered by " + account,
+      duration_ms: 10,
+      num_turns: 1,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  ]
+}
+function scriptedLines() {
+  switch (accountScript[accountName]) {
+    case "limit":
+    case "slow-limit":
+      return LIMITED_LINES
+    case "block":
+      return AUTH_EXPIRED_LINES
+    case "error":
+      return SERVER_ERROR_LINES
+    case "served-after-reject":
+      return SERVED_AFTER_REJECT_LINES
+    default:
+      return servedBy(accountName)
+  }
+}
+
 const rl = readline.createInterface({ input: process.stdin })
 let answered = false
 rl.on("line", (line) => {
+  // Scripted runs only: an interrupt the plugin sends to stop the turn in
+  // flight, recorded so a test can tell a stopped attempt from one left
+  // running.
+  if (accountScript && line.includes('"control_request"')) {
+    fs.appendFileSync(
+      ${JSON.stringify(controls)},
+      JSON.stringify({ configDir: process.env.CLAUDE_CONFIG_DIR || null, line }) + "\\n",
+    )
+    return
+  }
   if (answered && !repeat) return
   answered = true
   fs.appendFileSync(
@@ -1250,20 +1348,27 @@ rl.on("line", (line) => {
       stdin: line,
     }) + "\\n",
   )
-  const lines = limited && !alwaysOk
-    ? (authExpired
-        ? AUTH_EXPIRED_LINES
-        : servedAfterReject
-          ? SERVED_AFTER_REJECT_LINES
-          : overageOnly
-            ? SERVED_WITH_OVERAGE_REJECTED_LINES
-            : LIMITED_LINES)
-    : FAILOVER_LINES
+  const lines = accountScript
+    ? scriptedLines()
+    : limited && !alwaysOk
+      ? (authExpired
+          ? AUTH_EXPIRED_LINES
+          : servedAfterReject
+            ? SERVED_AFTER_REJECT_LINES
+            : overageOnly
+              ? SERVED_WITH_OVERAGE_REJECTED_LINES
+              : LIMITED_LINES)
+      : FAILOVER_LINES
   turns += 1
-  for (const l of lines) {
-    if (noRepeatEvent && turns > 1 && l.type === "rate_limit_event") continue
-    process.stdout.write(JSON.stringify(l) + "\\n")
+  const write = () => {
+    for (const l of lines) {
+      if (noRepeatEvent && turns > 1 && l.type === "rate_limit_event") continue
+      process.stdout.write(JSON.stringify(l) + "\\n")
+    }
   }
+  // Long enough for a test to stop the turn before the limit arrives.
+  if (accountScript && accountScript[accountName] === "slow-limit") setTimeout(write, 400)
+  else write()
 })
 `
   writeFileSync(cliPath, source)
@@ -1274,6 +1379,13 @@ rl.on("line", (line) => {
     spawns: (): any[] =>
       existsSync(record)
         ? readFileSync(record, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [],
+    controls: (): any[] =>
+      existsSync(controls)
+        ? readFileSync(controls, "utf8")
             .split("\n")
             .filter(Boolean)
             .map((line) => JSON.parse(line))
@@ -1292,13 +1404,14 @@ const MODEL_ID = "claude-test-failover@appical"
 
 /**
  * `accountFailover` is passed explicitly everywhere below, never defaulted,
- * because which of the two answers a limited turn gets is the whole subject of
- * this file: `"ask"` for the form's own tests, unset or `"off"` for the note's.
+ * because which answer a limited turn gets is the whole subject of this file:
+ * `"ask"` for the form's own tests, `"auto"` for the automatic switch's, unset
+ * or `"off"` for the note's.
  */
 async function buildFailoverModel(
   fake: ReturnType<typeof createFakeCli>,
   failoverAccounts: string[] = ["default", "appical"],
-  accountFailover?: "ask" | "off",
+  accountFailover?: "ask" | "off" | "auto",
   extra: Record<string, unknown> = {},
 ) {
   // The limited account is reached through its own wrapper, exactly as a real
@@ -2181,4 +2294,479 @@ test("a compaction turn blocked by an expired login fails without the login note
     _resetAccountOverrides()
     rmSync(fake.cwd, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------------------
+// The automatic switch (`accountFailover: "auto"`), through a real doStream
+// ---------------------------------------------------------------------------
+
+const AUTO_REQUEST = "summarise the README in one line"
+const autoPrompt = [{ role: "user", content: [{ type: "text", text: AUTO_REQUEST }] }]
+
+type ScriptedAccount = "limit" | "slow-limit" | "block" | "error" | "served-after-reject" | "ok"
+
+function resetFailoverState(): void {
+  _resetAccountOverrides()
+  _resetAccountLimitMemory()
+  _resetRateLimitReports()
+  _resetSystemInitReports()
+}
+
+/**
+ * One fake CLI whose every account does what `script` says, and a clean
+ * slate around it: the override store and the limit memory are module state
+ * and would otherwise leak a skip from one test into the next.
+ */
+async function withScriptedAccounts(
+  script: Record<string, ScriptedAccount>,
+  run: (fake: ReturnType<typeof createFakeCli>) => Promise<void>,
+): Promise<void> {
+  resetFailoverState()
+  const fake = createFakeCli()
+  process.env.FAKE_CLI_ACCOUNTS = JSON.stringify(script)
+  try {
+    await run(fake)
+  } finally {
+    delete process.env.FAKE_CLI_ACCOUNTS
+    killAllActiveProcesses()
+    resetFailoverState()
+    rmSync(fake.cwd, { recursive: true, force: true })
+  }
+}
+
+/** Which account a recorded spawn ran as: its config dir, or none for `default`. */
+function accountOf(spawn: { configDir: string | null }): string {
+  if (!spawn.configDir) return "default"
+  return spawn.configDir.slice(spawn.configDir.lastIndexOf("/") + 1).replace(/^\.claude-/, "")
+}
+
+function finishesOf(parts: any[]): any[] {
+  return parts.filter((part) => part.type === "finish")
+}
+
+test("auto: a usage limit moves the same request to the next account, which answers it in the same turn", async () => {
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+
+    const spawns = fake.spawns()
+    assert.deepEqual(spawns.map(accountOf), ["appical", "default"])
+    // The other account's runtime, with the original request: the bare
+    // binary for `default`, the `@account` marker off the model, and the
+    // operator's words in what it was sent.
+    assert.equal(modelArg(spawns[1].argv), "claude-test-failover")
+    assert.ok(spawns[1].stdin.includes(AUTO_REQUEST), spawns[1].stdin)
+
+    // Nobody was asked anything, and the caller sees ONE turn: one start,
+    // one finish, and that finish is the served one.
+    assert.equal(parts.some((part) => part.type === "tool-call"), false)
+    assert.equal(parts.filter((part) => part.type === "stream-start").length, 1)
+    const finishes = finishesOf(parts)
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "stop")
+    assert.equal(parts.some((part) => part.type === "error"), false)
+
+    // The limited account's own sentence is not part of the answer, and the
+    // only plugin note is the one saying where the turn went.
+    const body = textOf(parts)
+    assert.match(body, /answered by default/)
+    assert.equal(body.includes("You've hit your individual spend limit"), false)
+    const notes = notesIn(parts)
+    assert.equal(notes.length, 1, body)
+    assert.ok(notes[0].startsWith(FAILOVER_MARKER))
+    assert.match(notes[0], /"appical" is out of usage/)
+    assert.match(notes[0], /"default"/)
+
+    // The same account-scoped override the form's pick sets, until the reset
+    // the limit reported.
+    assert.equal(resolveAccountOverride("appical"), "default")
+    assert.equal(resolveAccountOverride("appical", LIMIT_RESETS_AT * 1000 + 1), undefined)
+  })
+})
+
+test("auto: an account that cannot serve (expired login) moves the request too, without its error prose", async () => {
+  await withScriptedAccounts({ appical: "block", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "default"])
+    assert.equal(parts.some((part) => part.type === "tool-call"), false)
+    const finishes = finishesOf(parts)
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "stop")
+
+    const body = textOf(parts)
+    assert.match(body, /answered by default/)
+    assert.equal(body.includes("Failed to authenticate"), false)
+    assert.equal(body.includes(ACCOUNT_BLOCK_MARKER), false)
+    const notes = notesIn(parts)
+    assert.equal(notes.length, 1, body)
+    assert.match(notes[0], /"appical" is not logged in/)
+    assert.equal(resolveAccountOverride("appical"), "default")
+  })
+})
+
+test("auto: a three-account chain is walked in configured order, each account once", async () => {
+  await withScriptedAccounts({ appical: "limit", alpha: "limit", beta: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+
+    const spawns = fake.spawns()
+    assert.deepEqual(spawns.map(accountOf), ["appical", "alpha", "beta"])
+    for (const spawn of spawns.slice(1)) {
+      assert.equal(modelArg(spawn.argv), "claude-test-failover")
+      assert.ok(spawn.stdin.includes(AUTO_REQUEST))
+    }
+
+    assert.equal(parts.filter((part) => part.type === "stream-start").length, 1)
+    const finishes = finishesOf(parts)
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "stop")
+    const body = textOf(parts)
+    assert.match(body, /answered by beta/)
+    assert.equal(body.includes("You've hit your individual spend limit"), false)
+    const notes = notesIn(parts)
+    assert.equal(notes.length, 2, body)
+    assert.match(notes[0], /"appical" is out of usage.*"alpha"/s)
+    assert.match(notes[1], /"alpha" is out of usage.*"beta"/s)
+    // The limited account's work now goes straight to the one that served.
+    assert.equal(resolveAccountOverride("appical"), "beta")
+  })
+})
+
+test("auto: when every account is out, the turn fails honestly after trying each one once", async () => {
+  await withScriptedAccounts({ appical: "limit", alpha: "limit", beta: "limit" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+
+    // Bounded: three accounts, three spawns, no second lap.
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha", "beta"])
+
+    const finishes = finishesOf(parts)
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "error")
+    assert.equal(finishes[0].finishReason.raw, "usage_limit")
+    assert.equal(parts.some((part) => part.type === "tool-call"), false)
+
+    const body = textOf(parts)
+    assert.equal(body.includes("answered by"), false)
+    assert.equal(body.includes("You've hit your individual spend limit"), false)
+    // The last note is the usage-limit note about the last account tried, and
+    // it offers no account to move to, because none is left.
+    const notes = notesIn(parts)
+    const last = notes[notes.length - 1]!
+    assert.ok(last.startsWith(USAGE_LIMIT_MARKER), body)
+    assert.match(last, /"beta" is out of usage/)
+    assert.match(last, /Wait for the window to reset/)
+    assert.doesNotMatch(last, /Pick a model from/)
+  })
+})
+
+test("auto: an account already known to be out is skipped, and comes back once its reset passes", async () => {
+  // A remembered limit whose reset is still ahead.
+  await withScriptedAccounts({ appical: "limit", alpha: "ok", beta: "ok" }, async (fake) => {
+    rememberAccountLimit("alpha", { resetsAt: LIMIT_RESETS_AT, window: "five_hour" })
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "beta"])
+    assert.match(textOf(parts), /answered by beta/)
+  })
+
+  // The same memory with its reset behind us: `recallAccountLimit` drops a
+  // reset that is not in the future, so alpha is eligible again.
+  await withScriptedAccounts({ appical: "limit", alpha: "ok", beta: "ok" }, async (fake) => {
+    rememberAccountLimit("alpha", { resetsAt: Math.floor(Date.now() / 1000) - 60, window: "five_hour" })
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+    assert.match(textOf(parts), /answered by alpha/)
+  })
+
+  // An override moving alpha's own work elsewhere says alpha is out until
+  // its `until`; once that passes, `resolveAccountOverride` expires it.
+  await withScriptedAccounts({ appical: "limit", alpha: "ok", beta: "ok" }, async (fake) => {
+    setAccountOverride("alpha", "beta", Date.now() + 60_000)
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "beta"])
+  })
+  await withScriptedAccounts({ appical: "limit", alpha: "ok", beta: "ok" }, async (fake) => {
+    setAccountOverride("alpha", "beta", Date.now() + 150)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto")
+    await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+  })
+})
+
+test("auto: a request-level error, a served turn after a rejected event, a title and a compaction never switch", async () => {
+  // A server error would fail the same way on any account.
+  await withScriptedAccounts({ appical: "error", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+    assert.equal(textOf(parts).includes(FAILOVER_MARKER), false)
+    assert.equal(resolveAccountOverride("appical"), undefined)
+  })
+
+  // The limit event said `rejected`, but the turn was served: keep it.
+  await withScriptedAccounts({ appical: "served-after-reject", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+    assert.match(textOf(parts), /served anyway/)
+    assert.equal(finishesOf(parts)[0].finishReason.unified, "stop")
+    assert.equal(resolveAccountOverride("appical"), undefined)
+  })
+
+  // A title request is answered by the plugin and spawns nothing at all.
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    await drain(await model.doStream({ prompt: autoPrompt } as any))
+    assert.equal(fake.spawns().length, 0)
+    assert.equal(resolveAccountOverride("appical"), undefined)
+  })
+
+  // A compaction's answer is a stored summary: it fails where it is.
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(
+      await model.doStream({
+        prompt: autoPrompt,
+        providerOptions: { "claude-code": { opencodeAgent: "compaction" } },
+      } as any),
+    )
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+    assert.equal(finishesOf(parts)[0].finishReason.raw, "usage_limit")
+    assert.equal(textOf(parts).trim(), "")
+    assert.equal(resolveAccountOverride("appical"), undefined)
+  })
+})
+
+test("auto: an eligible account switch beats the model fallback chain, which still takes an exhausted one", async () => {
+  _resetAgentRegistryForTests()
+  setProviderFallbackModels(["claude-sonnet-5"])
+  try {
+    await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+      const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      const spawns = fake.spawns()
+      assert.deepEqual(spawns.map(accountOf), ["appical", "default"])
+      // Same model, other account: the chain was not consulted.
+      assert.equal(modelArg(spawns[1].argv), "claude-test-failover")
+      assert.equal(textOf(parts).includes(MODEL_FALLBACK_MARKER), false)
+      assert.match(textOf(parts), /answered by default/)
+    })
+
+    // One account: nothing to switch to, so the chain moves the model.
+    await withScriptedAccounts({ appical: "limit" }, async (fake) => {
+      const model = await buildFailoverModel(fake, ["appical"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      const spawns = fake.spawns()
+      assert.deepEqual(spawns.map(accountOf), ["appical", "appical"])
+      assert.equal(modelArg(spawns[1].argv), "claude-sonnet-5")
+      assert.equal(textOf(parts).includes(FAILOVER_MARKER), false)
+    })
+  } finally {
+    _resetAgentRegistryForTests()
+  }
+})
+
+test("auto: the switch never leaves the limited account's accountGroups group", async () => {
+  await withScriptedAccounts({ appical: "limit", alpha: "limit", beta: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "auto", {
+      accountGroups: { appical: "work", alpha: "work" },
+    })
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    // beta is in the implicit group, so it is never a candidate.
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+    assert.equal(finishesOf(parts)[0].finishReason.unified, "error")
+    assert.equal(textOf(parts).includes("answered by beta"), false)
+    assert.equal(resolveAccountOverride("appical"), "alpha")
+  })
+})
+
+test("auto: the switch carries the conversation's transcript and resumes it", async () => {
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    // The transcript the limited account writes for `limited-session`, the id
+    // its `system`/`init` frame reports. The fake CLI writes none itself.
+    const source = plantTranscript("appical", fake.cwd, "limited-session")
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+
+    const served = fake.spawns()[1]
+    assert.equal(accountOf(served), "default")
+    assert.deepEqual(
+      served.argv.slice(served.argv.indexOf("--resume"), served.argv.indexOf("--resume") + 2),
+      ["--resume", "limited-session"],
+    )
+    assert.equal(served.stdin.includes("<conversation_history>"), false)
+    assert.match(served.stdin, /This is the same conversation, continued/)
+    assert.match(served.stdin, /do not repeat work that is already done/)
+    assert.equal(
+      existsSync(
+        interactiveTranscriptPath({
+          configDir: configDirForAccount("default"),
+          cwd: fake.cwd,
+          sessionId: "limited-session",
+        }),
+      ),
+      true,
+    )
+    assert.equal(readFileSync(source, "utf8"), '{"type":"user","sessionId":"limited-session"}\n')
+    assert.match(notesIn(parts)[0]!, /continues where it stopped/)
+  })
+})
+
+test("auto: without a transcript to carry, the thread is replayed into a fresh session", async () => {
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const prompt = [
+      { role: "user", content: [{ type: "text", text: "remember the word teal" }] },
+      { role: "assistant", content: [{ type: "text", text: "Noted: teal." }] },
+      ...autoPrompt,
+    ]
+    const parts = await drain(await model.doStream({ prompt, tools: TOOLS } as any))
+
+    const served = fake.spawns()[1]
+    assert.equal(accountOf(served), "default")
+    assert.equal(served.argv.includes("--resume"), false)
+    assert.match(served.stdin, /<conversation_history>/)
+    assert.match(served.stdin, /remember the word teal/)
+    assert.ok(served.stdin.includes(AUTO_REQUEST))
+    assert.match(served.stdin, /fresh Claude session/)
+    assert.match(notesIn(parts)[0]!, /replayed into a fresh Claude session/)
+    assert.match(textOf(parts), /answered by default/)
+  })
+})
+
+test("auto: stopping the turn stops the switch, and nothing else is spawned", async () => {
+  await withScriptedAccounts({ appical: "slow-limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 100)
+    try {
+      const parts = await drain(
+        await model.doStream({ prompt: autoPrompt, tools: TOOLS, abortSignal: controller.signal } as any),
+      )
+      // Long enough for the limit the fake was still holding to arrive.
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+      assert.equal(textOf(parts).includes("answered by"), false)
+      assert.equal(resolveAccountOverride("appical"), undefined)
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+})
+
+test("auto: a doGenerate caller is switched too, and gets the other account's answer with no note in it", async () => {
+  await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const result = await model.doGenerate({ prompt: autoPrompt, tools: TOOLS } as any)
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "default"])
+    const text = result.content
+      .filter((part: any) => part.type === "text")
+      .map((part: any) => part.text)
+      .join("")
+    assert.match(text, /answered by default/)
+    assert.equal(text.includes(FAILOVER_MARKER), false)
+    assert.equal(text.includes("You've hit your individual spend limit"), false)
+    assert.equal(result.finishReason.unified, "stop")
+  })
+})
+
+test("auto: a doGenerate caller whose every account is out gets an error finish, not an answer", async () => {
+  await withScriptedAccounts({ appical: "limit", alpha: "limit" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha"], "auto")
+    const result = await model.doGenerate({ prompt: autoPrompt, tools: TOOLS } as any)
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+    assert.equal(result.finishReason.unified, "error")
+    assert.equal(result.finishReason.raw, "usage_limit")
+  })
+})
+
+test("auto: an account whose runtime cannot be prepared is skipped, and the account that failed is never run again", async () => {
+  // A regular file where the account's config dir has to be: `mkdir` fails
+  // with EEXIST, so `ensureAccountRuntime` refuses and `resolveFailoverSpawn`
+  // would stay on the account that just failed.
+  const blocker = join(HOME, ".claude-broken")
+  try {
+    await withScriptedAccounts({ appical: "limit", broken: "ok", gamma: "ok" }, async (fake) => {
+      writeFileSync(blocker, "not a directory")
+      const model = await buildFailoverModel(fake, ["appical", "broken", "gamma"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical", "gamma"])
+      assert.match(textOf(parts), /answered by gamma/)
+      assert.equal(finishesOf(parts)[0].finishReason.unified, "stop")
+      assert.equal(resolveAccountOverride("appical"), "gamma")
+    })
+
+    // Nothing preparable left: the turn fails honestly, and no override is
+    // left pointing at an account that cannot be started.
+    await withScriptedAccounts({ appical: "limit", broken: "ok" }, async (fake) => {
+      writeFileSync(blocker, "not a directory")
+      const model = await buildFailoverModel(fake, ["appical", "broken"], "auto")
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+      const finishes = finishesOf(parts)
+      assert.equal(finishes.length, 1)
+      assert.equal(finishes[0].finishReason.unified, "error")
+      assert.equal(finishes[0].finishReason.raw, "usage_limit")
+      const notes = notesIn(parts)
+      assert.ok(notes[notes.length - 1]!.startsWith(USAGE_LIMIT_MARKER), textOf(parts))
+      assert.match(notes[notes.length - 1]!, /"appical" is out of usage/)
+      assert.equal(textOf(parts).includes("You've hit your individual spend limit"), false)
+      assert.equal(resolveAccountOverride("appical"), undefined)
+    })
+  } finally {
+    rmSync(blocker, { force: true })
+  }
+})
+
+test("auto: the next account is chosen when the failure arrives, so a limit learned mid-turn is skipped", async () => {
+  await withScriptedAccounts({ appical: "slow-limit", beta: "ok", gamma: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "beta", "gamma"], "auto")
+    // While appical is still working on the request, another session learns
+    // that beta is out until well after this turn.
+    const learned = setTimeout(
+      () => rememberAccountLimit("beta", { resetsAt: LIMIT_RESETS_AT, window: "five_hour" }),
+      100,
+    )
+    try {
+      const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical", "gamma"])
+      assert.match(textOf(parts), /answered by gamma/)
+    } finally {
+      clearTimeout(learned)
+    }
+  })
+})
+
+test("auto: cancelling the returned stream stops the walk, and no other account is started", async () => {
+  await withScriptedAccounts({ appical: "slow-limit", default: "ok" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["default", "appical"], "auto")
+    const response = await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any)
+    const reader = response.stream.getReader()
+    const first = await reader.read()
+    assert.equal(first.value?.type, "stream-start")
+    // Cancel only once appical has the request, so it lands on a turn in flight.
+    for (let waited = 0; fake.spawns().length === 0 && waited < 3000; waited += 10) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical"])
+    await reader.cancel("the caller went away")
+    // Long enough for the limit the fake was still holding to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    assert.equal(fake.spawns().some((spawn: any) => accountOf(spawn) === "default"), false)
+    assert.equal(resolveAccountOverride("appical"), undefined)
+    // The cancel reached the attempt in flight: it was stopped like any
+    // stopped turn, not left running to finish on its own.
+    assert.ok(
+      fake
+        .controls()
+        .some((control: any) => accountOf(control) === "appical" && /"interrupt"/.test(control.line)),
+      JSON.stringify(fake.controls()),
+    )
+  })
 })

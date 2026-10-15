@@ -155,12 +155,13 @@ export interface LoggingConfig {
 export type WebSearchRouting = "claude" | "disabled" | (string & {})
 
 /**
- * What happens when the account a conversation runs on is out of usage.
- * `"ask"` (default) shows the operator a form listing the other configured
- * accounts and applies the pick inside the same turn; `"off"` keeps today's
- * behaviour, where the turn ends with the rate-limit error.
+ * What happens when the account a conversation is running on is out of usage
+ * or cannot serve. `"off"` (the default, also what unset means) ends the turn
+ * on one `▌ **usage limit:**` note; `"ask"` ends it on a form listing the
+ * other configured accounts and continues on the pick; `"auto"` moves the same
+ * request to the next eligible configured account without asking.
  */
-export type AccountFailoverMode = "ask" | "off"
+export type AccountFailoverMode = "ask" | "off" | "auto"
 
 /** `subagentDispatch`. Unset behaves as `"off"`; see the option's own note. */
 export type SubagentDispatchMode = "ask" | "off"
@@ -206,11 +207,13 @@ export interface ClaudeCodeProviderSettings {
    */
   accountInProcess?: boolean
   /**
-   * When this account is out of usage, show the operator a form listing the
-   * other configured accounts and continue the task on the pick, inside the
-   * same opencode turn. `"ask"` by default, which only does anything when
-   * more than one account is configured. `"off"` keeps the plain rate-limit
-   * error. See README "Account failover".
+   * What a usage limit or an account that cannot serve does to the turn.
+   * Unset or `"off"` (the default) ends it on one `▌ **usage limit:**` note.
+   * `"ask"` shows a form listing the other configured accounts and continues
+   * on the pick. `"auto"` continues the same request on the next eligible
+   * configured account, in configured order, without asking. Both only do
+   * anything when more than one account is configured. See
+   * docs/configuration/accounts.md.
    */
   accountFailover?: AccountFailoverMode
   /**

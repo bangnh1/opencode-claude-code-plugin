@@ -74,11 +74,11 @@ The reset time is in **your** time zone, to the minute, and is left out when Cla
 
 The turn also **finishes as an error**, not as a reply. Nothing was served, so filing it as a (very short) answer was wrong: opencode's own retry and failure handling never ran, and the account-block case below has always finished this way.
 
-Nothing moves on its own: switching account means picking a model from another account's provider in opencode's model list and sending your message again. That carries the conversation across too, exactly as the automatic switch below does: see [switching account by hand](#switching-account-by-hand).
+Nothing moves on its own unless you opt into [automatic failover](#automatic-failover): switching account means picking a model from another account's provider in opencode's model list and sending your message again. That carries the conversation across too, exactly as the [failover switch](#account-failover) below does: see [switching account by hand](#switching-account-by-hand).
 
 ### Switching account by hand
 
-Picking a model under another account's provider in the same opencode session continues the conversation on that account rather than starting over. It is the same mechanism the automatic switch uses: the Claude transcript is copied into the other account's `CLAUDE_CONFIG_DIR` and resumed there with `--resume`, so nothing is re-sent and nothing is paid for twice. It works on both transports, in either direction, and it composes with a model or reasoning-effort change in the same step.
+Picking a model under another account's provider in the same opencode session continues the conversation on that account rather than starting over. It is the same mechanism the failover switch uses: the Claude transcript is copied into the other account's `CLAUDE_CONFIG_DIR` and resumed there with `--resume`, so nothing is re-sent and nothing is paid for twice. It works on both transports, in either direction, and it composes with a model or reasoning-effort change in the same step.
 
 What it needs, and what it refuses:
 
@@ -110,7 +110,7 @@ If the two accounts are not meant to see each other's work, name them into separ
 }
 ```
 
-That puts `work` in the group `work`, and `hobby` and `default` together in the implicit `default` group. With it set, the plugin only ever moves a conversation between accounts in the same group, which covers all four ways a conversation could move: the by-hand switch above, the account-switch form, the override that form sets, and `crossAccountResume`.
+That puts `work` in the group `work`, and `hobby` and `default` together in the implicit `default` group. With it set, the plugin only ever moves a conversation between accounts in the same group, which covers every way a conversation could move: the by-hand switch above, the account-switch form, the automatic switch, the override either one sets, and `crossAccountResume`.
 
 A switch across groups sends the other account **nothing at all**: not the Claude transcript, and not a text replay of the thread either, because the replay is the same history by another route. The turn there starts fresh with only your latest message, and says so once:
 
@@ -124,13 +124,13 @@ back to it to continue where you stopped.
 
 The note is written once, on the turn that would have sent the thread; the next turn on that account is an ordinary turn. Nothing is destroyed: the conversation is left intact on the account it was on, the transcript is not deleted, and switching back continues it where it stopped.
 
-The switch form offers only accounts in the limited account's own group, and with none left it behaves exactly as a single-account install does (the `▌ **usage limit:**` note, with no "pick a model from ..." sentence). The "or pick a model from ..." half of the account-block note is filtered the same way.
+The switch form offers only accounts in the limited account's own group, the automatic switch moves only to one of them, and with none left either one behaves exactly as a single-account install does (the `▌ **usage limit:**` note, with no "pick a model from ..." sentence). The "or pick a model from ..." half of the account-block note is filtered the same way.
 
 Details worth knowing:
 
 - An account name that is not in `accounts` is a typo, so it is ignored with one WARN rather than silently creating a group that guards nothing. Group names are compared case-insensitively, and so are account names.
-- Compaction turns are exempt, as they are from every other account rule, and a child session follows its parent's account as it always did.
-- The [subagent dispatch form](subagents.md#choosing-per-dispatch-not-per-file) (`subagentDispatch: "ask"`) is the one way a subagent runs on another account, and every account it offers, typed `@name` answers included, is in the dispatching account's own group. Other groups are offered only with `"subagentDispatchCrossGroup": true`, which is off by default.
+- Compaction turns are exempt, as they are from every other account rule, and a child session follows its parent's account as it always did. Under [automatic failover](#automatic-failover) a child session can move itself, which moves its parent with it (the move belongs to the account), and only within the group.
+- The [subagent dispatch form](subagents.md#choosing-per-dispatch-not-per-file) (`subagentDispatch: "ask"`) is the one way to choose the account a subagent starts on, and every account it offers, typed `@name` answers included, is in the dispatching account's own group. Other groups are offered only with `"subagentDispatchCrossGroup": true`, which is off by default. Once running, a subagent can also be moved by [automatic failover](#automatic-failover), from inside its own turn, and that never leaves the group either.
 - The resolved map is shown in the startup block and in `/claude-code-doctor` as `accountGroups`, names only.
 - Measured live on opencode 1.x and opencode 2.x (2026-10-08 on 2.0.22): with the two accounts in different groups, the same by-hand switch spawned with no `--resume`, copied no transcript, sent an envelope holding only the latest message, and wrote the note once.
 - This is a guard on what the **plugin** moves on its own. It is not a permission system: it cannot stop you typing a secret into the other account yourself, and it does not change what either account's Claude Code can read on disk.
@@ -170,11 +170,35 @@ What a pick does, in full:
 - **Per-profile MCP servers do not come along.** A server configured only in the limited account's Claude profile is simply absent on the target.
 - **`stop`, dismissing the form, or any answer that is not one of the offered accounts** ends the turn the way a limited turn ends without the form.
 
-Only three things count as "out of usage", for the note and for the form alike: a `rate_limit_event` the CLI marked `rejected`, the CLI's own limit reply (an API-error reply of kind `rate_limit`, which is the only signal the interactive transport gets), and the two known account-limit error texts (`Third-party apps now draw from your extra usage…`, `You've hit your individual spend limit`). A generic 4xx, a timeout or a bad flag never does, deliberately: a transient failure must not quietly move where your usage is billed.
+Only three things count as "out of usage", for the note, the form and the automatic switch alike: a `rate_limit_event` the CLI marked `rejected`, the CLI's own limit reply (an API-error reply of kind `rate_limit`, which is the only signal the interactive transport gets), and the two known account-limit error texts (`Third-party apps now draw from your extra usage…`, `You've hit your individual spend limit`). A generic 4xx, a timeout or a bad flag never does, deliberately: a transient failure must not quietly move where your usage is billed.
 
 The form and the switch are both measured live on opencode 1.x and opencode 2.x (2026-10-07): the form renders, the pick is understood, and the next `claude` runs on the account you chose with the account marker stripped off the model name. On opencode 2 the form is one of its own `Form` surfaces rather than a question, which changes nothing you do: pick an option as usual.
 
 The form works on both transports: on the [interactive transport](../guides/interactive-transport.md) a switch closes the limited account's TUI and starts the other account's, carrying the transcript (or replaying the thread) into it exactly as on headless, since the TUI reads and writes the same transcript file. It is not available on compaction turns, or in a child session, which follows its parent's account for free. The note is written on every limited turn except a compaction turn, which [fails outright instead](../guides/compaction-and-thinking.md#when-compaction-hits-a-usage-limit).
+
+### Automatic failover
+
+**Opt-in.** Set `"accountFailover": "auto"` and a limited turn moves to another configured account on its own, **inside the same opencode turn**, with no form and no new message from you. The answer you get is the other account's answer to the same request, under one note saying what happened:
+
+```text
+▌ **account failover:** "work" is out of usage, so this turn moved to "personal"
+automatically and stays there until 2026-09-20T18:00:00.000Z. The conversation
+continues where it stopped.
+```
+
+`"auto"` is the switch a pick in the [form](#account-failover) makes, made for you, so everything that section says about the override, the transcript carry and the replay holds here too. What is particular to it:
+
+- **What moves it.** Exactly what opens the form, and only on a turn that failed: a usage limit (the three signals above) or an [account that cannot serve](#an-account-that-cannot-serve-at-all) (expired login, hold, verification, billing). A turn that was served stays where it is, even if a limit event arrived during it. A generic error, a timeout or a server error never moves anything, and a healthy turn never rotates between accounts.
+- **Where it goes.** The next account in configured order, which is `default` first and then `accounts` as you wrote them, skipping the account that just failed, every account this request has already tried, every account outside the limited account's [group](#account-groups), and every account the plugin already knows is out: one whose own work it already moved elsewhere (until that move expires), or one whose last limit reported a reset time that is still ahead. Each comes back by itself once that time passes. The choice is made when the failure arrives, so an account that another session found out about while this turn was still running is skipped too. An account the plugin cannot start (its config dir or its wrapper script cannot be written) is skipped the same way, and the turn moves on to the next one; it never runs again on an account it already tried.
+- **When nothing is left.** Each account is tried at most once per request, so the walk always ends. When no eligible account is left, the turn finishes as an error with one `▌ **usage limit:**` line naming the last account tried and offering no other, or, for an account that cannot serve, its `▌ **claude account:**` line. Each switch made on the way leaves its own `▌ **account failover:**` line above that. A `doGenerate` caller never gets an answer here either: it gets an error finish (`usage_limit`, or the block's kind). Its text is a return value, so it carries no `▌ **usage limit:**` and no `▌ **account failover:**` line; it holds at most Claude Code's own error text and, when the last account could not serve, that account's `▌ **claude account:**` line with the login command.
+- **Sticky, like a pick.** The move is keyed on the account the conversation was on, not the session, so every session on it, subagents included, goes straight to the new account until the reset time the limit reported, or until opencode restarts when none was reported (an account that cannot serve reports none). It is the same override the form sets and expires the same way.
+- **Billing.** Moving where the usage is billed is the point of the option: the rest of the turn, and every later turn on that account until the move expires, is billed to the account it moved to. Opting in is the consent; nothing asks again.
+- **The conversation.** Carried across with the transcript copy and `--resume` when it can be, replayed into a fresh Claude session when it cannot, exactly as for a pick; the note's last sentence says which. Work the failed account already did in that turn stays done and is not re-run by the plugin. A carried transcript holds it, and the next account is told to continue rather than start over; a replay holds only what opencode has, so anything Claude Code did inside the failed turn is not in it.
+- **Where it applies.** Both transports. `doGenerate` callers too; a turn that moved carries no `▌ **account failover:**` line in the returned text. A child session (a subagent) switches itself, because there is no question to put in front of anyone, and its parent then follows through the same override. Never a compaction turn, whose answer is a stored summary and which [fails outright](../guides/compaction-and-thinking.md#when-compaction-hits-a-usage-limit) instead, and never a title request, which the plugin answers without starting `claude` at all.
+- **With a [model fallback chain](./options.md).** An available account is taken first, as with the form; the chain gets a usage limit only when no account is left.
+- **Stopping the turn stops the walk**, and so does cancelling the stream the turn returned: either one stops the attempt in flight the way a stop always does, and no further account is started or switched to.
+
+The switch path is the one measured live for the form; the automatic walk itself is verified with a scripted `claude` only.
 
 ### An account that cannot serve at all
 
@@ -186,4 +210,4 @@ was revoked). Log in again with `CLAUDE_CONFIG_DIR=~/.claude-work claude auth lo
 then resend your message. Or pick a model from the "personal" account and resend.
 ```
 
-The last sentence appears only when another account is configured. With `"accountFailover": "ask"` it is replaced by the switch form, and the switch then lasts until opencode restarts, so restart after logging in again to move back.
+The last sentence appears only when another account is configured. With `"accountFailover": "ask"` it is replaced by the switch form, and with `"auto"` the turn moves to the next account on its own and its note names the reason instead; either way the switch then lasts until opencode restarts, so restart after logging in again to move back.

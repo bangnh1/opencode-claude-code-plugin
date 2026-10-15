@@ -64,15 +64,21 @@ import {
   consumeAccountFailoverAnswer,
   createAccountFailoverQuestionCall,
   describeAccountBlock,
+  clearAccountOverride,
   failoverCandidates,
   failoverUntil,
+  formatAccountBlockNote,
+  formatAutoFailoverNote,
   formatFailoverNote,
   formatFailoverStopNote,
   formatUsageLimitNote,
   isAccountFailoverQuestionActive,
+  nextAutoFailoverAccount,
   resolveFailoverSpawn,
   setAccountOverride,
   stripAccountSuffix,
+  type AccountBlockKind,
+  type AutoFailoverRun,
   type FailoverSpawn,
 } from "./account-failover.js"
 import {
@@ -345,6 +351,11 @@ const CHILD_EXIT_STATUS_GRACE_MS = 250
  * must not put a question in a session the operator is usually not looking at
  * (the account-failover invariant that says it takes the override with no
  * dialog of its own).
+ *
+ * The automatic switch (`accountFailover: "auto"`) is NOT suppressed here: it
+ * asks nothing, so a `doGenerate` caller is moved to the next account like any
+ * other, and only the switch's note is left out of its aggregated text, as the
+ * usage-limit note is (h #g236).
  */
 type TurnMode = "stream" | "generate"
 
@@ -874,11 +885,104 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
     mode: TurnMode,
   ): Promise<Awaited<ReturnType<LanguageModelV3["doStream"]>>> {
-    const result = await this.runModelChain(options, mode)
+    const result = await this.runAccountFailover(options, mode)
     return {
       ...result,
       stream: translateStreamForHost(result.stream as any, this.config.hostApi ?? "v1") as any,
     }
+  }
+
+  /**
+   * Run the turn, moving the same request to the next eligible configured
+   * account when the one it ran on is out of usage or cannot serve
+   * (`accountFailover: "auto"`). The single wiring point for the automatic
+   * switch, and outside `runModelChain` on purpose: an account switch starts
+   * that account's own model chain from the top.
+   *
+   * Anything but `"auto"` is `runModelChain` and one `await`, so `"off"` and
+   * `"ask"` are exactly what they were. With `"auto"`, the attempt that failed
+   * decides the switch itself (`completeResult` sets `run.switchTo` and closes
+   * its stream without a `finish`), and the next attempt's prologue makes the
+   * switch the form's pick would have made. This only splices the attempts
+   * into one caller turn: one `stream-start`, and the `finish` of whichever
+   * attempt did not switch.
+   *
+   * The bound is `run.tried`, as it is `tried` for the model chain: every
+   * account spawned or switched to goes in, and none in it is picked again.
+   *
+   * Cancelling the returned stream is a stop, for every attempt: this loop is
+   * the plugin starting more work on the caller's behalf, so a caller that
+   * has gone away must reach all of it. Each attempt gets a signal that the
+   * caller's own `abortSignal` and a `cancel()` both abort, and the loop
+   * starts no further account once either has happened.
+   */
+  private async runAccountFailover(
+    options: LanguageModelV3CallOptions,
+    mode: TurnMode,
+  ): Promise<Awaited<ReturnType<LanguageModelV3["doStream"]>>> {
+    if (this.config.accountFailover !== "auto") return this.runModelChain(options, mode)
+
+    const self = this
+    const run: AutoFailoverRun = { tried: new Set() }
+    const cancelled = new AbortController()
+    const attemptOptions: LanguageModelV3CallOptions = {
+      ...options,
+      abortSignal: options.abortSignal
+        ? AbortSignal.any([options.abortSignal, cancelled.signal])
+        : cancelled.signal,
+    }
+    const stopped = () => attemptOptions.abortSignal!.aborted
+    let inner = await this.runModelChain(attemptOptions, mode, run)
+    const request = inner.request
+    let reader: ReadableStreamDefaultReader<LanguageModelV3StreamPart> | undefined
+
+    const stream = new ReadableStream<LanguageModelV3StreamPart>({
+      async start(controller) {
+        let started = false
+        try {
+          for (;;) {
+            reader = inner.stream.getReader()
+            try {
+              for (;;) {
+                const { done, value } = await reader.read()
+                if (done) break
+                if ((value as { type?: string }).type === "stream-start") {
+                  if (started) continue
+                  started = true
+                }
+                controller.enqueue(value)
+              }
+            } finally {
+              reader.releaseLock()
+            }
+
+            if (!run.switchTo) break
+            // A stop or a cancel that landed while the failed attempt was
+            // ending is the caller's last word: no further account is
+            // spawned, billed or switched to.
+            if (stopped()) {
+              log.info("turn stopped before the automatic account switch; not switching", {
+                target: run.switchTo.target,
+              })
+              break
+            }
+            inner = await self.runModelChain(attemptOptions, mode, run)
+          }
+        } catch (error) {
+          if (!stopped()) controller.enqueue({ type: "error", error })
+        } finally {
+          try {
+            controller.close()
+          } catch {}
+        }
+      },
+      async cancel(reason) {
+        cancelled.abort(reason)
+        await reader?.cancel(reason).catch(() => undefined)
+      },
+    })
+
+    return { stream, request }
   }
 
   /**
@@ -902,17 +1006,18 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
   private async runModelChain(
     options: LanguageModelV3CallOptions,
     mode: TurnMode,
+    accountRun?: AutoFailoverRun,
   ): Promise<Awaited<ReturnType<LanguageModelV3["doStream"]>>> {
     const agent = this.getOpencodeAgent(options)
     const chain = this.isCompactionCall(options)
       ? []
       : resolveFallbackChain(agent, resolveAgentModel(agent, this.modelId))
-    if (chain.length === 0) return this.doStreamForHost(options, undefined, mode)
+    if (chain.length === 0) return this.doStreamForHost(options, undefined, mode, accountRun)
 
     const self = this
     const tried = new Set<string>()
     let attempt: ModelFallbackAttempt = { armed: true }
-    let inner = await this.doStreamForHost(options, attempt, mode)
+    let inner = await this.doStreamForHost(options, attempt, mode, accountRun)
     const request = inner.request
 
     const stream = new ReadableStream<LanguageModelV3StreamPart>({
@@ -995,7 +1100,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               modelOverride: next,
               armed: nextFallbackModel(chain, tried) !== undefined,
             }
-            inner = await self.doStreamForHost(options, attempt, mode)
+            inner = await self.doStreamForHost(options, attempt, mode, accountRun)
           }
         } catch (error) {
           controller.enqueue({ type: "error", error })
@@ -1014,8 +1119,15 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
     attempt?: ModelFallbackAttempt,
     mode: TurnMode = "stream",
+    /** Only with `accountFailover: "auto"`; see `runAccountFailover`. */
+    accountRun?: AutoFailoverRun,
   ): Promise<Awaited<ReturnType<LanguageModelV3["doStream"]>>> {
     const warnings: SharedV3Warning[] = []
+    // The switch an earlier attempt of this same request decided on
+    // (`accountFailover: "auto"`), taken before anything else so it is made
+    // at most once, whichever way this attempt ends.
+    const autoSwitch = accountRun?.switchTo
+    if (accountRun) accountRun.switchTo = undefined
     // Created before the prologue's first await, because
     // `addEventListener("abort")` on a signal that already aborted never
     // fires: the stream's own abort handler cannot exist until this prologue
@@ -1433,7 +1545,11 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // one place it is dropped: the compress restart itself calls
     // deleteClaudeSessionId, and clearing there would wipe the summary
     // just before the fresh spawn reads it.
-    if (!hasPriorConversation) {
+    //
+    // Not on an automatic switch's retry: the prompt is the same first message,
+    // but the failed attempt already started this conversation on the other
+    // account, and that session is what the carry below moves across.
+    if (!hasPriorConversation && !autoSwitch) {
       deleteClaudeSessionId(sk)
       deleteActiveProcess(sk)
       clearCompression(sk)
@@ -1444,8 +1560,16 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // because a switch changes which account those belong to.
     // A `doGenerate` turn asks nothing (see `TurnMode`), so it has no answer of
     // its own to read either: it follows the account override and no more.
-    const failoverAnswer =
-      compactionMode || mode === "generate"
+    // An automatic switch IS this answer, already given: the rest of the
+    // prologue makes it exactly as it makes the form's pick.
+    const failoverAnswer = autoSwitch
+      ? {
+          kind: "switch" as const,
+          target: autoSwitch.target,
+          sourceAccount: autoSwitch.sourceAccount,
+          resetsAt: autoSwitch.resetsAt,
+        }
+      : compactionMode || mode === "generate"
         ? null
         : consumeAccountFailoverAnswer(sk, options.prompt as any, {
             sourceAccount,
@@ -1512,13 +1636,102 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         cliPath: this.config.cliPath,
         modelId: effectiveModelId,
       })
+      // `"auto"` only. A target whose runtime could not be prepared leaves
+      // `resolveFailoverSpawn` on the account that just failed, which this
+      // request already ran: walk on to the next eligible account instead,
+      // chosen now, and with none left end the turn the way the failed
+      // attempt would have ended had it known. Never a second run of an
+      // account this request already tried.
+      while (autoSwitch && accountRun && failover.target !== failoverAnswer.target) {
+        log.notice("automatic account switch skipped an account whose runtime could not be prepared", {
+          sessionKey: sk,
+          target: failoverAnswer.target,
+        })
+        const next = nextAutoFailoverAccount(
+          failoverCandidates(this.config.failoverAccounts, sourceAccount, groups),
+          accountRun.tried,
+        )
+        if (!next) {
+          // The override just set names an account that cannot be started,
+          // so it goes too.
+          clearAccountOverride(failoverAnswer.sourceAccount)
+          log.warn("no configured account could take this turn; it ends here", {
+            sessionKey: sk,
+            account: autoSwitch.failedAccount,
+            cause: autoSwitch.cause,
+          })
+          // Not on `doGenerate`, whose text is a return value, as neither the
+          // usage-limit note nor the switch note is. (The parser does write a
+          // block's own note there; this rare path just stays quieter.)
+          const note =
+            mode === "generate"
+              ? null
+              : autoSwitch.cause === "usage_limit"
+                ? formatUsageLimitNote({
+                    sourceAccount: autoSwitch.failedAccount,
+                    candidates: [],
+                    resetsAt: autoSwitch.resetsAt,
+                    window: autoSwitch.window,
+                  })
+                : formatAccountBlockNote({
+                    kind: autoSwitch.cause as AccountBlockKind,
+                    account: autoSwitch.failedAccount,
+                    configDir: autoSwitch.failedConfigDir,
+                    offeringSwitch: false,
+                    candidates: [],
+                  })
+          const cause = autoSwitch.cause
+          const exhausted = new ReadableStream<LanguageModelV3StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: "stream-start", warnings })
+              if (note) {
+                const id = generateId()
+                controller.enqueue({ type: "text-start", id } as any)
+                controller.enqueue({ type: "text-delta", id, delta: note })
+                controller.enqueue({ type: "text-end", id })
+              }
+              controller.enqueue({
+                type: "finish",
+                finishReason: { unified: "error" as const, raw: cause },
+                usage: toUsage({ input_tokens: 0, output_tokens: 0 }),
+                providerMetadata: {
+                  "claude-code": {
+                    path: "account-failover-exhausted",
+                    synthetic: true,
+                    usageUnavailable: true,
+                  },
+                },
+              })
+              controller.close()
+            },
+          })
+          return { stream: exhausted, request: { body: { text: "" } } }
+        }
+        accountRun.tried.add(next)
+        failoverAnswer.target = next
+        setAccountOverride(
+          failoverAnswer.sourceAccount,
+          next,
+          failoverUntil(failoverAnswer.resetsAt),
+        )
+        failover = await resolveFailoverSpawn({
+          account: sourceAccount,
+          baseCliPath,
+          cliPath: this.config.cliPath,
+          modelId: effectiveModelId,
+        })
+      }
       cliPath = failover.cliPath
       asideTransportRef.cliPath = cliPath
-      failoverNote = formatFailoverNote({
-        sourceAccount: failoverAnswer.sourceAccount,
-        target: failoverAnswer.target,
-        resetsAt: failoverAnswer.resetsAt,
-      })
+      // The automatic switch's note is written below the carry, because it
+      // says whether the conversation was carried or replayed.
+      if (!autoSwitch) {
+        failoverNote = formatFailoverNote({
+          sourceAccount: failoverAnswer.sourceAccount,
+          target: failoverAnswer.target,
+          resetsAt: failoverAnswer.resetsAt,
+        })
+      }
     }
 
     // A live process belongs to the account it was spawned with, so it cannot
@@ -1636,6 +1849,17 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // replay into it and doing so would hand the model the thread twice.
     if (failoverAnswer?.kind === "switch" && hasPriorConversation && !conversationOnTarget) {
       includeHistoryContext = true
+    }
+    // Not on a `doGenerate` turn, for the reason the usage-limit note is not:
+    // its text is aggregated into a return value rather than shown.
+    if (autoSwitch && failoverAnswer?.kind === "switch" && mode !== "generate") {
+      failoverNote = formatAutoFailoverNote({
+        failedAccount: autoSwitch.failedAccount,
+        target: failoverAnswer.target,
+        resetsAt: autoSwitch.resetsAt,
+        reason: autoSwitch.reason,
+        carried: conversationOnTarget,
+      })
     }
 
     // The `accountGroups` guard (h #g226). The operator moved this opencode
@@ -2084,6 +2308,42 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         childSession: !!(await fetchSessionParentId(affinity)),
       })
 
+    // The automatic switch (`accountFailover: "auto"`). `accountRun` exists
+    // only with that setting (`runAccountFailover`), so `"off"` and `"ask"`
+    // never get a target. The candidates are the form's, minus every account
+    // this request already spawned on or switched to (the running one
+    // included) and every account known to be out.
+    //
+    // Chosen when the failure arrives, not here, and once: another session can
+    // learn that an account is out while this one is still waiting on its own
+    // limit, and the parser (which keeps the failing account's prose out of
+    // the turn) and `completeResult` (which makes the switch) must agree.
+    // Nothing calls this on a turn that did not fail on its account.
+    //
+    // Deliberately NOT gated on `doGenerate`, the transport or a parent
+    // session, which the form is: those exclusions exist because a form there
+    // could not be answered, and this asks nothing. A subagent's own turn
+    // switches, and the override it sets is the account's, so the parent and
+    // every other session on that account follow it. Compaction is out, because
+    // its answer is a stored summary and a second account would rewrite it.
+    const spawnedAccount = failover.target ?? sourceAccount
+    accountRun?.tried.add(spawnedAccount)
+    let autoFailoverChoice: string | null | undefined
+    const autoFailoverTarget = (): string | undefined => {
+      if (autoFailoverChoice === undefined) {
+        autoFailoverChoice =
+          accountRun && !compactionMode
+            ? (nextAutoFailoverAccount(failoverAccounts, accountRun.tried) ?? null)
+            : null
+      }
+      return autoFailoverChoice ?? undefined
+    }
+    // Which account a limit on this attempt belongs to. `"off"` and `"ask"`
+    // keep the provider's own account, as they always have; the automatic
+    // switch needs the account that really ran, because that is the one it
+    // skips next time (`rememberAccountLimit`) and the one its notes name.
+    const limitAccount = accountRun ? spawnedAccount : sourceAccount
+
     // Whether a usage limit on this turn should be said once, plainly, in the
     // conversation (`formatUsageLimitNote`, h #g194). The complement of the
     // form rather than a second option: exactly one of the two answers a
@@ -2099,6 +2359,11 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // here either, because whether it takes the turn is only known once the
     // refusal is in hand; `completeResult` reads this after the chain's own
     // branch has had its chance to return.
+    //
+    // The automatic switch is not in this complement, because whether it
+    // takes the turn is only known at the failure: the parser drops the note
+    // for a turn it switches (`autoFailoverTarget`), and with no account left
+    // the note is the whole of the turn's honest failure.
     const usageLimitNoteActive =
       !compactionMode && mode !== "generate" && !failoverAskActive
 
@@ -3152,6 +3417,50 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             return
           }
 
+          // `accountFailover: "auto"`: the failure the form opens on, answered
+          // without asking. This attempt ends here and says nothing more: no
+          // `finish` (the next account's is this turn's), no note (the next
+          // attempt writes it, once it knows whether the conversation was
+          // carried), and the process and the session id stay exactly where
+          // the form leaves them, because the next attempt's prologue carries
+          // the conversation from them. The parser has already kept this
+          // account's own error prose out of the turn.
+          const autoTarget =
+            (state.accountLimitHit || state.accountBlock) && msg.is_error === true
+              ? autoFailoverTarget()
+              : undefined
+          if (autoTarget && accountRun) {
+            const target = autoTarget
+            accountRun.tried.add(target)
+            accountRun.switchTo = {
+              target,
+              sourceAccount,
+              failedAccount: limitAccount,
+              cause: state.accountLimitHit ? "usage_limit" : state.accountBlock!,
+              resetsAt: state.accountLimitHit?.resetsAt,
+              window: state.accountLimitHit?.window,
+              failedConfigDir: self.skillBridgeSpawn(failover).configDir,
+              reason:
+                state.accountLimitHit || !state.accountBlock
+                  ? undefined
+                  : describeAccountBlock(state.accountBlock),
+            }
+            log.warn("claude account cannot serve this turn; continuing it on the next account automatically", {
+              sessionKey: sk,
+              account: limitAccount,
+              target,
+              cause: state.accountLimitHit ? "usage_limit" : state.accountBlock,
+              resetsAt: state.accountLimitHit?.resetsAt ?? null,
+            })
+            state.endTextBlock()
+            state.controllerClosed = true
+            cleanupTurn()
+            try {
+              controller.close()
+            } catch {}
+            return
+          }
+
           // Nothing above took the turn, so the chain may. Deliberately below
           // the form: when another account is on offer a usage limit is the
           // operator's decision to make, and only an account with nothing to
@@ -3205,19 +3514,23 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // suppressed the CLI's own error text there, so this is the only
           // thing on screen.
           if (state.usageLimitNote) {
+            // With `"auto"`, every account it could have moved to was tried or
+            // is known to be out (`autoFailoverTarget` found none), so none is
+            // offered, and the account named is the one that ran.
+            const noteCandidates = accountRun ? [] : failoverAccounts
             log.warn("claude account is out of usage; the turn ends with a note", {
               sessionKey: sk,
-              account: sourceAccount,
+              account: limitAccount,
               window: state.accountLimitHit?.window ?? null,
               resetsAt: state.accountLimitHit?.resetsAt ?? null,
-              candidates: failoverAccounts,
+              candidates: noteCandidates,
             })
             controller.enqueue({
               type: "text-delta",
               id: state.startTextBlock(),
               delta: formatUsageLimitNote({
-                sourceAccount,
-                candidates: failoverAccounts,
+                sourceAccount: limitAccount,
+                candidates: noteCandidates,
                 resetsAt: state.accountLimitHit?.resetsAt,
                 window: state.accountLimitHit?.window,
                 resetsText: state.accountLimitHit?.resetsText,
@@ -3232,6 +3545,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             // agree. The note is still the whole of what is on screen, and
             // every branch above returned before reaching here, so the switch
             // form and the fallback chain are untouched (h #g214).
+            state.resultFailure ??= "usage_limit"
+          }
+          // `"auto"` out of accounts on a `doGenerate` turn, which writes no
+          // note (its text is a return value): the turn still failed and must
+          // finish as one, or the caller is handed the limit as an answer.
+          if (accountRun && state.accountLimitHit && msg.is_error === true) {
             state.resultFailure ??= "usage_limit"
           }
 
@@ -3358,10 +3677,14 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           fastMode,
           planModeQuestionActive,
           interactive: useInteractive,
-          sourceAccount,
+          sourceAccount: limitAccount,
+          accountConfigDir: accountRun ? self.skillBridgeSpawn(failover).configDir : self.config.configDir,
           failoverAskActive,
+          autoFailoverTarget,
           usageLimitNoteActive,
-          failoverAccounts,
+          // Read only when no switch takes the turn, which under `"auto"`
+          // means no account is left to offer.
+          failoverAccounts: accountRun ? [] : failoverAccounts,
           modelFallbackArmed,
           attempt,
           handleControlRequest,
