@@ -95,6 +95,7 @@ export function _resetServedConversations(): void {
 }
 
 export interface MissedMessages {
+  kind: "missed"
   /**
    * The messages the session never saw, in order: from the first user message
    * past the recorded chain to the last assistant reply in the prompt. The
@@ -107,25 +108,72 @@ export interface MissedMessages {
 }
 
 /**
- * The messages `sessionKey`'s Claude session missed, or null.
+ * The conversation this key's Claude session was asked to continue no longer
+ * exists: the operator undid it, edited a message in it, or regenerated the
+ * last reply, and the thread opencode is sending now is a different one that
+ * shares a beginning with it.
  *
- * Null for every ordinary turn: no record, a chain that is not a prefix of
- * this prompt (a regenerated reply, an edited message: the session is reused
- * as it always was and nothing is invented about what it saw), a chain longer
- * than this prompt, or a tail past the chain holding nothing but assistant and
- * tool content, which is the session's own last reply.
+ * The session still holds the removed turns and will act on them, which is
+ * what the caller fixes by starting a fresh one. Counts only: there is nothing
+ * here to replay, because what is gone is gone and the thread that remains is
+ * in the prompt.
+ */
+export interface RewoundConversation {
+  kind: "rewound"
+  /** How many messages of the recorded chain this prompt still has, in order. */
+  sharedMessages: number
+  /** How many recorded messages past that prefix this prompt does not have. */
+  removedMessages: number
+  /** How many of those were user messages. */
+  removedUserMessages: number
+}
+
+export type ConversationChange = MissedMessages | RewoundConversation
+
+/**
+ * How the conversation moved since `sessionKey`'s Claude session was last
+ * asked to continue it, or null when nothing can be said about it.
+ *
+ * Three answers:
+ *
+ * - `missed`: the recorded chain is a prefix of this prompt's history and
+ *   there are USER messages past it. The conversation ran under another key
+ *   (another opencode agent, another model) and came back, so the session
+ *   needs to be told what it was. Issue #114, h #g239.
+ * - `rewound`: the recorded chain and this prompt's history share a non-empty
+ *   prefix, and the chain holds user messages past it that the prompt does
+ *   not. The thread got shorter or diverged: an `/undo`, an edited message, a
+ *   regenerated reply. The session's context still holds those turns, which is
+ *   the caller's cue to drop it. h #g242.
+ * - null: every ordinary turn, and anything neither rule can name.
+ *
+ * Two refusals are the point rather than an oversight, and both of them keep
+ * today's behaviour:
+ *
+ * - A shared prefix of ZERO is never `rewound`. That is what an opencode
+ *   compaction looks like from here (the head of the thread replaced by a
+ *   summary), and a reused session has to survive one. The cost is that an
+ *   undo back to the very first message, or an edit of it, is not recognised.
+ * - A removed stretch with no USER message in it is never `rewound` either.
+ *   A turn following a proxied tool call can re-render one opencode message's
+ *   tool-call and text halves as one assistant message where the recorded
+ *   chain has two messages and a `tool` between them, and killing a healthy
+ *   session on every such turn would be far worse than the bug being fixed.
+ *   An undo, an edit and a regenerate all remove at least one user message.
  *
  * The prompt should be the conversation as the envelope builder sees it
  * (`filterSideQuestionHistory`), the same view `recordServedConversation` was
  * given, so a `/btw` or a doctor exchange that never reached the CLI is
- * neither recorded as seen nor replayed as missed.
+ * neither recorded as seen, replayed as missed, nor read as a rewind.
  */
-export function findMissedMessages(
+export function classifyConversationChange(
   sessionKey: string,
   prompt: Prompt,
-): MissedMessages | null {
+): ConversationChange | null {
   const record = served.get(sessionKey)
   if (!record) return null
+  const recorded = record.chain
+  if (recorded.length === 0) return null
 
   const messages = prompt as Array<{ role: string; content: unknown }>
   let lastAssistant = -1
@@ -148,11 +196,38 @@ export function findMissedMessages(
     history.push({ index: i, role: entry.role, digest: entry.digest })
   }
 
-  const recorded = record.chain
-  if (recorded.length === 0 || recorded.length > history.length) return null
-  for (let i = 0; i < recorded.length; i++) {
-    if (recorded[i].role !== history[i].role) return null
-    if (recorded[i].digest !== history[i].digest) return null
+  let shared = 0
+  while (
+    shared < recorded.length &&
+    shared < history.length &&
+    recorded[shared].role === history[shared].role &&
+    recorded[shared].digest === history[shared].digest
+  ) {
+    shared++
+  }
+
+  if (shared < recorded.length) {
+    // The chain this prompt cannot account for. Both refusals documented
+    // above live here, and both of them answer null, which is what every
+    // caller did with this shape before.
+    if (shared === 0) return null
+    let removedUserMessages = 0
+    for (let i = shared; i < recorded.length; i++) {
+      if (recorded[i].role === "user") removedUserMessages++
+    }
+    if (removedUserMessages === 0) return null
+    log.debug("this claude session holds turns the conversation no longer has", {
+      sessionKey,
+      recorded: recorded.length,
+      shared,
+      removedUserMessages,
+    })
+    return {
+      kind: "rewound",
+      sharedMessages: shared,
+      removedMessages: recorded.length - shared,
+      removedUserMessages,
+    }
   }
 
   let firstUser = -1
@@ -176,5 +251,34 @@ export function findMissedMessages(
     missed: missed.length,
     userMessages,
   })
-  return { messages: missed, userMessages }
+  return { kind: "missed", messages: missed, userMessages }
+}
+
+/**
+ * The messages `sessionKey`'s Claude session missed, or null. The `missed`
+ * half of `classifyConversationChange`, kept because it is what the gap
+ * replay is about and what most of its tests read.
+ */
+export function findMissedMessages(
+  sessionKey: string,
+  prompt: Prompt,
+): MissedMessages | null {
+  const change = classifyConversationChange(sessionKey, prompt)
+  return change?.kind === "missed" ? change : null
+}
+
+/** Leading characters of the note a rewound thread writes into the reply. */
+export const CONVERSATION_REWOUND_MARKER = "▌ **conversation rewound:**"
+
+/**
+ * The one thing on screen saying this turn started a new Claude session
+ * because the thread it had been answering no longer exists (h #g242).
+ */
+export function formatConversationRewoundNote(): string {
+  return (
+    `\n${CONVERSATION_REWOUND_MARKER} this conversation was edited or undone, so the ` +
+    `Claude session answering it still held the turns that were removed. This turn ` +
+    `replays the thread as it stands now into a fresh Claude session, which no longer ` +
+    `has them.\n`
+  )
 }

@@ -21,7 +21,11 @@ import {
   getClaudeUserMessage,
   getTrailingUserMessages,
 } from "./message-builder.js"
-import { findMissedMessages, recordServedConversation } from "./conversation-gap.js"
+import {
+  classifyConversationChange,
+  formatConversationRewoundNote,
+  recordServedConversation,
+} from "./conversation-gap.js"
 import {
   getAgentRegistry,
   qualifyModelName,
@@ -2150,20 +2154,53 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // thread already, a switch rebuilds the prompt, and a fresh start in
     // another account group must carry nothing. Read live rather than off the
     // booleans above, because the branches between dropped and carried ids.
-    const missed =
+    //
+    // The same read answers the other way the conversation can move out from
+    // under a session: the operator undid part of it, edited a message in it
+    // or regenerated the last reply, so the session holds turns the thread no
+    // longer has and will act on them (h #g242). That one is handled below.
+    const conversationChange =
       !compactionMode &&
       !includeHistoryContext &&
       failoverAnswer?.kind !== "switch" &&
       !accountGroupNote &&
       (!!getClaudeSessionId(sk) || !!getActiveProcess(sk))
-        ? findMissedMessages(sk, filterSideQuestionHistory(options.prompt))
+        ? classifyConversationChange(sk, filterSideQuestionHistory(options.prompt))
         : null
+    const missed = conversationChange?.kind === "missed" ? conversationChange : null
     if (missed) {
       log.notice("replaying the messages this claude session missed: the conversation continued under another session key", {
         sessionKey: sk,
         messages: missed.messages.length,
         userMessages: missed.userMessages,
       })
+    }
+
+    // A rewound thread: what the session was answering is gone, and nothing
+    // the CLI offers can take those turns back out of its context. There are
+    // no Claude message uuids here for opencode's prompt messages, so
+    // `--resume-session-at` cannot be aimed even in principle, and h #g187
+    // measured it costing about a replay anyway. So the session goes and the
+    // thread as it stands now is replayed into a fresh one by the bounded
+    // replay this turn already has (h #g238): the child first, so one `claude`
+    // owns one conversation, then the id, which takes the served chain, the
+    // fork fingerprint and the resume record with it.
+    let rewoundNote: string | null = null
+    if (conversationChange?.kind === "rewound") {
+      await deleteActiveProcessAndWait(sk)
+      deleteClaudeSessionId(sk)
+      includeHistoryContext = true
+      replayReason = "history-rewound"
+      log.notice("replaying the conversation as text: the thread was edited or undone", {
+        sessionKey: sk,
+        reason: "history-rewound",
+        sharedMessages: conversationChange.sharedMessages,
+        removedMessages: conversationChange.removedMessages,
+        removedUserMessages: conversationChange.removedUserMessages,
+      })
+      // Not on a `doGenerate` turn, for the reason the usage-limit note is
+      // not: its text is aggregated into a return value rather than shown.
+      if (mode !== "generate") rewoundNote = formatConversationRewoundNote()
     }
 
     // What this key is being asked to continue, so a later fork of it can be
@@ -3358,6 +3395,20 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               type: "text-delta",
               id: state.startTextBlock(),
               delta: formatStaleBuildNote(staleBuild),
+            })
+            state.endTextBlock()
+          }
+
+          // The one thing on screen saying this turn is answering from a fresh
+          // Claude session because the thread it had been answering was edited
+          // or undone (h #g242). Its own text part, led by
+          // `CONVERSATION_REWOUND_MARKER`, for the reason every other `▌` note
+          // has one: the plugin wrote it and Claude never saw it.
+          if (rewoundNote) {
+            controller.enqueue({
+              type: "text-delta",
+              id: state.startTextBlock(),
+              delta: rewoundNote,
             })
             state.endTextBlock()
           }

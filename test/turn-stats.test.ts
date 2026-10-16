@@ -22,6 +22,7 @@ import {
 } from "../src/cli-events.js"
 import { createClaudeCode } from "../src/index.js"
 import { filterSideQuestionHistory } from "../src/message-builder.js"
+import { CONVERSATION_REWOUND_MARKER } from "../src/conversation-gap.js"
 import { MODEL_FALLBACK_MARKER } from "../src/model-fallback.js"
 import { STALE_BUILD_MARKER } from "../src/stale-build.js"
 import {
@@ -167,6 +168,7 @@ test("every ▌ marker the plugin writes is stripped from a rebuilt transcript",
     `${CONVERSATION_RESET_MARKER} claude cleared its conversation.`,
     `${UNATTENDED_REPLAY_MARKER} it said this between turns.`,
     `${MODEL_FALLBACK_MARKER} falling back.`,
+    `${CONVERSATION_REWOUND_MARKER} the thread was edited or undone.`,
     `${TURN_STATS_MARKER} $0.0001`,
   ]
   for (const note of notes) {
