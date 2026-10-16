@@ -125,14 +125,24 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
-Nothing in progress.
+- 2026-10-16: research pass 2's P1 build, one implementor lane at a time while only the default account has
+  headroom (appical's 5-hour window is out until 2026-10-17 01:00; both first lanes died on it). Lane A: DONE,
+  PR #117 merged as `96c33f4` (replay a rewound thread into a fresh session, history g242); not yet measured
+  against a real opencode `/undo`, a pre-release probe. Lane B: the first implementor
+  (`ses_eb9bcacaaffeucb96z0trWDwtZ`) left an uncommitted first cut in `../opencode-claude-code-plugin-read-rules`
+  (branch `map-read-deny-rules`) and found opencode's default `*.env` read rule is an `ask`, not a deny;
+  continued 22:30 CEST by `ses_eb9917ce8ffeZb1DDSJ5uJxFdL` on the default account (history g243). Next: lane C,
+  usage before the wall (per-account gauge, threshold notes, pre-limit switch); lane D, spend and turn caps
+  (`maxBudgetUsd`, `--max-turns` from `steps`, `--max-budget-usd` per agent, `maxBackgroundSubagents`). Briefs
+  in the vault under `Research pass 2/briefs/` (copies of `/tmp/lane-b2.md`, `/tmp/lane-c.md`, `/tmp/lane-d.md`);
+  dispatch when lane B delivers or appical reopens. Then one release.
 
 ## Done
 
 - 2026-10-16: **done** (probes, no code): "go ahead with the recommended". The eleven verify-first probes of
   research pass 2 (h #g241): headless permission mode stays `default` under the hygiene env var; that env var
   is the cause of the fast-mode init/result quirk; `/advisor` still gated headless, `/context` works headless
-  at zero cost; opencode's `*.env` read deny does NOT reach Claude's native Read (confirmed, P1); a `Bash` hook
+  at zero cost; opencode's `*.env` read rule (an `ask` by default, not a deny, read at v1.19.0) does NOT reach Claude's native Read, which read the secret with no prompt (confirmed, P1); a `Bash` hook
   matcher does not fire on a proxied call but `mcp__opencode_proxy__bash` does; `--system-prompt-snapshot off`
   makes the new appended prompt win on a plain resume (QUAIL), reopening single-session agent switches as a
   P2 decision; `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` gave no cache gain; retry watchdog and the interactive
