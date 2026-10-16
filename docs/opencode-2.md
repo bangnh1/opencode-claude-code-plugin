@@ -23,7 +23,7 @@ For a local checkout, point opencode 2 at the **`dist` directory**, not the repo
 }
 ```
 
-Verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill. Differences from 1.x:
+Last checked on opencode **2.0.31** (2026-10-16: the plugin API is additive over 2.0.22, and a text turn in a subdirectory, a proxied `shell` and a CLI-native read passed live). First verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill. Differences from 1.x:
 
 - **`/btw` is answered after the running turn**, not inside it. opencode 2's plugin API has no session-status route, which is what 1.x uses to write the answer into a turn that is still running. The aside is queued, so it can never swallow the turn's own continuation.
 - **No todo panel.** opencode 2 has no `todowrite` tool, so Claude's task list is not mirrored into one.

@@ -127,6 +127,13 @@ Nothing in progress.
 
 ## Done
 
+- 2026-10-16: **done**: "do the sweep now and keep the schedule as is so next sweep is on time". Compatibility
+  sweep (h #g240): opencode 1.19.0's plugin API byte-identical to 1.18.35's; opencode 2.0.31 additive over
+  2.0.22 (`credential`, `permission.assert`, TUI dialog actions; `session.active` still absent); Claude Code
+  2.1.300 headless through 1.19.0 (text, proxied bash, native read, reuse, compact, doctor) and the PTY e2e
+  (new `api-request*` transcript records tolerated). Nothing needed code. `INTERACTIVE_MEASURED_CLI` stays
+  2.1.293 until the full interactive list runs on 2.1.300. The fork-sweep schedule is untouched: next due
+  early November 2026 (last 2026-10-08).
 - 2026-10-16: **done**: "lets first fix the issues and address the PR open on this repo". PR #115 (@broskees,
   `accountFailover: "auto"`) reviewed in full, typecheck and suite green locally, merged with credit (h #g236).
   #113: opencode 2's `subpath` is relative to the project root and was being appended to the session's own

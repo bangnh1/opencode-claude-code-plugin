@@ -5583,3 +5583,74 @@ The log held one `plugin ready`, two spawns (build, then plan with the
 whole-thread replay), and the `replaying the messages this claude session
 missed` NOTICE on the fourth turn with `messages: 4, userMessages: 2`; no
 `claude` process outlived the server.
+
+<a id="g240"></a>
+
+#### Compatibility sweep: opencode 1.19.0, opencode 2.0.31, Claude Code 2.1.300 (2026-10-16)
+
+Why now: the daily driver was already 1.19.0 (a minor bump, and the hand-written
+type mirror drifts silently), the sandbox sat on 2.0.22 against a registry
+already showing 2.0.31, and `claude` was 2.1.293 against 2.1.300. Maintainer:
+"do the sweep now and keep the schedule as is so next sweep is on time", the
+schedule being the fork sweep, which stays due in early November (last
+2026-10-08).
+
+**Types, by tarball diff (`curl`, never `npm pack`), declarations only.**
+opencode 1: `@opencode-ai/plugin` 1.18.35 -> 1.19.0 is byte-identical;
+`@opencode-ai/sdk` differs in one doc comment on `autoupdate`. So the
+`src/opencode-types.ts` mirror needed nothing and the (h #g88) audit findings
+all stand. opencode 2: `@opencode/plugin` 2.0.22 -> 2.0.31 is additive only: a
+`credential: Pick<CredentialApi, "activate">` on the plugin context, a
+`permission.assert` that evaluates the session's rules and prompts, an
+`IntegrationExternalMethod`, an optional `vcs.init`, and TUI `DialogSelect`
+`actions` and `search`. `session.d.ts` is unchanged, so the `SessionDomain`
+`Pick` still has no `active` and (h #g176) holds; the MCP status vocabulary is
+identical. Nothing the plugin reads moved or went away.
+
+**Live, headless, opencode 1.19.0 with Claude Code 2.1.300** (the native
+`@anthropic-ai/claude-code-darwin-arm64@2.1.300` binary fetched into scratch
+and passed as `cliPath`, the global 2.1.293 untouched), through a private
+`opencode serve` under scratch XDG dirs on `claude-haiku-4-5`: a text turn
+(`PONG`), a proxied `bash` (`echo SWEEP-42`, resolved through the broker), a
+CLI-native `read` of a planted file (`SAFFRON`, the row `completed`), process
+reuse (recalled it), `POST /session/{id}/summarize` (`true`, a compaction
+spawn), recall after the compaction, and `/claude-code-doctor` naming the
+2.1.300 binary. One `plugin ready`, two spawns, no `claude` left behind. Not
+re-run: `/btw` mid-turn, which needs a turn that is still running.
+
+**Live, opencode 2.0.31** (`@opencode/cli-darwin-arm64@2.0.31`, shasum checked,
+kept beside 2.0.22 as `bin/opencode-2.0.31`), `opencode run --standalone` from
+`root/pkg/a` with the local `dist`: the subdirectory cwd (h #g237), a proxied
+`shell` (`SWEEP-42`), a CLI-native `read` (`SAFFRON`). Three runs, three
+`plugin ready`, every spawn in `root/pkg/a`.
+
+**Interactive transport on 2.1.300**: `bun test/e2e-claude-session-bun.ts`
+with `PATH` pointing at the 2.1.300 binary and `ANTHROPIC_MODEL=claude-haiku-4-5`:
+one-shot and three-turn, every stop `end_turn`, context retained, cache reads
+on the later turns. The transcript it tailed carries record kinds 2.1.293 did
+not write: `api-request`, `api-request-blob`, `api-request-shape` (the 2.1.300
+CHANGELOG: "local session transcripts also record each API request's system
+prompt, tools and parameters"), plus `atis-latch`, `mode`, `permission-mode`,
+`last-prompt`, `ai-title`, `file-history-snapshot`. The tail reads only the
+kinds it knows, so none of them mattered. `INTERACTIVE_MEASURED_CLI` stays
+2.1.293: the rule (h #g205) wants the full interactive list (image, the
+130-second proxied call, the plan dialog, `/btw`) before the bump, and only
+the e2e ran.
+
+**CHANGELOG 2.1.294 to 2.1.300, read for the plugin**: 2.1.299 adds idle
+compaction after about 54 minutes for a 200K+ conversation "in the terminal",
+which is the TUI the interactive transport drives (`"idleCompaction": false`
+turns it off; nothing seen yet); 2.1.295 fixed `claude -p` dropping earlier
+responses when background work started another turn, the (h #g189) shape, and
+added `CLAUDE_CODE_RETRY_WATCHDOG` / `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS`
+for unattended 429/529 waits; 2.1.296 fixed `--restricted` not applying to
+late-registered built-ins. None needs code.
+
+**Probe-script trap, recorded so it is not paid twice**: the tool's shell is
+zsh, which does not word-split an unquoted `$var`, so `set -- $url_and_sum`
+left the whole line in `$1`, every download failed, and a `shasum ok` check
+comparing two empty strings printed `yes`. Write probe scripts to a file and
+run them with `bash`; macOS `diff` has no `--include`, use `-x` exclusions.
+Also seen and left alone: `auto-continuation stopped` is logged at NOTICE on
+every ordinary turn with `attempts: 0` and `reason: end-turn`, a decision log
+rather than an event; a candidate for INFO when nothing was attempted.
