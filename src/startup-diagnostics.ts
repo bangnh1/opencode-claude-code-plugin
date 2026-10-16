@@ -8,7 +8,8 @@ import { describeAccountGroups, resolveAccountGroups } from "./account-groups.js
 import { detectCliVersion } from "./cli-version.js"
 import { requestedTransport } from "./transport.js"
 import { log } from "./logger.js"
-import { mergeOpencodeMcp } from "./mcp-bridge.js"
+import { detectWorktree, mergeOpencodeMcp, opencodeConfigLayers } from "./mcp-bridge.js"
+import { resolveReadRuleMapping } from "./read-rules.js"
 import {
   summarizePermissionPreset,
   type PermissionPresetSummary,
@@ -65,6 +66,17 @@ export interface StartupDiagnostics {
    */
   subagentDispatch: "ask" | "off"
   subagentDispatchCrossGroup: boolean
+  /**
+   * Whether opencode's own `read` deny rules are carried onto the Read the
+   * CLI runs itself (h #g243), and how many denies that is for this cwd.
+   *
+   * A COUNT, never the patterns: this block is logged as a NOTICE, which is a
+   * level `/claude-code-doctor bundle` prints, and a glob is the operator's
+   * own config text rather than anything safe by type. The patterns are in
+   * the doctor's own section, which a bundle withholds.
+   */
+  mapReadRules: boolean
+  readRuleDenies: number
   anthropicApiKeyInEnv: boolean
 }
 
@@ -217,6 +229,27 @@ export function collectStartupDiagnostics(
     })
   }
 
+  // The same resolution a spawn does, for this cwd, so the block says what
+  // the next turn will really send. Wrapped like the MCP read above it: a
+  // malformed config layer must never be able to break registration.
+  const mapReadRules = firstOption(providers, "mapReadRules") !== false
+  let readRuleDenies = 0
+  if (mapReadRules) {
+    try {
+      const hostApi = firstOption(providers, "hostApi") === "v2" ? "v2" : "v1"
+      readRuleDenies = resolveReadRuleMapping({
+        layers: opencodeConfigLayers(cwd.resolved, hostApi),
+        hostApi,
+        worktree: detectWorktree(cwd.resolved),
+        cwd: cwd.resolved,
+      }).deny.length
+    } catch (err) {
+      log.debug("startup diagnostics could not resolve opencode read rules", {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   let transport: StartupDiagnostics["transport"]
   try {
     transport = requestedTransport({
@@ -255,6 +288,8 @@ export function collectStartupDiagnostics(
       firstOption(providers, "subagentDispatch") === "ask" ? "ask" : "off",
     subagentDispatchCrossGroup:
       firstOption(providers, "subagentDispatchCrossGroup") === true,
+    mapReadRules,
+    readRuleDenies,
     anthropicApiKeyInEnv: Boolean(
       process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN,
     ),

@@ -345,7 +345,14 @@ export function translateReadPattern(
   // read, including one in a subdirectory.
   if (/^\*+$/.test(raw)) return { rule: "**" }
 
-  const widenSubtree = (value: string) => (value.endsWith("/*") ? `${value.slice(0, -1)}*` : value)
+  // opencode's `*` crosses directory separators and Claude's does not, so a
+  // subtree rule has to be widened or it would stop denying at one level.
+  // Measured: `Read(secrets/**)` refuses `secrets/key.txt` AND
+  // `secrets/inner/key.txt`. Only a TRAILING `/*` can be fixed this way; a
+  // mid-segment `*` in a slash-bearing pattern stays one segment wide on
+  // Claude's side, which is narrower than opencode and is documented as a
+  // limitation rather than guessed at.
+  const widenSubtree = (value: string) => (value.endsWith("/*") ? `${value}*` : value)
 
   if (path.posix.isAbsolute(raw)) {
     // Claude's own absolute form: a leading `//` is what sets the rule's root

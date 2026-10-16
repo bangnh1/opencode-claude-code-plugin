@@ -148,6 +148,11 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   isError: "flag",
   planModeQuestion: "flag",
   subagentDispatchCrossGroup: "flag",
+  // Whether opencode's read deny rules are carried onto Claude's own Read,
+  // and how many were. A count and a flag only: the patterns themselves are
+  // the operator's config text and are never logged (h #g243).
+  mapReadRules: "flag",
+  readRuleDenies: "count",
   kept: "flag",
   listsAgentTypes: "flag",
   opencodeHasQuestion: "flag",

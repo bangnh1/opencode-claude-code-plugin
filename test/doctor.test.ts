@@ -14,6 +14,7 @@ import {
   formatDoctorReport,
   parseDoctorCommand,
   parseDoctorCommandContent,
+  withholdFreeText,
   type DoctorReport,
 } from "../src/doctor.js"
 import {
@@ -91,6 +92,7 @@ const report: DoctorReport = {
     { sessionKey: "sk", toolCallId: "call_1", toolName: "task", ageMs: 30_000, deadlineMs: 3_600_000, emitted: true, channelClosed: false },
   ],
   proxyServers: [{ url: "http://127.0.0.1:51234/mcp", auth: { status: "ok", code: 401 } }],
+  readRules: undefined,
   mcpServerErrors: [],
   pluginLoadFailures: [],
   hookFailures: [],
@@ -758,4 +760,74 @@ test("the transport row says what was asked for and what this conversation is on
   })
   assert.match(newer, /this CLI, 2\.1\.300, is newer and unmeasured/)
   assert.match(newer, /\| ses_abc \| claude-opus-5 \| interactive \|/)
+})
+
+// ---------------------------------------------------------------------------
+// opencode's read rules on Claude's own Read (h #g243)
+// ---------------------------------------------------------------------------
+
+test("the read-rules section tells 'no spawn yet' from 'nothing denied'", () => {
+  // Never "none": a doctor run before the first spawn must not read as if
+  // the operator's deny rules were considered and found empty.
+  const notYet = formatDoctorReport({ ...report, readRules: undefined })
+  assert.match(notYet, /\*\*opencode read rules on Claude's own Read\*\*/)
+  assert.match(notYet, /Not mapped yet/)
+
+  const nothing = formatDoctorReport({
+    ...report,
+    readRules: { enabled: true, deny: [], ask: [], unmapped: [], shadowedAllows: [] },
+  })
+  assert.match(nothing, /No `deny` rule to map/)
+  assert.doesNotMatch(nothing, /Not mapped yet/)
+})
+
+test("the read-rules section prints the denies, the unenforced asks and the shadowed allows", () => {
+  const text = formatDoctorReport({
+    ...report,
+    readRules: {
+      enabled: true,
+      deny: ["Read(*.env)", "Read(secrets/**)"],
+      ask: ["*.env.*"],
+      unmapped: [{ pattern: "../outside/*", reason: "contains-dotdot" }],
+      shadowedAllows: ["*.env.example"],
+    },
+  })
+  assert.match(text, /Denied on Claude's own Read \(2\)/)
+  assert.match(text, /Read\(\*\.env\)/)
+  assert.match(text, /Read\(secrets\/\*\*\)/)
+  assert.match(text, /they are `ask` rules \(1\)/)
+  assert.match(text, /could NOT be mapped \(1\)/)
+  // The doctor is where the refusal PROSE lives; the log gets the token.
+  assert.match(text, /it contains `\.\.`/)
+  assert.match(text, /shadows \(1\)/)
+})
+
+test("the option being off is reported as off, not as nothing to map", () => {
+  const text = formatDoctorReport({
+    ...report,
+    readRules: { enabled: false, deny: [], ask: [], unmapped: [], shadowedAllows: [] },
+  })
+  assert.match(text, /Off \(`mapReadRules: false`\)/)
+})
+
+test("a bundle withholds the operator's own patterns but keeps the counts", () => {
+  const withheld = withholdFreeText({
+    ...report,
+    readRules: {
+      enabled: true,
+      deny: ["Read(/Users/you/code/app/secrets/**)"],
+      ask: ["*.env"],
+      unmapped: [{ pattern: "../outside/*", reason: "contains-dotdot" }],
+      shadowedAllows: ["*.env.example"],
+    },
+  })
+  const text = formatDoctorReport(withheld)
+  for (const secret of ["secrets/**", "*.env.example", "../outside/*"]) {
+    assert.ok(!text.includes(secret), `a bundle must not carry ${secret}`)
+  }
+  // The shape survives: a maintainer still sees how many rules there were.
+  assert.match(text, /Denied on Claude's own Read \(1\)/)
+  assert.match(text, /\[redacted, \d+ chars\]/)
+  // The kebab reason is a fixed vocabulary and stays readable.
+  assert.equal(withheld.readRules?.unmapped[0]?.reason, "contains-dotdot")
 })

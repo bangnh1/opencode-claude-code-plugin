@@ -47,8 +47,61 @@ logs a WARN, rather than guessing at what you meant.
 
 Two consequences of the split between tools opencode runs and tools the Claude CLI runs itself, both measured on 2026-10-16 with opencode 1.19.0 and Claude Code 2.1.293.
 
-- **opencode's `read` permission rules, including its default `*.env` deny, do not apply to the Read, Glob and Grep tools Claude runs natively.** Those three are not proxied by default, so a file opencode would refuse to read for its own `read` tool is read by Claude without a prompt (the probe asked Claude to read a planted `.env` through its Read tool and got the secret back). Until the plugin translates those rules into Claude Code deny rules (planned), put the deny on Claude's side too: a `permissions.deny` entry such as `Read(./.env)` or `Read(**/.env)` in the project's `.claude/settings.json`, or proxy `Read` through `proxyTools` so opencode's rules govern it.
+- **opencode's `read` permission rules do not apply to the Read, Glob and Grep tools Claude runs natively.** Those three are not proxied by default, so a file opencode would refuse to read for its own `read` tool is read by Claude without a prompt (the probe asked Claude to read a planted `.env` through its Read tool and got the secret back). `mapReadRules`, on by default, now carries the **`deny`** rules across as `--disallowedTools "Read(<pattern>)"`. Read the next section before assuming that covers `.env`: opencode's own `*.env` default is an `ask`, not a deny.
 - **A Claude Code hook matcher written for a tool's own name does not fire when that tool is proxied.** A proxied call reaches Claude as `mcp__opencode_proxy__<tool>`, so a `PreToolUse` matcher of `Bash` never sees the proxied bash call, while a matcher of `mcp__opencode_proxy__bash` does, and a matcher of `Read` still fires on the native read. Project `.claude/settings.json` hooks are loaded by the plugin's spawns, so the fix is the matcher name, not the file.
+
+### Read rules carried onto Claude's own Read
+
+`mapReadRules` is on by default. Every `deny` in opencode's resolved
+`permission.read` is translated into `--disallowedTools "Read(<pattern>)"` on
+the spawn, which is the rule Claude Code applies to every file-reading tool it
+has: its own validator refuses a `Glob(...)` rule with the note that *Read
+rules cover all file-reading tools*.
+
+**On a default install this emits nothing, and that is not a bug.** opencode's
+built-in read rules, read at v1.19.0, are `*` allow, `*.env` **ask**,
+`*.env.*` **ask**, `*.env.example` allow. An `ask` is not carried: a headless
+spawn runs with the skip flag and there is nobody for the CLI to ask, and
+silently promoting an ask to a deny would refuse reads you expect to be able
+to approve. So out of the box Claude's Read still reads `.env`. Two ways to
+close it:
+
+```jsonc
+// 1. Say deny, and the mapping carries it onto Claude's Read.
+{ "permission": { "read": { "*.env": "deny", "*.env.*": "deny" } } }
+```
+
+```jsonc
+// 2. Or proxy the read, so it runs in opencode and opencode's own
+//    prompt applies to it.
+{ "provider": { "claude-code": { "options": { "proxyTools": ["Bash", "Edit", "Write", "WebFetch", "Task", "Read"] } } } }
+```
+
+What the translation does and does not cover:
+
+- A pattern with no slash (`*.env`) is sent as-is. Measured on Claude Code
+  2.1.293 and 2.1.300: `Read(*.env)` refuses `.env`, `sub/.env`,
+  `nested/deep/.env` and `app.env` and leaves `notes.txt` readable, which is
+  the same "match at any depth" rule opencode's separator-crossing `*` has.
+- A trailing `/*` is widened to `/**`, so `secrets/*` keeps denying the whole
+  subtree the way opencode does.
+- A `*` in the MIDDLE of a pattern that also contains a slash (`a/*/b`) stays
+  one segment wide on Claude's side, where opencode's crosses separators. The
+  rule is still sent, so it denies less than opencode there, never more.
+- `..` is refused rather than guessed at, and `/claude-code-doctor` lists it
+  as unmapped.
+- An `allow` that carves an exception out of a deny cannot be expressed:
+  Claude's deny beats its allow. The doctor lists those as shadowed, and
+  Claude will refuse where opencode would have allowed.
+- `glob`, `grep`, `list` and `external_directory` rules are not mapped at all,
+  and neither are agent-level `permission.read` overrides from an agent's own
+  definition. For "nothing outside the working directory", use
+  `permissionPreset: "read-only"`, which sends `--restricted`.
+- Compaction spawns do not go through the proxy wiring and carry no rules.
+
+`/claude-code-doctor` has a section naming what was mapped, what could not be,
+the asks it cannot enforce and the allows a deny now shadows. Before the first
+spawn of a process it says so rather than reporting "none".
 
 **What stops working.** Reads are fine (`Read`, `Grep`, `Glob`, `WebSearch`),
 but anything that would raise a permission prompt is denied, and that includes
