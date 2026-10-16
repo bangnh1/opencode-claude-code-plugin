@@ -87,6 +87,8 @@ export interface ClaudeCodeConfig {
   proxyOpencodeTools?: string[]
   stripContextReminders?: boolean
   extraDisallowedTools?: string[]
+  /** See `ClaudeCodeProviderSettings.mapReadRules`. Default true. */
+  mapReadRules?: boolean
   proxyToolTimeoutMs?: Record<string, number>
   /**
    * Route `ExitPlanMode` through opencode's native `question` tool so plan
@@ -454,6 +456,35 @@ export interface ClaudeCodeProviderSettings {
    * the model has to work without it.
    */
   extraDisallowedTools?: string[]
+
+  /**
+   * Translate opencode's own `read` permission DENY rules into Claude Code
+   * deny rules for the Read the CLI runs itself. On by default: it closes a
+   * hole operators reasonably assume is already closed.
+   *
+   * `Read`, and whatever other file readers a CLI ships, are not proxied by
+   * default (`proxyTools` is Bash, Edit, Write, WebFetch, Task), so without
+   * this a file opencode would refuse to read for its own `read` tool is read
+   * by Claude with no prompt. Measured on 2026-10-16 with opencode 1.19.0 and
+   * Claude Code 2.1.293: "read .env with your Read tool" returned the planted
+   * secret.
+   *
+   * What is mapped, and what is not:
+   *   - a `deny` becomes `--disallowedTools "Read(<pattern>)"`, which covers
+   *     every file-reading tool the CLI has (its own rule validator says
+   *     Read rules are the only file rules matched);
+   *   - an `ask` is NOT turned into a deny. A headless spawn runs with the
+   *     skip flag and has nobody to ask, and opencode's own `*.env` default
+   *     is an `ask`, so denying it would refuse reads the operator expects to
+   *     approve. `/claude-code-doctor` lists them as not enforced;
+   *   - `glob`, `grep`, `list` and `external_directory` rules are not mapped:
+   *     Claude Code's deny beats its allow, so "outside the working directory"
+   *     cannot be said without denying the working directory too. Use
+   *     `permissionPreset: "read-only"` (which sends `--restricted`) for that.
+   *
+   * Set `false` to send nothing and keep the CLI's own posture.
+   */
+  mapReadRules?: boolean
 
   /**
    * Per-tool proxy call timeouts in milliseconds, keyed by the proxy tool

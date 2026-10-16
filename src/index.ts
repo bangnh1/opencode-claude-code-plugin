@@ -296,6 +296,7 @@ export function createClaudeCode(
       stripContextReminders: settings.stripContextReminders === true,
       extraDisallowedTools:
         preset?.extraDisallowedTools ?? settings.extraDisallowedTools,
+      mapReadRules: settings.mapReadRules,
       proxyToolTimeoutMs: settings.proxyToolTimeoutMs,
       planModeQuestion: settings.planModeQuestion ?? false,
       webSearch: settings.webSearch,

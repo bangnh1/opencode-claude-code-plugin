@@ -1611,6 +1611,13 @@ export function resolveDisallowedTools(options: {
   proxyTools?: ProxyToolDef[] | null
   extraDisallowedTools?: string[]
   disableWebSearch?: boolean
+  /**
+   * `Read(<pattern>)` rules translated from opencode's own `read` deny rules
+   * (h #g243). Pushed LAST and through the same dedup as everything else: a
+   * path rule can never collide with a tool name, and keeping them at the end
+   * leaves an install with no deny rules byte-identical to before.
+   */
+  readRules?: string[]
 }): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -1624,6 +1631,7 @@ export function resolveDisallowedTools(options: {
   for (const name of disallowedToolFlags(options.proxyTools ?? [])) push(name)
   for (const name of options.extraDisallowedTools ?? []) push(String(name))
   if (options.disableWebSearch) push("WebSearch")
+  for (const rule of options.readRules ?? []) push(String(rule))
   return out
 }
 

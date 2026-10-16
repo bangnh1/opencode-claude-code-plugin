@@ -188,7 +188,7 @@ function walkUp(opts: {
  * entry (file or directory — submodules use a file). If no `.git` is
  * found, walk to filesystem root. Honors OPENCODE_WORKTREE override.
  */
-function detectWorktree(cwd: string): string | undefined {
+export function detectWorktree(cwd: string): string | undefined {
   const override = process.env.OPENCODE_WORKTREE
   if (override) return path.resolve(override)
   let current = path.resolve(cwd)

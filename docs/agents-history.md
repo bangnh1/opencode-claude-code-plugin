@@ -5695,6 +5695,12 @@ scratch git repository and the two host ones through a private
    `permission: null`), "read .env with your Read tool" returned the planted
    `SECRET_CODEWORD=MARMOT`. **Confirmed: opencode's read rules never reach the
    Read, Glob and Grep Claude runs itself.** A P1 item. (continue, zed)
+   **Correction, 2026-10-16 (h #g243): the rule this item calls a "deny" is an
+   `ask`.** opencode's built-in read rules, read at v1.19.0 rather than
+   assumed, are `*` allow, `*.env` ask, `*.env.*` ask, `*.env.example` allow.
+   Everything measured above stands (the read happened and returned the
+   secret); what changes is the word, and with it the fix, since an `ask`
+   cannot be carried onto a spawn that has nobody to ask.
 6. **Settings-json hooks on proxied calls.** A project `.claude/settings.json`
    with three `PreToolUse` matchers: `Bash` did NOT fire on a proxied bash
    call, `mcp__opencode_proxy__bash` DID, and `Read` fired on a native read. So
@@ -5863,3 +5869,135 @@ edited or undone` with `reason: "history-rewound"`, `sharedMessages: 2`,
 and its `init` frame a new Claude session id (`74a54e66…` after `4146f317…`,
 which had served both earlier turns from one process); the reply opened with
 the `▌ **conversation rewound:**` note and answered `OTTER` alone.
+
+<a id="g243"></a>
+
+## opencode's read deny rules, carried onto the Read the CLI runs itself
+
+2026-10-16, opencode 1.19.0, Claude Code 2.1.293 and 2.1.300. Builds on
+(h #g241) item 5, and corrects its one load-bearing word.
+
+**The hole.** `DEFAULT_PROXY_TOOL_NAMES` is Bash, Edit, Write, WebFetch and
+Task, so the file reader is CLI-native on a default install and opencode's
+`read` permission rules never see it. (h #g241) measured the consequence:
+"read .env with your Read tool" returned a planted `SECRET_CODEWORD=MARMOT`
+while opencode would have stopped for its own `read` tool.
+
+**The correction.** That entry, this repository's AGENTS.md bullet, the
+permissions page, the symptoms table and the skill all called opencode's
+`*.env` default a **deny**. It is an **ask**. Read at tag v1.19.0 in
+`packages/opencode/src/agent/agent.ts`, and rule for rule identical in V2's
+`packages/core/src/plugin/agent.ts`: `*` allow, `*.env` ask, `*.env.*` ask,
+`*.env.example` allow. Nothing measured changes; the fix does, because an
+`ask` cannot be honoured on a spawn running with the skip flag that has
+nobody to ask. **So on a default install this mapping emits nothing and
+Claude's own Read still reads `.env`**, which the live run below confirms.
+The two ways to close it are a `deny` in opencode's `permission.read`, which
+the mapping then carries, or `Read` in `proxyTools`, which routes the read
+through opencode where its own prompt applies.
+
+**What opencode's rules are, read rather than assumed.** A pattern is matched
+by `packages/core/src/util/wildcard.ts`, where `*` becomes `.*` in an anchored
+regex, so an opencode `*` CROSSES directory separators, which gitignore's does
+not. The resource is the worktree-relative path. Precedence is `findLast` over
+`[defaults, agent extras, config]`, and no match at all is `ask`. V1's
+`permission` block is deep-merged across layers with `OPENCODE_PERMISSION`
+on top and the `tools: { read: false }` booleans folded under it; V2
+concatenates each document's `permissions` array after the defaults. Both
+shapes are read on both majors, because opencode 2 migrates a V1 document and
+a V1 host ignores an array it does not know.
+
+**What Claude Code accepts, measured on 2.1.293 and re-run on 2.1.300.** A
+parenthesised path rule on the flag the plugin already passes is enough, so no
+`--settings permissions.deny` layer is needed. In a scratch directory with
+`.env`, `sub/.env`, `nested/deep/.env`, `app.env`, `.env.production`,
+`sub/.env.local`, `.env.example` and `notes.txt`, each read once with
+`claude -p --model claude-haiku-4-5 --disallowedTools '<rule>'`:
+
+- `Read(*.env)` refused `.env`, `sub/.env`, `nested/deep/.env` and `app.env`,
+  and left `notes.txt` and `.env.example` readable. Identical on both
+  binaries.
+- `Read(*.env.*)` refused `.env.production` and `sub/.env.local` and left
+  `.env` readable. Identical on both binaries.
+
+So a slash-free pattern matches at ANY depth, which is gitignore's own rule
+and is exactly what opencode's separator-crossing `*` means: such a pattern is
+emitted as-is, with no `**` prefix. Two probe traps cost a run each.
+`--disallowedTools` is variadic, so a prompt passed as an argument after it is
+swallowed and parsed as rule names (the CLI then prints `Permission deny rule
+"the" matches no known tool`); the prompt has to go on stdin. And asking the
+model to report the secret makes it refuse on its own judgement rather than on
+the rule, which reads as a false BLOCKED: the prompt must ask only whether the
+tool returned contents.
+
+**What is translated.** A catch-all becomes `**`. A slash-free pattern is
+emitted unchanged. A trailing `/*` is widened to `/**`, because Claude's `*`
+stops at one segment where opencode's does not; the widening was off by one in
+the first cut (`secrets/*` came out as `secrets/*`), which the unit tests
+caught. An absolute pattern takes Claude's `//` root form. A `..` is refused
+rather than normalised. A `*` in the MIDDLE of a slash-bearing pattern cannot
+be widened the same way, because once a pattern contains a slash it is
+anchored and a mid-segment `**` stops crossing directories, so Claude's rule
+is narrower than opencode's there: it denies less, never more, and that is
+documented rather than guessed at. `glob`, `grep`, `list` and
+`external_directory` rules are not mapped at all (Claude's deny beats its
+allow, so "outside the working directory" cannot be said without denying the
+working directory; `permissionPreset: "read-only"` covers that), and neither
+are agent-level `permission.read` overrides.
+
+**Both the asks and the denies are filtered through opencode's own
+`findLast`.** A deny a later non-deny covers is already dead in opencode and
+is not emitted, or Claude would be stricter than the host it mirrors. The ask
+half of that rule came out of the live run: with `permission: { read: {
+"*.env": "deny" } }` the doctor listed `*.env` under "not enforced, because
+they are ask rules" directly beneath the deny enforcing it, because
+opencode's default ask is earlier in the chain than the operator's deny. An
+ask any later rule supersedes is now dropped.
+
+**Where it is wired.** In `resolveProxyWiring`, where `--disallowedTools` is
+already assembled from the POST-FILTER proxy list (h #g93), so the read-only
+preset (h #g156), fast mode's `--settings` and the plan-mode flag drop are
+untouched and the interactive transport takes the same `wiring.allDisallowed`
+array with no second call site. The rules are pushed last through the existing
+dedup, so an install with no deny rules gets a byte-identical argv. Compaction
+spawns do not go through the proxy wiring and carry none.
+
+**What may not be logged.** The refusal reasons are kebab tokens
+(`empty-pattern`, `contains-dotdot`), never sentences, because
+`/claude-code-doctor bundle` allowlists `reason` as an `enum` and `SAFE_ENUM`
+forbids spaces (h #g215). The patterns themselves are the operator's config
+text and are not safe BY TYPE under any kind in `BUNDLE_DATA_ALLOWLIST` (a
+glob starts with `*`, which `SAFE_NAME` refuses), so the WARN carries the
+token alone, the ready block carries `mapReadRules` (flag) and
+`readRuleDenies` (count), and the doctor's own section is withheld in a bundle
+the way a hook's stderr is: the counts survive, the patterns do not.
+
+**Live, opencode 1.19.0 with the plugin loaded from the lane worktree's
+`dist`, scratch XDG dirs, a private `serve`, haiku, four files read one turn
+each through Claude's own Read, and `/claude-code-doctor` over `POST
+/session/{id}/command`** (the route wants `model` as a string; a chat message
+containing the command text is not executed as one):
+
+- **opencode's defaults.** `.env`, `sub/.env`, `.env.production` and
+  `notes.txt` all read OK. No `Read(` rule on the spawn, ready block
+  `"mapReadRules":true,"readRuleDenies":0`, and the doctor printed "No `deny`
+  rule to map" plus `*.env` and `*.env.*` under "not enforced, because they
+  are ask rules". This is the corrected default behaviour, not a regression.
+- **`permission: { read: { "*.env": "deny", "*.env.*": "deny" } }`.** `.env`,
+  `sub/.env` and `.env.production` all BLOCKED, `notes.txt` still OK. The log
+  carried `mapped opencode read deny rules onto the claude spawn
+  {"rules":["Read(*.env)","Read(*.env.*)"],"askNotEnforced":2}`, the spawn's
+  `--disallowedTools` carried `Read(*.env)` and `Read(*.env.*)`, the ready
+  block read `"readRuleDenies":2`, and the doctor listed exactly those two
+  with no stale ask line.
+
+**Tests.** `test/read-rules.test.ts` (26: both majors' config shapes, the
+string form, the legacy `tools: { read: false }` spelling and an explicit rule
+beating it, layer precedence, `~`/`$HOME`, a wildcard permission key, every
+translation branch, the kebab tokens, the ask and deny supersede rules, a
+shadowed allow, `mapReadRules: false`, a throwing layer, the flag append, and
+a fake CLI driving real `doStream` turns for the argv on, off and by
+default); the doctor's section, its "no spawn yet" state and the bundle
+withholding in `test/doctor.test.ts`; the ready block's count in
+`test/startup-diagnostics.test.ts`; and a `Read(<glob>)` argument surviving
+cmd's two parses, parentheses and all, in `test/windows-spawn.test.ts`.

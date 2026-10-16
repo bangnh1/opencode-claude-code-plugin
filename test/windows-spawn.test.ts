@@ -213,6 +213,26 @@ describe("quoteBatchArgument", () => {
       assert.deepEqual(parseCommandLineToArgv(quoteBatchArgument(value)), [value], name)
     }
   })
+
+  test("a mapped read rule reaches claude.cmd unchanged, parentheses and globs included", () => {
+    // `--disallowedTools "Read(<glob>)"` (h #g243) is the first argument this
+    // package sends that carries `(`, `)` and `*`, all of which cmd would
+    // treat as metacharacters outside quotes, and the rule means nothing if a
+    // single character of it is lost on the way.
+    for (const rule of [
+      "Read(*.env)",
+      "Read(*.env.*)",
+      "Read(secrets/**)",
+      "Read(**)",
+      "Read(//C:/Users/you/code/app/secrets/**)",
+      "Read(a b/**)",
+    ]) {
+      const quoted = quoteBatchArgument(rule)
+      assert.deepEqual(parseAsCmd(quoted).unquotedMeta, [], rule)
+      assert.deepEqual(parseCommandLineToArgv(quoted), [rule], rule)
+      assert.equal(quoted.includes("^"), false, rule)
+    }
+  })
 })
 
 describe("planCmdInvocation", () => {

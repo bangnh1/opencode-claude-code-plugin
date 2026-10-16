@@ -23,6 +23,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "agent effort override refused: unknown level",
   "agent model override refused: unknown model",
   "agent prompt cache ttl refused: unknown value",
+  "an opencode read deny rule could not be mapped onto Claude's own Read; that path stays readable by the CLI's own file tools",
   "auto-continuation stopped",
   "auto-continuing incomplete claude result",
   "automatic account switch skipped an account whose runtime could not be prepared",

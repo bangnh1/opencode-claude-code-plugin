@@ -295,3 +295,54 @@ test("collectStartupDiagnostics reports the requested transport, by either spell
     else process.env.CLAUDE_CODE_INTERACTIVE_TRANSPORT = previous
   }
 })
+
+test("the ready block counts the read denies for this cwd, and never carries a pattern", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oc-read-rule-count-"))
+  const saved = Object.fromEntries(
+    ["XDG_CONFIG_HOME", "HOME", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_WORKTREE", "OPENCODE_PERMISSION"]
+      .map((k) => [k, process.env[k]]),
+  )
+  process.env.XDG_CONFIG_HOME = path.join(root, "no-global-config")
+  process.env.HOME = root
+  delete process.env.OPENCODE_CONFIG
+  delete process.env.OPENCODE_CONFIG_DIR
+  delete process.env.OPENCODE_WORKTREE
+  delete process.env.OPENCODE_PERMISSION
+  try {
+    const project = path.join(root, "project")
+    fs.mkdirSync(path.join(project, ".git"), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, "opencode.json"),
+      JSON.stringify({
+        permission: { read: { "*.env": "deny", "fixture-secrets/*": "deny" } },
+      }),
+    )
+
+    const on = collectStartupDiagnostics({ "claude-code": { options: { cwd: project } } }, "1.19.0")
+    assert.equal(on.mapReadRules, true)
+    assert.equal(on.readRuleDenies, 2)
+    // A COUNT, never the patterns: this block is logged at NOTICE, which is a
+    // level a diagnostic bundle prints.
+    assert.doesNotMatch(JSON.stringify(on), /fixture-secrets|\*\.env/)
+
+    const off = collectStartupDiagnostics(
+      { "claude-code": { options: { cwd: project, mapReadRules: false } } },
+      "1.19.0",
+    )
+    assert.equal(off.mapReadRules, false)
+    assert.equal(off.readRuleDenies, 0)
+
+    // opencode's own defaults are asks, so a default install counts zero.
+    const bare = path.join(root, "bare")
+    fs.mkdirSync(path.join(bare, ".git"), { recursive: true })
+    const plain = collectStartupDiagnostics({ "claude-code": { options: { cwd: bare } } }, "1.19.0")
+    assert.equal(plain.mapReadRules, true)
+    assert.equal(plain.readRuleDenies, 0)
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

@@ -26,6 +26,11 @@ import {
   type McpServerError,
   type PluginLoadFailure,
 } from "./cli-events.js"
+import {
+  describeReadPatternRefusal,
+  snapshotReadRuleMapping,
+  type ReadRuleMapping,
+} from "./read-rules.js"
 import { describeLogFile, log } from "./logger.js"
 import { fetchPlanUsage, wantsPlanUsage, type PlanUsage } from "./plan-usage.js"
 import {
@@ -181,6 +186,11 @@ export interface DoctorReport {
   processes: ActiveProcessSnapshot[]
   pendingCalls: PendingProxyCallSnapshot[]
   proxyServers: DoctorProxyRow[]
+  /**
+   * opencode's own `read` rules as the last spawn mapped them onto Claude's
+   * native Read, or undefined when no spawn has run in this process yet.
+   */
+  readRules: ReadRuleMapping | undefined
   /** `--mcp-config` entries Claude Code skipped this process. */
   mcpServerErrors: McpServerError[]
   /** Claude plugins (the skill bridge's included) that did not load this process. */
@@ -423,6 +433,11 @@ export function formatDoctorReport(report: DoctorReport): string {
   }
 
   lines.push("")
+  lines.push("**opencode read rules on Claude's own Read**")
+  lines.push("")
+  lines.push(...formatReadRules(report.readRules))
+
+  lines.push("")
   lines.push("**Background subagents**")
   lines.push("")
   lines.push(...formatBackgroundSubagents(report.backgroundSubagents))
@@ -463,6 +478,84 @@ export function formatDoctorReport(report: DoctorReport): string {
   }
 
   return lines.join("\n")
+}
+
+/**
+ * opencode's own `read` rules as the last spawn mapped them (h #g243).
+ *
+ * A recorded read for the reason the background gate is one: the mapping
+ * needs a spawn's cwd, worktree and host dialect. "No spawn has run yet" is a
+ * real answer and says so rather than printing as "nothing is denied", which
+ * is the one thing an operator must not be told by mistake here.
+ *
+ * The free text in this section is the operator's OWN patterns rather than
+ * anything the plugin wrote, so a bundle withholds them through
+ * `withholdFreeText` and only the counts survive.
+ */
+function formatReadRules(mapping: ReadRuleMapping | undefined): string[] {
+  const lines: string[] = []
+  if (!mapping) {
+    lines.push(
+      "Not mapped yet: no `claude` spawn has been planned in this process. The next " +
+        "message in a Claude Code session resolves them.",
+    )
+    return lines
+  }
+  if (!mapping.enabled) {
+    lines.push(
+      "Off (`mapReadRules: false`). opencode's `read` rules reach its own tools only, so " +
+        "a file opencode would refuse is still readable by the Read the CLI runs itself.",
+    )
+    return lines
+  }
+
+  if (mapping.deny.length === 0) {
+    lines.push(
+      "No `deny` rule to map. opencode's defaults only `ask` for `.env` files, and an ask " +
+        "cannot be carried onto a spawn that has nobody to ask (see below).",
+    )
+  } else {
+    lines.push(`Denied on Claude's own Read (${mapping.deny.length}):`)
+    lines.push("")
+    for (const rule of mapping.deny) lines.push(`- \`${rule}\``)
+  }
+
+  if (mapping.ask.length > 0) {
+    lines.push("")
+    lines.push(`Not enforced, because they are \`ask\` rules (${mapping.ask.length}):`)
+    lines.push("")
+    for (const pattern of mapping.ask) lines.push(`- \`${pattern}\``)
+    lines.push("")
+    lines.push(
+      "A headless spawn runs with the skip flag and there is no one for the CLI to ask, so " +
+        "an `ask` is reported rather than silently promoted to a deny. To close one, make it " +
+        "`deny` in opencode's `permission.read`, or add `Read` to `proxyTools` so the read " +
+        "runs in opencode and its own prompt applies.",
+    )
+  }
+
+  if (mapping.unmapped.length > 0) {
+    lines.push("")
+    lines.push(`Deny rules that could NOT be mapped (${mapping.unmapped.length}):`)
+    lines.push("")
+    for (const refused of mapping.unmapped) {
+      lines.push(`- \`${refused.pattern}\`: ${describeReadPatternRefusal(refused.reason)}`)
+    }
+  }
+
+  if (mapping.shadowedAllows.length > 0) {
+    lines.push("")
+    lines.push(`Allow rules a mapped deny now shadows (${mapping.shadowedAllows.length}):`)
+    lines.push("")
+    for (const pattern of mapping.shadowedAllows) lines.push(`- \`${pattern}\``)
+    lines.push("")
+    lines.push(
+      "Claude Code's deny beats its allow, so an exception opencode would carve out of a " +
+        "deny cannot be expressed: Claude refuses these where opencode would allow them.",
+    )
+  }
+
+  return lines
 }
 
 /**
@@ -697,6 +790,7 @@ export async function gatherDoctorReport(
     processes,
     pendingCalls: snapshotPendingProxyCalls(),
     proxyServers,
+    readRules: snapshotReadRuleMapping(),
     mcpServerErrors: snapshotMcpServerErrors(),
     pluginLoadFailures: snapshotPluginLoadFailures(),
     hookFailures: snapshotHookFailures(),
@@ -762,6 +856,19 @@ export function withholdFreeText(report: DoctorReport): DoctorReport {
       ...failure,
       stderr: withhold(failure.stderr),
     })),
+    // The operator's own glob patterns. Not plugin-authored, so they follow
+    // the same rule as a hook's stderr: the shape and the counts survive a
+    // bundle, the text does not.
+    readRules: report.readRules && {
+      ...report.readRules,
+      deny: report.readRules.deny.map(withhold),
+      ask: report.readRules.ask.map(withhold),
+      unmapped: report.readRules.unmapped.map((refused) => ({
+        ...refused,
+        pattern: withhold(refused.pattern),
+      })),
+      shadowedAllows: report.readRules.shadowedAllows.map(withhold),
+    },
   }
 }
 
