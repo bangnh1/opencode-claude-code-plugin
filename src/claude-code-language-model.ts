@@ -98,7 +98,12 @@ import {
   hasExitPlanModeQuestions,
   type QuestionToolCall,
 } from "./plan-mode-question.js"
-import { RuntimeMcpStatus } from "./mcp-bridge.js"
+import {
+  detectWorktree,
+  opencodeConfigLayers,
+  RuntimeMcpStatus,
+} from "./mcp-bridge.js"
+import { recordReadRuleMapping, resolveReadRuleMapping } from "./read-rules.js"
 import {
   getRuntimeMcpStatus,
   resolveMcpConnectWaitMs,
@@ -2976,11 +2981,26 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             // while the proxy replacement is absent, leaving the model
             // with no way to ask questions at all (neither proxy nor the
             // deny/markdown fallback path fires).
+            // opencode's own `read` deny rules, as Claude deny rules for the
+            // file reader the CLI runs itself (h #g243). Computed here, where
+            // `--disallowedTools` is already assembled from the POST-FILTER
+            // proxy list, so both transports and every version gate below are
+            // untouched: the interactive spawn takes `wiring.allDisallowed`
+            // and the headless one takes the same array.
+            const readRules = resolveReadRuleMapping({
+              layers: opencodeConfigLayers(cwd, self.config.hostApi === "v2" ? "v2" : "v1"),
+              hostApi: self.config.hostApi === "v2" ? "v2" : "v1",
+              enabled: self.config.mapReadRules !== false,
+              worktree: detectWorktree(cwd),
+              cwd,
+            })
             const allDisallowed = resolveDisallowedTools({
               proxyTools: enrichedProxy,
               extraDisallowedTools: self.config.extraDisallowedTools,
               disableWebSearch: self.config.webSearch === "disabled",
+              readRules: readRules.deny,
             })
+            recordReadRuleMapping(readRules)
             return {
               excludeServers,
               taskProxyEnabled,
