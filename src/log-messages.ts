@@ -136,6 +136,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "remote URL images are not supported by Claude CLI, skipping",
   "replaying stdout the child emitted between turns",
   "replaying the conversation as text: no claude session was available to continue",
+  "replaying the conversation as text: the thread was edited or undone",
   "replaying the messages this claude session missed: the conversation continued under another session key",
   "replaying this conversation as text on the other account",
   "replaying this conversation rather than carrying it across accounts",

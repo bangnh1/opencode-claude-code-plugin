@@ -14,6 +14,8 @@ import { test } from "node:test"
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import {
   _resetServedConversations,
+  classifyConversationChange,
+  CONVERSATION_REWOUND_MARKER,
   findMissedMessages,
   forgetServedConversation,
   MAX_SERVED_CONVERSATIONS,
@@ -91,23 +93,142 @@ test("user messages past the recorded chain are the missed stretch, up to the la
   assert.equal(findMissedMessages("k", p([...prompt, a("A4"), u("five")])), null)
 })
 
-test("nothing is invented for a session never asked, a diverged chain or a shortened prompt", () => {
+test("nothing is invented for a session never asked, or one with no reply behind it", () => {
   _resetServedConversations()
   assert.equal(findMissedMessages("k", p([u("one"), a("A1"), u("two"), a("A2"), u("three")])), null)
+  assert.equal(
+    classifyConversationChange("k", p([u("one"), a("A1"), u("two"), a("A2"), u("three")])),
+    null,
+  )
 
-  // An edited message: the chain is not a prefix, so the session is reused
-  // as it always was and nothing is claimed about what it saw.
+  // No reply at all yet: there is nothing before the current message to miss,
+  // and nothing to compare a rewind against either.
   recordServedConversation("k", p([u("one")]))
-  assert.equal(findMissedMessages("k", p([u("ONE, edited"), a("A1"), u("two"), a("A2"), u("three")])), null)
+  assert.equal(classifyConversationChange("k", p([u("one")])), null)
+})
 
-  // A regenerated reply: the prompt is shorter than what the session was
-  // asked, so the chain cannot be a prefix of it.
+// ---------------------------------------------------------------------------
+// A rewound thread (h #g242)
+// ---------------------------------------------------------------------------
+
+test("a regenerated reply is a rewind: the session holds the message being resent", () => {
+  _resetServedConversations()
+  // The session was asked to answer "two" and did.
   recordServedConversation("k", p([u("one"), a("A1"), u("two")]))
+  // opencode drops that answer and sends the same thread again: the history up
+  // to the last reply is [one, A1], one message short of the chain.
+  const change = classifyConversationChange("k", p([u("one"), a("A1"), u("two")]))
+  assert.deepEqual(change, {
+    kind: "rewound",
+    sharedMessages: 2,
+    removedMessages: 1,
+    removedUserMessages: 1,
+  })
+  // It is never read as a gap to replay.
   assert.equal(findMissedMessages("k", p([u("one"), a("A1"), u("two")])), null)
+})
 
-  // No reply at all yet: there is nothing before the current message to miss.
-  recordServedConversation("k", p([u("one")]))
-  assert.equal(findMissedMessages("k", p([u("one")])), null)
+test("a mid-thread edit is a rewind from the message that changed", () => {
+  _resetServedConversations()
+  recordServedConversation("k", p([u("one"), a("A1"), u("two"), a("A2"), u("three")]))
+  const change = classifyConversationChange(
+    "k",
+    p([u("one"), a("A1"), u("TWO, edited"), a("A2b"), u("four")]),
+  )
+  assert.deepEqual(change, {
+    kind: "rewound",
+    sharedMessages: 2,
+    removedMessages: 3,
+    removedUserMessages: 2,
+  })
+})
+
+test("an undo of one exchange and of several are both rewinds", () => {
+  _resetServedConversations()
+  const served = p([u("one"), a("A1"), u("two"), a("A2"), u("three")])
+
+  // One exchange undone: "three" is gone and a new message takes its place.
+  recordServedConversation("k", served)
+  assert.deepEqual(classifyConversationChange("k", p([u("one"), a("A1"), u("two"), a("A2"), u("three prime")])), {
+    kind: "rewound",
+    sharedMessages: 4,
+    removedMessages: 1,
+    removedUserMessages: 1,
+  })
+
+  // Several undone, back to the first reply.
+  recordServedConversation("k", served)
+  assert.deepEqual(classifyConversationChange("k", p([u("one"), a("A1"), u("two prime")])), {
+    kind: "rewound",
+    sharedMessages: 2,
+    removedMessages: 3,
+    removedUserMessages: 2,
+  })
+})
+
+test("a shared prefix of zero is never a rewind, so a compaction is not one", () => {
+  _resetServedConversations()
+  const served = p([u("one"), a("A1"), u("two"), a("A2"), u("three")])
+
+  // An edit of the FIRST message diverges at index 0. The limitation is
+  // deliberate: it is the same shape opencode's own compaction has.
+  recordServedConversation("k", served)
+  assert.equal(
+    classifyConversationChange("k", p([u("ONE, edited"), a("A1"), u("two"), a("A2"), u("three")])),
+    null,
+  )
+
+  // opencode compaction: the head of the thread replaced by a summary message,
+  // so nothing of the chain survives in place and a reused session must keep
+  // working exactly as it did before.
+  recordServedConversation("k", served)
+  assert.equal(
+    classifyConversationChange("k", p([u("summary of the earlier conversation"), a("A2"), u("four")])),
+    null,
+  )
+
+  // And an undo back to the very first message, which leaves no reply at all.
+  recordServedConversation("k", served)
+  assert.equal(classifyConversationChange("k", p([u("one again")])), null)
+})
+
+test("a removed stretch with no user message in it is never a rewind", () => {
+  _resetServedConversations()
+  // The chain a tool-result turn records: the call, then its result.
+  recordServedConversation(
+    "k",
+    p([
+      u("one"),
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "c1", toolName: "read", input: { filePath: "/x" } }],
+      },
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolCallId: "c1", toolName: "read", output: { type: "text", value: "x" } }],
+      },
+    ]),
+  )
+  // The next turn can re-render that one opencode message's halves as a single
+  // assistant message, which leaves the chain's `tool` entry unaccounted for.
+  // Killing a healthy session there would be worse than the bug this finds.
+  assert.equal(
+    classifyConversationChange(
+      "k",
+      p([
+        u("one"),
+        {
+          role: "assistant",
+          content: [
+            { type: "tool-call", toolCallId: "c1", toolName: "read", input: { filePath: "/x" } },
+            { type: "text", text: "A1" },
+          ],
+        },
+        u("two"),
+      ]),
+    ),
+    null,
+  )
 })
 
 test("the chain is the conversation's shape, so a reply flattened for another model still matches", () => {
@@ -246,9 +367,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       prompt: p(prompt),
     }
     const response = await provider.languageModel(modelId).doStream(options)
+    let text = ""
     for await (const part of response.stream) {
       if (part.type === "error") throw part.error
+      if (part.type === "text-delta") text += part.delta
     }
+    return { text }
   }
   const envelopes = (): Array<{ pid: number; argv: string[]; stdin: string }> =>
     existsSync(record)
@@ -353,6 +477,111 @@ test("a session resumed with --resume after its process was evicted gets the sam
     assert.match(block, /Assistant: A2/)
     assert.doesNotMatch(block, /User: one/)
     assert.doesNotMatch(resumed.stdin, /<conversation_history>/)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Through a real doStream: a thread that was edited, undone or regenerated
+// ---------------------------------------------------------------------------
+
+const historyBlock = (stdin: string): string | null => {
+  const start = stdin.indexOf("<conversation_history>")
+  if (start < 0) return null
+  return stdin.slice(start, stdin.indexOf("</conversation_history>"))
+}
+
+const countNotes = (text: string): number =>
+  text.split(CONVERSATION_REWOUND_MARKER).length - 1
+
+test("an edited message starts a fresh claude session and replays the thread that remains", async () => {
+  _resetServedConversations()
+  const f = fixture()
+  try {
+    await f.turn("build", [u("first message")])
+    await f.turn("build", [u("first message"), a("A1"), u("banana")])
+
+    // The operator edits the second message. What comes back shares only the
+    // first exchange with what this session was answering, and the session
+    // still holds "banana".
+    const third = await f.turn("build", [
+      u("first message"), a("A1"), u("cherry"), a("A2"), u("third message"),
+    ])
+
+    const sent = f.envelopes()
+    assert.equal(sent.length, 3)
+    const [one, two, rewound] = sent
+    assert.equal(two.pid, one.pid, "the first two turns share a process")
+    assert.notEqual(rewound.pid, one.pid, "the rewound turn spawned a fresh one")
+    assert.ok(!rewound.argv.includes("--resume"), rewound.argv.join(" "))
+
+    // The whole thread as it stands now, and nothing of the message that was
+    // edited away.
+    const block = historyBlock(rewound.stdin)
+    assert.ok(block, rewound.stdin.slice(0, 400))
+    assert.match(block, /User: first message/)
+    assert.match(block, /User: cherry/)
+    assert.match(block, /Assistant: A2/)
+    assert.doesNotMatch(block, /banana/)
+    assert.equal(missedBlock(rewound.stdin), null)
+
+    // One note, in the reply, and only on the turn that reset the session.
+    assert.equal(countNotes(third.text), 1, third.text)
+    assert.match(third.text, /edited or undone/)
+    const fourth = await f.turn("build", [
+      u("first message"), a("A1"), u("cherry"), a("A2"), u("third message"), a("A3"), u("fourth"),
+    ])
+    assert.equal(countNotes(fourth.text), 0)
+    const after = f.envelopes()[3]
+    assert.equal(after.pid, rewound.pid, "the fresh session is reused like any other")
+    assert.equal(historyBlock(after.stdin), null)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test("a regenerated reply resets the session that already answered the message", async () => {
+  _resetServedConversations()
+  const f = fixture()
+  try {
+    await f.turn("build", [u("one")])
+    await f.turn("build", [u("one"), a("A1"), u("two")])
+    // opencode drops that answer and asks the same thread again.
+    const again = await f.turn("build", [u("one"), a("A1"), u("two")])
+
+    const sent = f.envelopes()
+    assert.equal(sent.length, 3)
+    assert.notEqual(sent[2].pid, sent[0].pid)
+    assert.ok(!sent[2].argv.includes("--resume"), sent[2].argv.join(" "))
+    const block = historyBlock(sent[2].stdin)
+    assert.ok(block, sent[2].stdin.slice(0, 400))
+    assert.match(block, /User: one/)
+    assert.match(block, /Assistant: A1/)
+    assert.equal(countNotes(again.text), 1, again.text)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test("a compacted thread keeps its process: a shared prefix of zero is not a rewind", async () => {
+  _resetServedConversations()
+  const f = fixture()
+  try {
+    await f.turn("build", [u("one")])
+    await f.turn("build", [u("one"), a("A1"), u("two")])
+    // opencode compacted: the head of the thread is now a summary message, so
+    // nothing of what this session was asked survives in place.
+    const after = await f.turn("build", [
+      u("summary of the earlier conversation"), a("A2"), u("three"),
+    ])
+
+    const sent = f.envelopes()
+    assert.equal(sent.length, 3)
+    assert.equal(sent[2].pid, sent[0].pid, "the same process answered it")
+    assert.equal(historyBlock(sent[2].stdin), null)
+    assert.equal(missedBlock(sent[2].stdin), null)
+    assert.equal(countNotes(after.text), 0, after.text)
   } finally {
     await f.cleanup()
   }

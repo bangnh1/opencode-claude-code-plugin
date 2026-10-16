@@ -493,12 +493,16 @@ async function runTurn(input: {
   modelId: string
   settings?: Record<string, unknown>
   /**
-   * Whether this turn carries earlier messages. A prompt holding a single
-   * user message is a NEW conversation to `doStream`, which drops the cached
-   * process and its Claude session id before any of this is reached, so a
-   * second turn that forgot its history would test nothing at all.
+   * How many exchanges are already behind this turn, `true` meaning one. A
+   * prompt holding a single user message is a NEW conversation to `doStream`,
+   * which drops the cached process and its Claude session id before any of
+   * this is reached, so a second turn that forgot its history would test
+   * nothing at all. A THIRD turn has to count: resending the second turn's
+   * prompt verbatim is the shape of a regenerated reply, and the prologue
+   * answers that by dropping the session and replaying (h #g242), which is a
+   * spawn these tests would then blame on the hot reload.
    */
-  prior?: boolean
+  prior?: boolean | number
 }): Promise<void> {
   const client = {
     mcp: {
@@ -520,13 +524,16 @@ async function runTurn(input: {
     mcpConnectWaitMs: 0,
     ...input.settings,
   }).languageModel(input.modelId)
-  const prompt = input.prior
-    ? [
-        { role: "user", content: [{ type: "text", text: "go" }] },
-        { role: "assistant", content: [{ type: "text", text: "ok 1" }] },
-        { role: "user", content: [{ type: "text", text: "go again" }] },
-      ]
-    : [{ role: "user", content: [{ type: "text", text: "go" }] }]
+  const exchanges = input.prior === true ? 1 : input.prior === false ? 0 : (input.prior ?? 0)
+  const prompt: Array<Record<string, unknown>> = []
+  for (let i = 1; i <= exchanges; i++) {
+    prompt.push({ role: "user", content: [{ type: "text", text: i === 1 ? "go" : `go again ${i - 1}` }] })
+    prompt.push({ role: "assistant", content: [{ type: "text", text: `ok ${i}` }] })
+  }
+  prompt.push({
+    role: "user",
+    content: [{ type: "text", text: exchanges === 0 ? "go" : `go again ${exchanges}` }],
+  })
   const response = await model.doStream({
     prompt,
     tools: [
@@ -628,7 +635,7 @@ test("the cooldown holds a second change off, and the first one still landed", a
     await runTurn({ ...ctx, status: { joining: "failed" } })
     await runTurn({ ...ctx, status: { joining: "connected" }, prior: true })
     assert.equal(ctx.spawns().length, 2, "the first change respawned")
-    await runTurn({ ...ctx, status: { joining: "failed" }, prior: true })
+    await runTurn({ ...ctx, status: { joining: "failed" }, prior: 2 })
     assert.equal(ctx.spawns().length, 2, "the flap back did not")
   })
 })

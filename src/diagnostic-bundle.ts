@@ -181,6 +181,12 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   preTokens: "count",
   released: "count",
   removed: "count",
+  // The three counts of a rewound thread: how much of what this key's Claude
+  // session was answering is still in the conversation, and how much of it is
+  // not (h #g242).
+  sharedMessages: "count",
+  removedMessages: "count",
+  removedUserMessages: "count",
   // The three counts of a released subagent dispatch: how many subagents, how
   // many of them carried a choice, and which task a refused answer was for.
   claims: "count",
