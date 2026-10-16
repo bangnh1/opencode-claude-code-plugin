@@ -5737,3 +5737,117 @@ scratch git repository and the two host ones through a private
     credits, which a plugin user spends by giving `claude` an API key from the
     linked organization (pay-as-you-go path, `apiKeySource` not `oauth`), while
     the subscription-limits path is unchanged.
+
+<a id="g242"></a>
+
+#### A rewound thread is replayed into a fresh session (2026-10-16)
+
+The other half of (h #g239), found by seven independent competitor audits of
+`src/conversation-gap.ts` reading the same code. That module records, per
+session key, the SHAPE of the conversation its Claude session was last asked
+to continue, and `findMissedMessages` answers one question with it: what did
+the session miss while the conversation ran under another key? Its refusals
+were written as "nothing is invented": a recorded chain LONGER than the
+prompt's history, or one that diverges from it, answered null and the session
+was reused exactly as before.
+
+What that misses is that those two shapes are not nothing. They are the
+conversation moving BACKWARDS. opencode's `/undo` and `/redo`, an edited
+message and a regenerated reply all hand a provider a thread that is shorter
+than, or diverges from, the one it was last given. A `claude` conversation
+cannot have messages taken back out of it: the reused process, and a `--resume`
+of its transcript, still hold the removed turns and act on them. The operator
+undoes a turn, sees it gone from the opencode transcript, and Claude carries
+on from it.
+
+Fix: `classifyConversationChange` reads both answers off the one chain it
+already keeps, and returns `{kind: "missed"}` (today's case, unchanged),
+`{kind: "rewound", sharedMessages, removedMessages, removedUserMessages}`, or
+null. `findMissedMessages` is now its `missed` half, so every existing caller
+and test reads the same. On `rewound` the prologue ends the child
+(`deleteActiveProcessAndWait`), drops the id (`deleteClaudeSessionId`, which
+takes the served chain, the fork fingerprint and the resume record with it),
+sets `includeHistoryContext = true` so the thread as it stands now goes in
+through the bounded newest-first replay the turn already has (h #g238), logs
+one NOTICE with the kebab `reason: "history-rewound"` (h #g215, because
+`/claude-code-doctor bundle` allowlists `reason` as an `enum` and a sentence
+would arrive redacted) and writes one `▌ **conversation rewound:**` note as
+its own text part, beside the stale-build and account-group notes and
+registered in `PLUGIN_NOTE_MARKERS` like every other (h #g108, h #g194). The
+three counts are added to `BUNDLE_DATA_ALLOWLIST` as counts, or the line
+arrives fully redacted.
+
+**Not a fork and not `--resume-session-at`.** The flag that could cut a
+transcript at a point needs a Claude message uuid, and the plugin has none for
+opencode's prompt messages: it never sees the CLI's own record ids for a
+headless turn, and a uuid for "the message before the one that was edited" is
+not derivable from a digest chain. (h #g187) also measured
+`--resume-session-at` costing about a replay anyway (19,625 cache writes on a
+mid-conversation cut). A fork has the same problem plus the system-prompt
+snapshot. So the replay is the honest answer, and it is the one every other
+"this session cannot continue" branch already takes.
+
+**Two refusals, both load-bearing, both leaving today's behaviour exactly as
+it was.**
+
+1. **A shared prefix of ZERO is never a rewind.** That is what an opencode
+   compaction looks like from a provider: the head of the thread replaced by a
+   summary message, so nothing of the recorded chain survives in place. A
+   reused session has to keep working across one, exactly as it does today.
+   The price is a stated limitation: an undo back to the very first message,
+   and an edit of the first message, are not recognised and keep today's
+   behaviour. Both leave nothing of the old thread in place, so neither can be
+   told apart from a compaction by content alone.
+2. **A removed stretch with NO user message in it is never a rewind.** A turn
+   following a proxied tool call can re-render one opencode message's
+   tool-call and text halves as a single assistant message, where the recorded
+   chain has an assistant message, a `tool` message and nothing else past the
+   shared prefix. Read as a rewind, that would kill a healthy session on every
+   turn after a proxied tool call, which is far worse than the bug being
+   fixed. An undo, an edit and a regenerate all remove at least one user
+   message, so the three cases this exists for are untouched.
+
+Everything else is excluded the way (h #g239)'s read already is, because it is
+the same gate: compaction, a turn whose thread was going to be replayed
+anyway, a failover switch (the prompt is rebuilt), a cross-group fresh start
+(nothing may go there), and the note additionally not on a `doGenerate` turn,
+whose text is aggregated into a return value rather than shown, as the
+usage-limit note is not. Read live off `getClaudeSessionId` and
+`getActiveProcess`. Both transports: the PTY shim is an `ActiveProcess`
+(h #g196, h #g200), so `deleteActiveProcessAndWait` ends the TUI and the fresh
+spawn gets no `resumeSessionId`.
+
+Tests, `test/conversation-gap.test.ts`. The classifier on its own: a
+regenerated reply (the chain equals the history plus the trailing user message
+being resent), a mid-thread edit, an undo of one exchange and of several, and
+every refusal, each of the two above plus a session never asked and a prompt
+with no reply in it. Through a fake CLI and real `doStream` turns: two turns
+on one key and then a third with the second exchange edited spawns a fresh
+process with no `--resume`, replays a `<conversation_history>` holding the
+edited message and not the removed one, writes the note exactly once and not
+on the turn after it; a regenerate does the same; and a compaction-shaped
+third prompt reuses the same pid, replays nothing and writes no note.
+`test/turn-stats.test.ts` asserts the new marker with the others.
+
+One existing test moved, and it is worth recording why rather than treating it
+as churn. `test/mcp-late-connect.test.ts`'s cooldown case drove three turns on
+one key with `runTurn({prior: true})`, which built the SAME two-exchange
+prompt every time: a prompt resent verbatim is exactly the regenerate shape,
+so the third turn now drops the session and spawns, which that file would have
+read as a hot reload. `prior` counts exchanges now (`true` is one, the
+cooldown's third turn passes `2`) and the fixture advances the conversation
+the way a third turn really does. Every other `prior: true` call site is a
+second turn and is unchanged.
+
+The one cost that comes with this: a turn that ended without opencode storing
+an assistant message, and whose text the operator then resends, has the same
+shape as a regenerate and pays for a replay. Both opencode majors do store the
+partial reply of an aborted turn, so the ordinary abort-then-continue path
+(h #g59) keeps its process; the case that pays is a retype after a turn that
+left nothing behind, where the Claude session really does already hold the
+message.
+
+Not measured live against a real `opencode` undo. The shapes the classifier
+reads were derived from what opencode hands a provider rather than observed
+there, which is why both refusals fail towards today's behaviour: a missed
+rewind leaves the bug this entry is about, and a false one costs a replay.
