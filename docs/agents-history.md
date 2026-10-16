@@ -5654,3 +5654,86 @@ run them with `bash`; macOS `diff` has no `--include`, use `-x` exclusions.
 Also seen and left alone: `auto-continuation stopped` is logged at NOTICE on
 every ordinary turn with `attempts: 0` and `reason: end-turn`, a decision log
 rather than an event; a candidate for INFO when nothing was attempted.
+
+<a id="g241"></a>
+
+#### Research pass 2's verify-first probes (2026-10-16)
+
+Sixteen competitor audits (the vault's `Research pass 2/`, synthesis in
+`Future Features.md`) raised eleven claims that would change a rule or decide
+a candidate. Each was measured before anything was built, on Claude Code
+2.1.293 and `claude-haiku-4-5` unless said otherwise, the pure-CLI ones in a
+scratch git repository and the two host ones through a private
+`opencode serve` (1.19.0) with the local build.
+
+1. **Headless permission mode under the hygiene env var.** The CHANGELOG says
+   `claude -p` "with telemetry off" starts in auto mode when no permission
+   mode is configured (2.1.26x). With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+   no `--permission-mode` and no skip flag, the `init` frame reports
+   `permissionMode: "default"`, and the same without the env var. Not
+   reproduced here; nothing changes. (codex-cli)
+2. **Fast mode's init prediction.** Opus 5.5 with `--settings {"fastMode":true}`:
+   WITH the env var the init frame says `fast_mode_state: "on"` and the
+   `result` says `"off"`; WITHOUT it the init frame already says `"off"`. So the
+   env var disables the availability check the init frame would otherwise
+   run, which is the measured cause of (h #g221)'s quirk. The plugin already
+   reads the `result` for the verdict, so behaviour is right; the rule now
+   names the cause. The `initialize` model list was identical with and
+   without the env var (Hermes #86's "hidden models" not reproduced on a Max
+   account). (codex-cli, shims)
+3. **`/advisor` headless.** `claude -p "/advisor"` answers "/advisor isn't
+   available in this environment." with `num_turns: 0` and `$0`. The CHANGELOG's
+   text form for `-p` exists but is gated here. (h #g167) stands. (amp)
+4. **`/context` headless.** `claude -p "/context"` answers with `num_turns: 0`,
+   `$0` and a full breakdown table (system prompt 6.2k, system tools 9.5k, MCP
+   tools and instructions, deferred tools 50.4k, agents, memory, skills,
+   messages). Free, so a `/claude-code-doctor context` is feasible on the
+   `/cost` pattern; whether a `--resume` of a live session's id writes to its
+   transcript is the one thing left to measure before building it. (aider, cursor)
+5. **opencode's `*.env` read deny against Claude's native Read.** Through the
+   plugin, with no permission config (opencode's defaults, `GET /config`
+   `permission: null`), "read .env with your Read tool" returned the planted
+   `SECRET_CODEWORD=MARMOT`. **Confirmed: opencode's read rules never reach the
+   Read, Glob and Grep Claude runs itself.** A P1 item. (continue, zed)
+6. **Settings-json hooks on proxied calls.** A project `.claude/settings.json`
+   with three `PreToolUse` matchers: `Bash` did NOT fire on a proxied bash
+   call, `mcp__opencode_proxy__bash` DID, and `Read` fired on a native read. So
+   plugin spawns do load project hooks, and a matcher written for Claude's own
+   tool name silently misses the proxied one. Documented now; a doctor warning
+   is a candidate. (oh-my-opencode, continue)
+7. **`--system-prompt-snapshot off` on a plain `--resume`.** First turn under
+   appended prompt A ("codeword ZEBRA"), resumed under prompt B ("QUAIL") and
+   asked for the codeword: snapshots ON answered ZEBRA, as (h #g187) and
+   (h #g223) measured; snapshots OFF answered **QUAIL**. So with the flag the
+   current spawn's appended prompt wins on a resume, which is exactly what an
+   agent switch would need to carry ONE Claude session across build and plan
+   instead of two processes plus `<missed_conversation>`. Not adopted in this
+   entry: the cache cost of a prompt change on resume and the meaning of
+   "stops recording" for later resumes are unmeasured. Recorded as a P2
+   decision in the synthesis. (shims, pi, openclaw)
+8. **`CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1` and the resume cache.** Two
+   turns, the working tree changed between them: without the var the resume
+   wrote 83 tokens and read 25,898; with it 758 and 24,098. No gain on this
+   CLI; the git-status snapshot did not break the cache. Not added. (shims)
+9. **`CLAUDE_CODE_RETRY_WATCHDOG`.** Read from the CHANGELOG only: unattended
+   retry mode waits out 429/529 and usage limits, bounded by
+   `..._MAX_WAIT_MS` and (2.1.301) `..._MAX_USAGE_LIMIT_WAIT_MS`. An operator
+   who exports it makes a limited turn wait instead of returning the `result`
+   the usage-limit note and `"auto"` failover read. Not measurable without a
+   limited account; documented as a caveat, nothing filled or stripped.
+10. **Interactive transport billing rate.** Hermes measured the TUI at 0.58x
+    of `-p`'s meter draw on Pro and about 2.3x slower per list dollar on Max.
+    Not re-measured: it needs a controlled usage window. Deferred; the docs
+    keep saying nothing about a difference.
+11. **Anthropic's help center on Agent SDK credits.** Updated 2026-10-07:
+    "Claude Max and Team plans now include monthly API credits, which cover the
+    Claude Agent SDK, `claude -p`, the Claude API, and Claude Managed Agents.
+    You can still use the Claude Agent SDK, `claude -p`, and third-party apps
+    with your subscription limits." The linked article: Max 5x $100, Max 20x
+    $200 a month, Team $20 or $100 per seat pooled to $500; claimed by linking
+    one Console organization; usable with any model on the Claude Platform.
+    Pro and Enterprise are not eligible. **This supersedes (h #g57)'s "paused
+    the same day and never took effect"**: it took effect on 2026-10-07 as API
+    credits, which a plugin user spends by giving `claude` an API key from the
+    linked organization (pay-as-you-go path, `apiKeySource` not `oauth`), while
+    the subscription-limits path is unchanged.

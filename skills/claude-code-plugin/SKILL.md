@@ -9,9 +9,10 @@ This plugin is `@khalilgharbaoui/opencode-claude-code-plugin`. It registers one 
 `claude-code*` providers and routes inference through the `claude` CLI, not opencode's
 native Anthropic provider. Headless `--print` is the default, which is the Agent SDK
 path. Never promise a user what subscription headless usage draws from: Anthropic's
-policy page is the only authority and it changes (fetched 2026-09-27 it carries a June 15
-update pausing the announced Agent SDK credit, so that usage still draws from plan usage
-limits and the monthly credit is unavailable). API-key/cloud billing depends on the CLI's
+policy page is the only authority and it changes (read 2026-10-16: subscription usage
+limits by default, and since 2026-10-07 Max and Team plans also carry monthly API credits,
+Max 20x $200, spendable through `claude -p` by giving the CLI an API key from the linked
+Console organization; Pro has none). API-key/cloud billing depends on the CLI's
 authentication. Confirm the user's intended account and billing method.
 
 ## How this differs from the alternatives
@@ -1341,6 +1342,8 @@ Prefer the doctor: it needs no logging change and no restart.
 | After switching opencode agents (plan to build, build to plan) Claude ignores what was said under the other agent or answers an earlier message | Plugin older than 0.55.0: each agent runs its own `claude` process, and a reused one was sent only the newest message | Upgrade. The reused (or `--resume`d) process is now told what it missed, replayed as text ahead of the current message under `<missed_conversation>`; the log says `replaying the messages this claude session missed`. The processes stay separate on purpose (a Claude session keeps the system prompt of its first request) |
 | `prompt is too long` on the first turn after a restart or after a lost Claude session, and `/compact` fails the same way | Plugin older than 0.55.0: the text replay of the thread had per-message clips but no total | Upgrade. The replay is capped at 180,000 characters, newest first, with a `[N earlier messages omitted ...]` line when it had to drop |
 | opencode 2: every turn fails with `ENOENT ... posix_spawn '<claude>'` though the binary exists, only in a subdirectory of a project | Plugin older than 0.55.0 appended the session's project-relative `subpath` to its own absolute directory | Upgrade; drop a `cwd` set only to work around it |
+| Claude read a file opencode's `read` rules deny (`.env`) | Read, Glob and Grep run inside the Claude CLI by default, and opencode's rules do not reach them (measured 2026-10-16) | Add a Claude-side deny (`Read(**/.env)` under `permissions.deny` in `.claude/settings.json`), or add `Read` to `proxyTools` so opencode governs it |
+| A Claude Code hook on `Bash`, `Edit` or `Write` no longer fires | The tool is proxied, so Claude sees it as `mcp__opencode_proxy__<tool>` and the matcher misses | Name the proxied tool in the matcher (`mcp__opencode_proxy__bash`); hooks on CLI-native tools (`Read`) still fire |
 | Wanting the per-turn cost in the chat | Not shown by default | Set `turnStats: true` and restart opencode |
 | On the interactive transport, every turn ends with a `▌ **claude code error:**` note naming `end_turn` (or `stop_sequence` / `max_tokens`), and `turnStats` never prints | Plugin older than 0.33.0 put the stop reason in the synthesized `result`'s `subtype`, and any non-`success` subtype finishes the turn as an error, which also suppresses the stats footer | Upgrade and relaunch. A turn that reaches a terminal stop reason now synthesizes the shape a headless turn emits (`subtype: "success"`, the stop reason in a top-level `stop_reason`), so it finishes as an ordinary reply. A turn that reaches NO terminal stop reason is still an error on purpose, so truncation stays visible |
 | On the interactive transport with a working directory under `/tmp` (or any symlinked path), the turn hangs until the 30-minute turn timeout and then reports no terminal stop reason | Plugin older than 0.33.0 named the transcript directory from `path.resolve`, which does not follow symlinks, so it tailed a file Claude Code never writes. On macOS `/tmp` is a symlink to `/private/tmp` | Upgrade and relaunch. The directory is now named from the cwd's resolved real path, which is what the CLI uses (`/tmp/scratch` is `~/.claude/projects/-private-tmp-scratch`). Check the `jsonlPath` in the `prepared interactive claude session` log line against the directory that actually exists under `<CLAUDE_CONFIG_DIR>/projects/` |

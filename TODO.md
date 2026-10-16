@@ -92,7 +92,9 @@ raised, so they survive context compaction; removed when answered, done or dropp
   i say ok send it", then "we are not ok yet lets first fix the issues and address the PR open on this
   repo". The "ok" of 2026-10-16 that released v0.55.0 was misread as this go too, the post went out
   and the maintainer deleted it ("that was not a go for that but a go for the PRs and repo work the
-  post will be later"). It goes out only on an instruction that names the post.
+  post will be later"). It goes out only on an instruction that names the post. 2026-10-16, maintainer:
+  "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
+  three P1 items are built and released.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -127,6 +129,14 @@ Nothing in progress.
 
 ## Done
 
+- 2026-10-16: **done** (probes, no code): "go ahead with the recommended". The eleven verify-first probes of
+  research pass 2 (h #g241): headless permission mode stays `default` under the hygiene env var; that env var
+  is the cause of the fast-mode init/result quirk; `/advisor` still gated headless, `/context` works headless
+  at zero cost; opencode's `*.env` read deny does NOT reach Claude's native Read (confirmed, P1); a `Bash` hook
+  matcher does not fire on a proxied call but `mcp__opencode_proxy__bash` does; `--system-prompt-snapshot off`
+  makes the new appended prompt win on a plain resume (QUAIL), reopening single-session agent switches as a
+  P2 decision; `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` gave no cache gain; retry watchdog and the interactive
+  billing rate read or deferred; Anthropic's monthly API credits for Max and Team are live since 2026-10-07.
 - 2026-10-16: **done** (research, no code): "check other agents like cline, pi, hermes, openclaw etc.. ... assimilate as
   much as possible", then "1 go". Research pass 2: 16 background audits (Cline, Codex CLI, Gemini CLI, OpenClaw,
   Hermes, pi, Aider, Goose, oh-my-opencode, Roo/Kilo, Cursor, Copilot CLI, Amp, Zed/ACP, Continue, the

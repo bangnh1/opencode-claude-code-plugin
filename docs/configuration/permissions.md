@@ -43,6 +43,13 @@ you can see it happen. `proxyTools` is the exception: it is filtered, so a list
 naming `Question` keeps it. An unrecognised preset name applies **nothing** and
 logs a WARN, rather than guessing at what you meant.
 
+## What opencode's own rules do not reach
+
+Two consequences of the split between tools opencode runs and tools the Claude CLI runs itself, both measured on 2026-10-16 with opencode 1.19.0 and Claude Code 2.1.293.
+
+- **opencode's `read` permission rules, including its default `*.env` deny, do not apply to the Read, Glob and Grep tools Claude runs natively.** Those three are not proxied by default, so a file opencode would refuse to read for its own `read` tool is read by Claude without a prompt (the probe asked Claude to read a planted `.env` through its Read tool and got the secret back). Until the plugin translates those rules into Claude Code deny rules (planned), put the deny on Claude's side too: a `permissions.deny` entry such as `Read(./.env)` or `Read(**/.env)` in the project's `.claude/settings.json`, or proxy `Read` through `proxyTools` so opencode's rules govern it.
+- **A Claude Code hook matcher written for a tool's own name does not fire when that tool is proxied.** A proxied call reaches Claude as `mcp__opencode_proxy__<tool>`, so a `PreToolUse` matcher of `Bash` never sees the proxied bash call, while a matcher of `mcp__opencode_proxy__bash` does, and a matcher of `Read` still fires on the native read. Project `.claude/settings.json` hooks are loaded by the plugin's spawns, so the fix is the matcher name, not the file.
+
 **What stops working.** Reads are fine (`Read`, `Grep`, `Glob`, `WebSearch`),
 but anything that would raise a permission prompt is denied, and that includes
 bridged MCP tools and the `question` proxy. Claude's own `AskUserQuestion`
