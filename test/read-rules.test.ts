@@ -141,12 +141,17 @@ test("an absolute pattern gets Claude's `//` root form", () => {
 })
 
 test("a slash-bearing relative pattern is anchored at the worktree when it differs from the cwd", () => {
+  // The expectation is DERIVED rather than written out, because the anchor is
+  // `path.resolve`'s and on Windows that carries a drive letter (`/D:/repo/...`).
+  // Only the POSIX spelling has been measured against a real CLI; asserting a
+  // literal Windows one here would be inventing a measurement.
+  const worktree = path.resolve("/repo")
   assert.deepEqual(
-    translateReadPattern("secrets/*", { worktree: "/repo", cwd: "/repo/packages/app" }),
-    { rule: "//repo/secrets/**" },
+    translateReadPattern("secrets/*", { worktree, cwd: path.join(worktree, "packages", "app") }),
+    { rule: `/${worktree.replaceAll("\\", "/")}/secrets/**` },
   )
   // Same directory: no anchor needed, and the rule stays relative.
-  assert.deepEqual(translateReadPattern("secrets/*", { worktree: "/repo", cwd: "/repo" }), {
+  assert.deepEqual(translateReadPattern("secrets/*", { worktree, cwd: worktree }), {
     rule: "secrets/**",
   })
 })
