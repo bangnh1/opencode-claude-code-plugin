@@ -5411,3 +5411,175 @@ never-switch guards and the abort, which assert that nothing moves. The four
 added for the verifier's findings (`doGenerate` exhaustion, a runtime that
 cannot be prepared, a limit learned mid-turn, `reader.cancel()`) all failed
 before their fixes.
+
+<a id="g237"></a>
+
+#### opencode 2: `location.directory` is the session's directory and `subpath` is relative to the project (2026-10-16)
+
+Issue #113 (@valioox, opencode 2.0.28, plugin 0.54.2, Claude Code 2.1.296): every
+turn of a session opened in a subdirectory of a project failed with `ENOENT:
+no such file or directory, posix_spawn '/opt/homebrew/bin/claude'`, while the
+same binary ran fine from the home directory. The reporter traced it to
+`toV1Session` in `src/v2-client.ts`, which built the session's working
+directory as `path.resolve(location.directory, subpath)`.
+
+Read off opencode's own source rather than inferred, at both `v2.0.22` (the
+sandbox) and `v2.0.28` (the report), `packages/core/src/session.ts`,
+`Session.create`:
+
+```ts
+const project = yield* projects.resolve(location.directory)
+... location,
+    subpath: RelativePath.make(path.relative(project.directory, location.directory).replaceAll("\\", "/")),
+```
+
+and `packages/core/src/session/info.ts` reads the row back as
+`location: { directory: row.directory }` and `subpath: row.path`. So
+`location.directory` is the session's own absolute working directory and
+`subpath` is that same directory relative to the PROJECT root, a label for
+the session list. Appending it names `<directory>/<its last segments>` again:
+for a project at `~/Coding` and a session in `~/Coding/InvestmentAgent` the
+plugin spawned `claude` in `~/Coding/InvestmentAgent/InvestmentAgent`, which
+does not exist, and Node reports a missing cwd as ENOENT on the executable.
+The shim has been wrong since it was written (h #g37) and nobody saw it
+because every V2 probe ran at a project root, where `subpath` is empty and the
+two readings agree. The code was the same on both versions, so this is not
+something 2.0.28 changed.
+
+Fix: `directory` is `location.directory` and `subpath` is not read at all; the
+`path` import went with it. `test/v2-client.test.ts` now asserts the shape a
+subdirectory session really has (`location.directory: "/repo/pkg/a", subpath:
+"pkg/a"` resolves to `/repo/pkg/a`), where it used to assert the doubled path.
+Run live on the 2.0.22 sandbox (the same code, so the same bug), 2026-10-16,
+with the plugin loaded from the worktree `dist` under scratch XDG dirs: a
+scratch git repository at `root/` and `opencode run --standalone` from
+`root/pkg/a`, asked for its working directory, answered
+`/private/tmp/ccp113.../root/pkg/a`, the session's own directory, where the
+shipped build spawned in `root/pkg/a/pkg/a` and died. The `cwd` option worked
+around it at the cost of pinning every session to one directory, which is
+what the reporter had done.
+
+<a id="g238"></a>
+
+#### The text replay is bounded, and weighted towards the newest messages (2026-10-16)
+
+Issue #116 (@clementrahula, plugin 0.52.0, opencode 2.0.26): on a long session
+the fresh-session replay (`compactConversationHistory`, the text rendering of
+the thread a new `claude` gets when no session can be resumed) grew to about
+6.9 MB and the request failed with prompt-too-long. The compaction turn then
+failed the same way, so the session could not recover by compacting again and
+had to be compacted from outside. The `/compact` transcript
+(`buildCompactionHistory`) has been bounded at `MAX_HISTORY_CHARS` (180,000)
+since it was written, newest first; the replay had only per-message clips
+(2,000 characters, 12,000 for the newest reply, h #g223) and no total, so its
+size was the session's length times two thousand.
+
+Now `renderReplay` walks newest first with one total, `MAX_REPLAY_TOTAL_CHARS`
+= 180,000, the same number as the compaction transcript and for the same
+reason (about 60k tokens worst case, under every window the plugin serves),
+and drops the oldest messages under one leading line, `[N earlier messages
+omitted: the replay is capped at 180000 characters]`. Nothing changes under
+the cap.
+
+Changed deliberately at the same time, for issue #114 (h #g239): the newest
+`MAX_REPLAY_RECENT_MESSAGES` (6) messages each keep
+`MAX_REPLAY_RECENT_MESSAGE_CHARS` (12,000), not only the newest reply. The
+plan the #114 reporter switched to build with is often not the newest reply:
+"what about caching?" and "and tests?" come after it, and at 2,000 characters
+a plan kept only its first thousand and its last thousand. Six is three
+exchanges and at most 72,000 characters before the small budget applies. The
+one existing test that pinned the 2,000-character budget on an older reply
+was made older to match (it had the heavy reply three messages back).
+
+The compaction half of the report was not reproduced: the compaction
+transcript was already bounded, so a compaction turn that fails prompt-too-long
+is either a compaction request the plugin did not recognise as one (it would
+then take the replay path, which this entry bounds) or something else
+entirely. If it recurs, `/claude-code-doctor bundle` shows which path the turn
+took. `test/get-claude-user-message.test.ts`: 400 messages of a thousand
+characters render under the cap with the marker, the newest kept and the
+oldest gone; a run under the cap is unmarked; a 9,000-character plan two
+exchanges back survives whole.
+
+<a id="g239"></a>
+
+#### A reused Claude session is told what the conversation said while it was away (2026-10-16)
+
+Issue #114 (@stech-mostafa, opencode 2): switching between the build and plan
+agents in one conversation, "the agent sometimes loses the context of the
+recent discussion or refers to much earlier messages from the conversation
+instead of the latest plan", worse the more often one switches.
+
+The mechanism, which is the same on both majors. The opencode agent is part of
+the session key, so build and plan run on two keys and two `claude` processes,
+each with its own transcript. That is deliberate and stays: a Claude
+conversation answers under the system prompt recorded on its FIRST request
+(h #g187), measured again in the fork sweep (h #g223), so handing the plan
+agent's session to the build agent would leave Claude under the plan agent's
+instructions and tool descriptions while opencode has granted build
+permissions. What it cost was this. A turn on a reused process, or on a
+`--resume` of its own session after eviction, sends only the messages after
+the last assistant reply, because the session has everything before. That is
+right when the last reply was its own and wrong when the other agent answered
+in between: build -> plan -> plan -> build sent the build process the fourth
+message alone, and it carried on from its own first reply with no idea the
+plan existed. "Refers to much earlier messages" is exactly that. The other
+face of the report, "loses the context of the recent discussion", is the
+replay's per-message clip when the process had been evicted and no session
+could be resumed, which (h #g238) addresses.
+
+Fix: `src/conversation-gap.ts`. Every `result` records, per key, the SHAPE of
+the conversation that session was just asked to continue
+(`conversationDigests` with `assistantContent: false`: user and tool messages
+by content, assistant messages by position, the chain `findSiblingResumePoint`
+compares, because opencode flattens another model's reasoning into text and a
+strict chain cannot survive a model change, h #g215). The next turn on that
+key, where the envelope is about to carry only the newest message, asks what
+lies between that chain and the last assistant reply. A tail of nothing but
+assistant and tool content is the session's own reply and answers null, which
+is every ordinary turn. A tail with a user message in it is a conversation
+that went elsewhere, and the slice from that message to the last reply is
+rendered by the same `renderReplay` on the same budget, ahead of the current
+message, under its own `<missed_conversation>` tag with one sentence saying
+what it is and that decisions and work in it stand. One NOTICE names how many
+messages and how many of them were the operator's.
+
+What it refuses, each on purpose: no record (a session this process never
+asked), a chain that is not a prefix of the prompt (an edited message, a
+regenerated reply: the session is reused as before and nothing is claimed
+about what it saw), a chain longer than the prompt, a replay turn (it carries
+everything), a switch turn (the prompt is rebuilt), a fresh start in another
+account group (nothing may go there), compaction. Read live off
+`getClaudeSessionId` and `getActiveProcess` rather than the prologue's
+earlier booleans, because the branches in between drop and carry ids. The
+record is in memory only, like the fork fingerprints, capped at 64 and shed
+quietest first; it moves with `transferClaudeSession` and goes with
+`deleteClaudeSessionId`. After an opencode restart there is no record and
+none is needed: `findResumePoint` refuses a chain with user messages past it
+and the whole thread is replayed, which covers the gap by the expensive route.
+Recorded on every `result`, served or not: the CLI received the envelope
+either way, and a refused turn is in its transcript as a question without an
+answer, so replaying it later would hand it the same message twice.
+
+Measured with a fake CLI through real `doStream` turns
+(`test/conversation-gap.test.ts`): build -> plan -> plan -> build spawns two
+processes, the plan key's first turn is the whole-thread replay, its second
+is bare, and the build process's second envelope carries `User: two`,
+`Assistant: A2`, `User: three`, `Assistant: A3` under the tag with the current
+message after it and nothing of its own first exchange; the next build turn
+is bare again; a build process evicted between turns resumes with `--resume`
+and the same block. The finder's own cases: a reply that ran tools is not a
+gap, an edited or regenerated prompt is not, the shape chain matches a reply
+whose reasoning was flattened, forget, move and the cap.
+
+Live on opencode 1.19.0 with the local build, 2026-10-16, through a private
+`opencode serve` under scratch XDG dirs and `POST /session/{id}/message` with
+`agent` set per turn, on `claude-haiku-4-5`: build was told "the build
+codeword is OTTER", plan was told "the plan codeword is WALRUS" and confirmed
+it, then build was asked which codeword the plan phase set and answered
+WALRUS, a word its own process had never been sent before this change, and
+asked for the build codeword answered OTTER, so its own context was intact.
+The log held one `plugin ready`, two spawns (build, then plan with the
+whole-thread replay), and the `replaying the messages this claude session
+missed` NOTICE on the fourth turn with `messages: 4, userMessages: 2`; no
+`claude` process outlived the server.

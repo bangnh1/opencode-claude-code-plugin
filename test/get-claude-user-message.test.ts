@@ -13,6 +13,8 @@ import {
   compactConversationHistory,
   filterSideQuestionHistory,
   getClaudeUserMessage,
+  MAX_REPLAY_RECENT_MESSAGE_CHARS,
+  MAX_REPLAY_TOTAL_CHARS,
   shouldStripContextReminders,
 } from "../src/message-builder.js"
 
@@ -612,6 +614,7 @@ test("the fresh-session history keeps the newest reply's answer behind its tool 
 })
 
 test("an older reply is clipped in the middle, so the prose it ends on survives", () => {
+  // Older than the newest six messages, which keep the larger budget.
   const history = compactConversationHistory(
     p([
       { role: "user", content: [{ type: "text", text: "first" }] },
@@ -619,11 +622,96 @@ test("an older reply is clipped in the middle, so the prose it ends on survives"
       { role: "user", content: [{ type: "text", text: "second" }] },
       { role: "assistant", content: [{ type: "text", text: "short reply" }] },
       { role: "user", content: [{ type: "text", text: "third" }] },
+      { role: "assistant", content: [{ type: "text", text: "another short reply" }] },
+      { role: "user", content: [{ type: "text", text: "fourth" }] },
+      { role: "assistant", content: [{ type: "text", text: "and another" }] },
+      { role: "user", content: [{ type: "text", text: "fifth" }] },
+      { role: "assistant", content: [{ type: "text", text: "last short reply" }] },
+      { role: "user", content: [{ type: "text", text: "sixth" }] },
     ]),
   )!
   assert.match(history, /OLDER CONCLUSION/)
   const older = history.slice(history.indexOf("Assistant: "), history.indexOf("User: second"))
   assert.ok(older.length < 2_200, `older replies keep the 2000-char budget (${older.length})`)
+})
+
+// The plan-to-build switch of issue #114: the plan is not always the newest
+// reply, and each message's 2,000 characters lost everything but its ends.
+test("the newest six messages keep the larger budget each, so a plan a few replies back survives", () => {
+  const plan = `## Plan\n${"step ".repeat(1_800)}\nDONE PLANNING`
+  const history = compactConversationHistory(
+    p([
+      { role: "user", content: [{ type: "text", text: "plan it" }] },
+      { role: "assistant", content: [{ type: "text", text: plan }] },
+      { role: "user", content: [{ type: "text", text: "what about caching?" }] },
+      { role: "assistant", content: [{ type: "text", text: "Caching is step 3." }] },
+      { role: "user", content: [{ type: "text", text: "and tests?" }] },
+      { role: "assistant", content: [{ type: "text", text: "Step 5." }] },
+      { role: "user", content: [{ type: "text", text: "ok, build it" }] },
+    ]),
+  )!
+  assert.ok(plan.length > 2_000 && plan.length < MAX_REPLAY_RECENT_MESSAGE_CHARS)
+  assert.ok(history.includes(plan), "the whole plan survives two exchanges later")
+  assert.doesNotMatch(history, /chars omitted/)
+})
+
+// Issue #116: a long session rebuilt a multi-megabyte first message and the
+// API refused it as prompt-too-long. The replay is bounded, newest first.
+test("the fresh-session history is bounded, dropping the oldest messages under one marker line", () => {
+  const messages: any[] = []
+  for (let i = 0; i < 400; i++) {
+    messages.push({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: [{ type: "text", text: `message ${i} ${"x".repeat(1_000)}` }],
+    })
+  }
+  messages.push({ role: "user", content: [{ type: "text", text: "current" }] })
+  const history = compactConversationHistory(p(messages))!
+  assert.ok(
+    history.length <= MAX_REPLAY_TOTAL_CHARS + 200,
+    `bounded at the cap (${history.length})`,
+  )
+  assert.match(history, /^\[\d+ earlier messages omitted: the replay is capped at 180000 characters\]/)
+  assert.match(history, /message 399 /, "the newest message is kept")
+  assert.doesNotMatch(history, /message 0 /, "the oldest is what goes")
+  assert.doesNotMatch(history, /current/, "the current message is sent on its own, as before")
+
+  // Under the cap nothing is marked or dropped.
+  const short = compactConversationHistory(p(messages.slice(390)))!
+  assert.doesNotMatch(short, /earlier messages omitted/)
+  assert.match(short, /message 390 /)
+})
+
+// Issue #114's other half: what a reused Claude session missed while the
+// conversation ran under another agent's key is replayed ahead of the
+// current message, under its own tag and on the same budget.
+test("the messages a session missed are replayed ahead of the current message", () => {
+  const prompt = p([
+    { role: "user", content: [{ type: "text", text: "one" }] },
+    { role: "assistant", content: [{ type: "text", text: "A1" }] },
+    { role: "user", content: [{ type: "text", text: "two" }] },
+    { role: "assistant", content: [{ type: "text", text: "A2" }] },
+    { role: "user", content: [{ type: "text", text: "three" }] },
+  ])
+  const out = JSON.parse(getClaudeUserMessage(prompt, false, { missed: prompt.slice(2, 4) }))
+  const texts = out.message.content.map((b: any) => b.text)
+  assert.equal(texts.length, 2)
+  assert.match(texts[0], /^<missed_conversation>/)
+  assert.match(texts[0], /continued under another opencode agent or model/)
+  assert.match(texts[0], /User: two\n\nAssistant: A2/)
+  assert.doesNotMatch(texts[0], /User: one/)
+  assert.doesNotMatch(texts[0], /conversation_history/)
+  assert.equal(texts[1], "three")
+
+  // A replay turn carries everything already, so the gap is ignored there.
+  const replay = JSON.parse(getClaudeUserMessage(prompt, true, { missed: prompt.slice(2, 4) }))
+  const replayTexts = replay.message.content.map((b: any) => b.text)
+  assert.match(replayTexts[0], /^<conversation_history>/)
+  assert.ok(!replayTexts.some((t: string) => t.includes("missed_conversation")))
+
+  // And an empty run adds nothing.
+  const plain = JSON.parse(getClaudeUserMessage(prompt, false, { missed: [] }))
+  assert.deepEqual(plain.message.content.map((b: any) => b.text), ["three"])
 })
 
 // --- dcp context reminders -------------------------------------------------

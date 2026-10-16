@@ -22,9 +22,14 @@ test("a V2 session becomes a V1 one with directory and parentID", () => {
     toV1Session({ id: "ses_1", parentID: "ses_0", location: { directory: "/repo" } }),
     { id: "ses_1", parentID: "ses_0", location: { directory: "/repo" }, directory: "/repo" },
   )
+  // `subpath` is the directory relative to the PROJECT root, not something to
+  // append to it: a session opened in `/repo/pkg/a` arrives as
+  // `location.directory: "/repo/pkg/a", subpath: "pkg/a"` (opencode's own
+  // Session.create, 2.0.22 and 2.0.28). Appending it spawned claude in
+  // `/repo/pkg/a/pkg/a` and failed every turn with ENOENT (issue #113).
   assert.equal(
-    toV1Session({ id: "ses_1", location: { directory: "/repo" }, subpath: "pkg/a" })?.directory,
-    path.resolve("/repo", "pkg/a"),
+    toV1Session({ id: "ses_1", location: { directory: "/repo/pkg/a" }, subpath: "pkg/a" })?.directory,
+    "/repo/pkg/a",
   )
   assert.equal(toV1Session(undefined), undefined)
 })

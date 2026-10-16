@@ -1,4 +1,3 @@
-import path from "node:path"
 
 /**
  * A V1-shaped opencode client over opencode 2's plugin context.
@@ -89,21 +88,27 @@ function describe(value: unknown): string {
   return ""
 }
 
-/** V2's `SessionInfo` in V1's `Session` terms: `directory` and `parentID`. */
+/**
+ * V2's `SessionInfo` in V1's `Session` terms: `directory` and `parentID`.
+ *
+ * `location.directory` IS the session's working directory, absolute. The
+ * `subpath` beside it is that same directory relative to the PROJECT root:
+ * opencode's own `Session.create` writes `subpath = path.relative(project.
+ * directory, location.directory)` (read off 2.0.22 and 2.0.28, (h #g237)).
+ * Appending it, as this did until 0.54.2, named `<directory>/<its last
+ * segments>` again, so a session opened in a subdirectory of a project spawned
+ * `claude` in a directory that does not exist and every turn failed with
+ * `ENOENT ... posix_spawn` (issue #113). A session at the project root has no
+ * subpath, which is why nobody saw it sooner. `subpath` is deliberately not read.
+ */
 export function toV1Session(info: unknown): Record<string, unknown> | undefined {
   if (!info || typeof info !== "object") return undefined
   const session = info as {
     parentID?: unknown
-    subpath?: unknown
     location?: { directory?: unknown }
   }
-  const root = session.location?.directory
   const directory =
-    typeof root === "string"
-      ? typeof session.subpath === "string" && session.subpath.length > 0
-        ? path.resolve(root, session.subpath)
-        : root
-      : undefined
+    typeof session.location?.directory === "string" ? session.location.directory : undefined
   return { ...(info as Record<string, unknown>), directory, parentID: session.parentID }
 }
 

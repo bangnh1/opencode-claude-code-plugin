@@ -301,8 +301,24 @@ function clipWithMarker(text: string, max: number): string {
 // calls ahead of the prose the model wrote last, so clipping from the end
 // dropped the answer and kept the tool output in front of it.
 const MAX_REPLAY_MESSAGE_CHARS = 2_000
-const MAX_REPLAY_LAST_REPLY_CHARS = 12_000
 const MAX_REPLAY_HEAD_CHARS = 1_000
+/**
+ * The newest messages of a replay keep a larger budget each, because they are
+ * what the next turn is about: a plan written over a few replies, a decision
+ * taken an exchange ago (issue #114). Six messages is three exchanges, and at
+ * most 72k characters before the small budget applies.
+ */
+export const MAX_REPLAY_RECENT_MESSAGES = 6
+export const MAX_REPLAY_RECENT_MESSAGE_CHARS = 12_000
+/**
+ * The whole replay (issue #116). Without a total the per-message clip still
+ * let a long session rebuild a multi-megabyte first message, which the API
+ * refused as prompt-too-long, and the compaction that would have recovered
+ * it failed the same way. The same number as `MAX_HISTORY_CHARS`, for the same
+ * reason: about 60k tokens worst case, under every window the plugin serves.
+ * Newest first, so what goes is the oldest.
+ */
+export const MAX_REPLAY_TOTAL_CHARS = 180_000
 
 /** Keep the start and, above all, the end; drop the middle. */
 function clipMiddle(text: string, max: number): string {
@@ -376,26 +392,37 @@ function renderMessageContentForCompaction(
   return { text: lines.join("\n"), toolResultCount }
 }
 
+function isConversationMessage(msg: { role: string }): boolean {
+  return msg.role === "user" || msg.role === "assistant" || msg.role === "tool"
+}
+
 /**
  * Compact conversation history into a context summary.
  *
  * - mode "fresh-session" (default): includes user, assistant and tool roles,
  *   renders each with the same serializer /compact uses so tool inputs and
- *   result bodies survive, then clips each message at 2000 chars (12000 for
- *   the newest assistant reply) by dropping the MIDDLE, so the prose a
- *   message ends on is kept. Used when
- *   starting a fresh CLI session that lost its prior session id. It used to
- *   filter to user/assistant only and reduce tool content to
- *   `[Called N tool(s)]` placeholders, which silently dropped subagent
- *   output entirely (issue #29).
+ *   result bodies survive, then clips each message by dropping the MIDDLE, so
+ *   the prose a message ends on is kept: the newest MAX_REPLAY_RECENT_MESSAGES
+ *   at MAX_REPLAY_RECENT_MESSAGE_CHARS each, everything older at
+ *   MAX_REPLAY_MESSAGE_CHARS, and the whole replay at MAX_REPLAY_TOTAL_CHARS,
+ *   dropping the oldest messages first under one `[N earlier messages
+ *   omitted ...]` line (issues #114 and #116). Used when starting a fresh CLI
+ *   session that lost its prior session id. It used to filter to
+ *   user/assistant only and reduce tool content to `[Called N tool(s)]`
+ *   placeholders, which silently dropped subagent output entirely (issue #29).
  * - mode "compaction": rich serializer for opencode /compact. Includes
  *   tool roles, renders tool_use input and tool_result content (each
  *   clipped at MAX_TOOL_RESULT_CHARS), and caps aggregate output at
  *   MAX_HISTORY_CHARS by dropping oldest entries first.
+ *
+ * `messages` renders an explicit run of messages instead of the prompt's own
+ * history: the stretch a reused Claude session missed while the conversation
+ * ran under another session key (issue #114). The whole run is rendered, on the
+ * same budget; the default renders everything before the prompt's last message.
  */
 export function compactConversationHistory(
   prompt: Prompt,
-  opts: { mode?: "fresh-session" | "compaction" } = {},
+  opts: { mode?: "fresh-session" | "compaction"; messages?: Prompt } = {},
 ): string | null {
   const mode = opts.mode ?? "fresh-session"
   prompt = filterSideQuestionHistory(prompt)
@@ -404,33 +431,38 @@ export function compactConversationHistory(
     return buildCompactionHistory(prompt)
   }
 
+  if (opts.messages) {
+    const run = filterSideQuestionHistory(opts.messages).filter(isConversationMessage)
+    return run.length === 0 ? null : renderReplay(run)
+  }
+
   // `tool`-role messages carry the results of everything opencode ran itself,
   // so they belong in the transcript. Filtering them out (issue #29) meant a
   // subagent's whole answer vanished: the assistant message kept a
   // `[Called 1 tool(s): task]` placeholder and the result it referred to was
   // never rendered at all.
-  const conversationMessages = prompt.filter(
-    (m) => m.role === "user" || m.role === "assistant" || m.role === "tool",
-  )
+  const conversationMessages = prompt.filter(isConversationMessage)
 
   if (conversationMessages.length <= 1) {
     return null
   }
 
-  const historyParts: string[] = []
+  return renderReplay(conversationMessages.slice(0, -1))
+}
 
-  // The reply the operator is most likely answering. It gets a larger budget
-  // because a short answer like "1, 2 -> ok" points straight into it.
-  let lastAssistant = -1
-  for (let i = conversationMessages.length - 2; i >= 0; i--) {
-    if (conversationMessages[i].role === "assistant") {
-      lastAssistant = i
-      break
-    }
-  }
+/**
+ * Render a run of conversation messages as a text replay: newest first within
+ * the budget, then back into order, so what a bounded replay loses is always
+ * the oldest.
+ */
+function renderReplay(messages: Prompt): string | null {
+  const entries: string[] = []
+  let total = 0
+  let rank = 0
+  let omitted = 0
 
-  for (let i = 0; i < conversationMessages.length - 1; i++) {
-    const msg = conversationMessages[i]
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
     const role =
       msg.role === "user" ? "User" : msg.role === "assistant" ? "Assistant" : "Tool"
 
@@ -439,19 +471,36 @@ export function compactConversationHistory(
     // `[Called N tool(s): ...]` / `[Received N tool result(s)]` and discard
     // every byte of the payload, which is the second half of issue #29.
     const { text } = renderMessageContentForCompaction(msg)
+    if (!text.trim()) continue
 
-    if (text.trim()) {
-      const max =
-        i === lastAssistant ? MAX_REPLAY_LAST_REPLY_CHARS : MAX_REPLAY_MESSAGE_CHARS
-      historyParts.push(`${role}: ${clipMiddle(text, max)}`)
+    const max =
+      rank < MAX_REPLAY_RECENT_MESSAGES
+        ? MAX_REPLAY_RECENT_MESSAGE_CHARS
+        : MAX_REPLAY_MESSAGE_CHARS
+    rank++
+    const entry = `${role}: ${clipMiddle(text, max)}`
+    if (total + entry.length > MAX_REPLAY_TOTAL_CHARS) {
+      omitted = i + 1
+      break
     }
+    entries.push(entry)
+    total += entry.length + 2 // +2 for the "\n\n" join
   }
 
-  if (historyParts.length === 0) {
-    return null
-  }
+  if (entries.length === 0) return null
 
-  return historyParts.join("\n\n")
+  entries.reverse()
+  if (omitted > 0) {
+    log.info("replay bounded: the oldest messages were dropped", {
+      omitted,
+      kept: entries.length,
+      chars: total,
+    })
+    entries.unshift(
+      `[${omitted} earlier message${omitted === 1 ? "" : "s"} omitted: the replay is capped at ${MAX_REPLAY_TOTAL_CHARS} characters]`,
+    )
+  }
+  return entries.join("\n\n")
 }
 
 function buildCompactionHistory(prompt: Prompt): string | null {
@@ -530,6 +579,14 @@ export function getClaudeUserMessage(
     compactionInstructions?: string
     cliToolCallIds?: ReadonlySet<string>
     stripContextReminders?: boolean
+    /**
+     * The messages this turn's Claude session never saw, because the
+     * conversation ran under another session key in between
+     * (`findMissedMessages`, issue #114). Replayed ahead of the current
+     * message, on the fresh-session replay's budget. Ignored on a replay turn,
+     * which carries everything already, and on a compaction turn.
+     */
+    missed?: Prompt
   } = {},
 ): string {
   const compactionMode = opts.compactionMode === true
@@ -624,6 +681,27 @@ The following is a summary of our conversation so far, replayed as text because 
 ${historyContext}
 
 </conversation_history>
+
+Now continuing with the current message:
+
+`,
+      })
+    }
+  } else if (opts.missed && opts.missed.length > 0) {
+    const missed = compactConversationHistory(prompt, { messages: opts.missed })
+    if (missed) {
+      log.info("including the messages this claude session missed", {
+        messages: opts.missed.length,
+        chars: missed.length,
+      })
+      content.push({
+        type: "text",
+        text: `<missed_conversation>
+The conversation continued under another opencode agent or model while this session was not asked. These are the messages exchanged since your last reply, replayed as text. They are part of this conversation: decisions and plans made there stand, and work done there is done.
+
+${missed}
+
+</missed_conversation>
 
 Now continuing with the current message:
 

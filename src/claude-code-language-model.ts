@@ -16,7 +16,12 @@ import type {
   ReasoningEffort,
 } from "./types.js"
 import { translateStreamForHost } from "./host-tools.js"
-import { getClaudeUserMessage, getTrailingUserMessages } from "./message-builder.js"
+import {
+  filterSideQuestionHistory,
+  getClaudeUserMessage,
+  getTrailingUserMessages,
+} from "./message-builder.js"
+import { findMissedMessages, recordServedConversation } from "./conversation-gap.js"
 import {
   getAgentRegistry,
   qualifyModelName,
@@ -2131,6 +2136,31 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       })
     }
 
+    // The messages this key's Claude session never saw (issue #114, h #g239).
+    // The opencode agent is in the key, so a conversation that moved to
+    // another agent and back ran its middle on another `claude`; the reused
+    // process, or a `--resume` of its own session, would otherwise get only
+    // the newest message and carry on from its own last reply. Only where the
+    // envelope is about to send just that message: a replay carries the whole
+    // thread already, a switch rebuilds the prompt, and a fresh start in
+    // another account group must carry nothing. Read live rather than off the
+    // booleans above, because the branches between dropped and carried ids.
+    const missed =
+      !compactionMode &&
+      !includeHistoryContext &&
+      failoverAnswer?.kind !== "switch" &&
+      !accountGroupNote &&
+      (!!getClaudeSessionId(sk) || !!getActiveProcess(sk))
+        ? findMissedMessages(sk, filterSideQuestionHistory(options.prompt))
+        : null
+    if (missed) {
+      log.notice("replaying the messages this claude session missed: the conversation continued under another session key", {
+        sessionKey: sk,
+        messages: missed.messages.length,
+        userMessages: missed.userMessages,
+      })
+    }
+
     // What this key is being asked to continue, so a later fork of it can be
     // recognised. Only written when the feature is on, so a default install
     // does no hashing at all.
@@ -2186,6 +2216,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           : undefined,
         cliToolCallIds: new Set(previousPendingProxyCalls.map((c) => c.toolCallId)),
         stripContextReminders: this.stripContextRemindersEnabled(),
+        missed: missed?.messages,
       })
     // Plan mode on the TUI writes its plan to `~/.claude/plans/` with Claude's
     // own Write, which proxying `write` disables, and before approval it asks
@@ -3363,6 +3394,15 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               configDir: resolveConfigDir(self.skillBridgeSpawn(failover).configDir),
               account: failover.target ?? sourceAccount,
             })
+          }
+          // What this key's Claude session has now been asked to continue, so
+          // the next turn on it can tell whether the conversation went
+          // elsewhere in between (h #g239). On every `result`, served or not:
+          // the CLI received the envelope either way, and a turn it refused is
+          // in its transcript as a question without an answer, so replaying
+          // that question later would hand it the same message twice.
+          if (!compactionMode) {
+            recordServedConversation(sk, filterSideQuestionHistory(options.prompt))
           }
           // The socket may have closed after the tool-result prompt was matched,
           // or while the result-boundary grace timer was running.

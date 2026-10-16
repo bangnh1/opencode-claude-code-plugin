@@ -22,6 +22,7 @@ import {
 import { clearCompression } from "./compression-store.js"
 import { clearBackgroundTasks } from "./background-tasks.js"
 import { forgetForkFingerprint, moveForkFingerprint } from "./session-fork.js"
+import { forgetServedConversation, moveServedConversation } from "./conversation-gap.js"
 import { forgetResumePoint, moveResumePoint } from "./session-resume-store.js"
 import {
   cliHygieneEnv,
@@ -890,6 +891,9 @@ export function deleteClaudeSessionId(key: string): void {
   // The fork fingerprint only exists to point at that id. Keeping it would
   // offer a conversation whose transcript this plugin can no longer name.
   forgetForkFingerprint(key)
+  // And what that session had been asked: the next session under this key
+  // starts with a replay, which carries everything (h #g239).
+  forgetServedConversation(key)
   // Same for the copy kept across restarts: a conversation this process
   // abandoned must not be resumed by the next one.
   forgetResumePoint(key)
@@ -931,6 +935,8 @@ export function transferClaudeSession(
   setClaudeSessionId(toKey, claudeSessionId)
   moveResumePoint(fromKey, toKey)
   moveForkFingerprint(fromKey, toKey)
+  // The session is the same one, so what it has seen is (h #g239).
+  moveServedConversation(fromKey, toKey)
   // The source key keeps no claim on the conversation, so the questions and
   // overrides recorded against it are stale the moment the id leaves.
   clearExitPlanModeQuestions(fromKey)

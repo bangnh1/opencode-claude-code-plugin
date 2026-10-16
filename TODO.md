@@ -31,7 +31,9 @@
 - 2026-09-09, maintainer: "pin to appical but if limits hit switch to default is that possible?"
   **Superseded:** built as account failover (0.24.0; the form first actually switched in
   0.26.2). The per-agent `fallbackAccounts` shape below was not built; failover is
-  account-wide and asks rather than switching silently.
+  account-wide and asks rather than switching silently. **The silent switch exists since
+  2026-10-16 as the opt-in `accountFailover: "auto"`** (PR #115 by @broskees, h #g236):
+  configured order, same group, each account once per request.
   Asked while designing the `dev-support` agent, which must run on the appical account for
   its per-profile MCP servers (Linear, Aikido, Sentry) but should survive that account's
   spend limit. Today it is not possible: the account is the provider, it is fixed for the
@@ -84,6 +86,12 @@ them ran in this directory.
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
 
+- 2026-10-16: post the plugin announcement to Slack `#til` (channel `C0BBP0PEDTM`). Draft v2 (skin
+  tone 3, bullet titles in backticks, "Sent from OpenCode using Fable 5.1" footer) is in the
+  maintainer's own DM (`D0BC16EQ664`, ts `1792076891.419639`). Maintainer: "first to me now then when
+  i say ok send it", then "we are not ok yet lets first fix the issues and address the PR open on this
+  repo". Waiting on the maintainer's "ok" after #113, #114, #116 and PR #115 are handled.
+
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
   `.claude.json` (pinned 1.3.0), opencode's slack pinned to 1.3.0 (backups `*.bak-slack-20261008-214042`).
@@ -117,6 +125,15 @@ Nothing in progress.
 
 ## Done
 
+- 2026-10-16: **done**: "lets first fix the issues and address the PR open on this repo". PR #115 (@broskees,
+  `accountFailover: "auto"`) reviewed in full, typecheck and suite green locally, merged with credit (h #g236).
+  #113: opencode 2's `subpath` is relative to the project root and was being appended to the session's own
+  absolute directory, so every session below a project root spawned `claude` in a directory that does not
+  exist (h #g237). #116: the text replay is bounded at 180,000 characters, newest first (h #g238). #114: a
+  reused or resumed `claude` process is told what the conversation said under the other agent while it was
+  away, replayed ahead of the current message, and the newest six replayed messages keep 12,000 characters
+  each (h #g239). Both measured live the same day: a build/plan/plan/build codeword exchange on opencode
+  1.19.0 (the build process answered the plan's word), and a 2.0.22 run from `root/pkg/a` spawning there.
 - 2026-10-08: **done** (v0.54.1): "looks good the effort however needs to be yellow then its perfect". The effort
   on a sidebar row's second line is the theme's warning colour (opencode 1 `theme.warning`, opencode 2
   `text.feedback.warning`), faded on a finished row; the second line is now one line of spans.
