@@ -18,6 +18,7 @@ btw-command.test.ts
 cli-events-stream.test.ts
 cli-probe-cache.test.ts
 context-usage.test.ts
+conversation-gap.test.ts
 deferred-cli-tool-result.test.ts
 do-generate.test.ts
 effort-sessions.test.ts

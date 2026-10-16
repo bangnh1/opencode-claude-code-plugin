@@ -90,7 +90,9 @@ raised, so they survive context compaction; removed when answered, done or dropp
   tone 3, bullet titles in backticks, "Sent from OpenCode using Fable 5.1" footer) is in the
   maintainer's own DM (`D0BC16EQ664`, ts `1792076891.419639`). Maintainer: "first to me now then when
   i say ok send it", then "we are not ok yet lets first fix the issues and address the PR open on this
-  repo". Waiting on the maintainer's "ok" after #113, #114, #116 and PR #115 are handled.
+  repo". The "ok" of 2026-10-16 that released v0.55.0 was misread as this go too, the post went out
+  and the maintainer deleted it ("that was not a go for that but a go for the PRs and repo work the
+  post will be later"). It goes out only on an instruction that names the post.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -134,6 +136,9 @@ Nothing in progress.
   away, replayed ahead of the current message, and the newest six replayed messages keep 12,000 characters
   each (h #g239). Both measured live the same day: a build/plan/plan/build codeword exchange on opencode
   1.19.0 (the build process answered the plan's word), and a 2.0.22 run from `root/pkg/a` spawning there.
+  Released as **v0.55.0** (CI publish green, `+ @khalilgharbaoui/opencode-claude-code-plugin@0.55.0` in the
+  step's tail, registry shasum `674e06a1`). The Windows job went red on the new fake-CLI file, which spawns
+  a `.cjs` shim (`spawn EFTYPE`) like every other fake-CLI test; added to `windows-skipped-tests.txt`.
 - 2026-10-08: **done** (v0.54.1): "looks good the effort however needs to be yellow then its perfect". The effort
   on a sidebar row's second line is the theme's warning colour (opencode 1 `theme.warning`, opencode 2
   `text.feedback.warning`), faded on a finished row; the second line is now one line of spans.
