@@ -5847,7 +5847,19 @@ partial reply of an aborted turn, so the ordinary abort-then-continue path
 left nothing behind, where the Claude session really does already hold the
 message.
 
-Not measured live against a real `opencode` undo. The shapes the classifier
-reads were derived from what opencode hands a provider rather than observed
-there, which is why both refusals fail towards today's behaviour: a missed
-rewind leaves the bug this entry is about, and a false one costs a replay.
+The shapes the classifier reads were derived from what opencode hands a
+provider rather than observed there, which is why both refusals fail towards
+today's behaviour: a missed rewind leaves the bug this entry is about, and a
+false one costs a replay.
+
+**Measured live after the merge, on opencode 1.19.0 with Claude Code 2.1.293
+(2026-10-16)**, through a private `opencode serve` running master's `dist` on
+`claude-haiku-4-5`: two turns planting the codewords OTTER then WALRUS on one
+session, then `POST /session/{id}/revert` with the second user message's id
+(the route behind opencode's `/undo`), then "which codewords do you remember?".
+The third turn logged `replaying the conversation as text: the thread was
+edited or undone` with `reason: "history-rewound"`, `sharedMessages: 2`,
+`removedMessages: 1`, `removedUserMessages: 1`; its spawn carried no `--resume`
+and its `init` frame a new Claude session id (`74a54e66…` after `4146f317…`,
+which had served both earlier turns from one process); the reply opened with
+the `▌ **conversation rewound:**` note and answered `OTTER` alone.
