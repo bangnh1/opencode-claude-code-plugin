@@ -127,6 +127,15 @@ Nothing in progress.
 
 ## Done
 
+- 2026-10-16: **done** (research, no code): "check other agents like cline, pi, hermes, openclaw etc.. ... assimilate as
+  much as possible", then "1 go". Research pass 2: 16 background audits (Cline, Codex CLI, Gemini CLI, OpenClaw,
+  Hermes, pi, Aider, Goose, oh-my-opencode, Roo/Kilo, Cursor, Copilot CLI, Amp, Zed/ACP, Continue, the
+  Claude-in-opencode shims), each a scored table against the plugin's baseline, saved in the vault under
+  `opencode-claude-code-plugin/Research pass 2/`, with the synthesis (landscape, eleven verify-first probes, a
+  P1 to P4 Next-up table, declined items) in `Future Features.md`. Converged findings: opencode `/undo` and
+  edits never reach a reused Claude session (7 audits); per-account usage before the limit (7); session and
+  per-account spend caps plus `--max-turns` / `--max-budget-usd` pass-through (7); opencode's default `*.env`
+  read deny does not reach Claude's native Read/Glob/Grep (2, security, probe first). Nothing built yet.
 - 2026-10-16: **done**: "do the sweep now and keep the schedule as is so next sweep is on time". Compatibility
   sweep (h #g240): opencode 1.19.0's plugin API byte-identical to 1.18.35's; opencode 2.0.31 additive over
   2.0.22 (`credential`, `permission.assert`, TUI dialog actions; `session.active` still absent); Claude Code
