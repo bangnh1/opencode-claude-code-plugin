@@ -194,6 +194,20 @@ test("an allow AFTER a deny is reported as shadowed, because Claude's deny beats
   assert.deepEqual(mapped.shadowedAllows, ["*.env.example"])
 })
 
+test("an ask the operator has since denied is not still reported as unenforced", () => {
+  // The live shape of `permission: { read: { "*.env": "deny" } }`: opencode's
+  // own `*.env` ask is first, the operator's deny after it. Reporting the ask
+  // as "not enforced" beside the deny that enforces it describes a posture
+  // the host does not have.
+  const mapped = mapReadRules(
+    resolveReadRules([{ permission: { read: { "*.env": "deny", "*.env.*": "deny" } } }], "v1", {
+      home: HOME,
+    }),
+  )
+  assert.deepEqual(mapped.deny, ["Read(*.env)", "Read(*.env.*)"])
+  assert.deepEqual(mapped.ask, [])
+})
+
 test("an allow that overlaps nothing the deny covers is not reported as shadowed", () => {
   const mapped = mapReadRules([
     { pattern: "*.env", effect: "deny", source: "config" },

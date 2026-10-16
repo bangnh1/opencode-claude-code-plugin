@@ -424,17 +424,25 @@ export function mapReadRules(
   const shadowedAllows: string[] = []
   const seen = new Set<string>()
 
+  // opencode resolves a read with `findLast`, so a rule a LATER one covers is
+  // already dead there. Both the asks and the denies are filtered through
+  // this, or the report describes a posture the host does not have: an `ask`
+  // the operator has since turned into a `deny` would still be listed as not
+  // enforced, right next to the deny that enforces it.
+  const supersededBy = (index: number, pattern: string, by: (later: ReadRule) => boolean) =>
+    rules.slice(index + 1).some((later) => by(later) && wildcardMatch(pattern, later.pattern))
+
   rules.forEach((rule, index) => {
     if (rule.effect === "ask") {
+      // Any later effect wins over an ask, a deny included.
+      if (supersededBy(index, rule.pattern, () => true)) return
       if (!ask.includes(rule.pattern)) ask.push(rule.pattern)
       return
     }
     if (rule.effect !== "deny") return
 
-    const superseded = rules
-      .slice(index + 1)
-      .some((later) => later.effect !== "deny" && wildcardMatch(rule.pattern, later.pattern))
-    if (superseded) return
+    // A later DENY leaves this one in force, so only a non-deny supersedes.
+    if (supersededBy(index, rule.pattern, (later) => later.effect !== "deny")) return
 
     const translated = translateReadPattern(rule.pattern, options)
     if ("refused" in translated) {
