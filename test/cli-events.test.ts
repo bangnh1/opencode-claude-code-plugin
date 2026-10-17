@@ -418,7 +418,7 @@ test("a failing result subtype is named, a successful one is not", () => {
 
   const known = describeResultFailure({ type: "result", subtype: "error_max_turns" })
   assert.match(known!, /error_max_turns/)
-  assert.match(known!, /internal turn limit/)
+  assert.match(known!, /`--max-turns` cap/)
 
   const unknown = describeResultFailure({ type: "result", subtype: "error_from_a_future_cli" })
   assert.equal(unknown, "Claude Code ended the turn with `error_from_a_future_cli`.")

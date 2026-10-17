@@ -753,9 +753,11 @@ export function reportConversationReset(msg: ClaudeStreamMessage): string | null
 export const RESULT_ERROR_MARKER = "▌ **claude code error:**"
 
 const RESULT_SUBTYPES: Record<string, string> = {
-  error_max_turns: "it hit its internal turn limit before finishing",
+  error_max_turns:
+    "it reached its `--max-turns` cap (the agent's `maxTurns`) before finishing this message",
   error_during_execution: "it failed while running the turn",
-  error_max_budget_usd: "it hit the configured spend limit for the turn",
+  error_max_budget_usd:
+    "it reached its `--max-budget-usd` cap (the agent's `maxBudgetUsd`), which counts this process's whole life",
   error_max_structured_output_retries: "it could not produce valid structured output",
 }
 

@@ -85,6 +85,20 @@ To force an **account** rather than a model, pin the full string. This only appl
 model: claude-code-work/claude-opus-5@work
 ```
 
+## Turn and spend caps an agent runs with
+
+An agent can carry Claude Code's own `--max-turns` and `--max-budget-usd`:
+
+```yaml
+---
+mode: subagent
+maxTurns: 30
+maxBudgetUsd: 0.5
+---
+```
+
+Or once, for every subagent that declares nothing, as `defaultSubagentMaxTurns` and `defaultSubagentMaxBudgetUsd` in the provider options. `maxTurns` counts API round trips per message and works on any agent; `maxBudgetUsd` counts over the whole `claude` process and restarts on a resume, so it is honoured on `mode: subagent` agents only and refused, with a warning, on a main agent. Both are headless only. What each one counts, and the conversation-wide `maxBudgetUsd` provider option, are on [Budgets and caps](../configuration/budgets.md).
+
 ## Choosing per dispatch, not per file
 
 Everything above is static: it lives in an agent file or a provider option and it answers the question "how does a `designer` always run". It cannot answer "how should *these three* subagents run, right now", and that is the question you actually have in front of you when a fan-out is about to start: two implementors on a mechanical change and one designer on something subtle, or one worker that needs Opus while the other two are fine on Haiku, or a batch you would rather bill to the other account so this one's window survives the afternoon.

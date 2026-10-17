@@ -370,6 +370,94 @@ export async function withBackgroundRunningCount(
   return { ...result, text: result.text + formatBackgroundRunningLine(others, dispatched.length) }
 }
 
+/**
+ * How long the `maxBackgroundSubagents` check may wait for the running count.
+ * Longer than the courtesy line's budget, because here a slow count refuses a
+ * dispatch rather than omitting a sentence, and the dispatch has not started.
+ */
+export const BACKGROUND_CAP_BUDGET_MS = 2000
+
+/** How many background children one `task` / `task_batch` input asks for. */
+export function requestedBackgroundChildren(
+  toolName: string,
+  input: Record<string, unknown>,
+): number {
+  const isBackground = (value: unknown) => value === true || value === "true"
+  if (toolName === "task") return isBackground(input.background) ? 1 : 0
+  if (toolName === "task_batch" && Array.isArray(input.tasks)) {
+    return input.tasks.filter(
+      (task) =>
+        !!task &&
+        typeof task === "object" &&
+        isBackground((task as Record<string, unknown>).background),
+    ).length
+  }
+  return 0
+}
+
+/**
+ * `maxBackgroundSubagents` (h #g245): the refusal a background dispatch gets
+ * when it would put more background subagents to work than the cap allows, or
+ * null to let it through. Foreground dispatch is never asked about. The count
+ * is the one `withBackgroundRunningCount` reads (h #g231, h #g232), process-wide
+ * and read-only; a count that did not arrive in time, or a child that could
+ * not be read, refuses rather than guesses, because a count that is too LOW is
+ * the harmful direction. A `task_batch` is refused whole, foreground items
+ * included, so a batch is never half-started. Never throws.
+ */
+export async function admitBackgroundDispatch(
+  toolName: string,
+  input: Record<string, unknown>,
+  cap: number,
+  budgetMs = BACKGROUND_CAP_BUDGET_MS,
+): Promise<ProxyToolResult | null> {
+  const requested = requestedBackgroundChildren(toolName, input)
+  if (requested === 0) return null
+  const running = await countOtherRunningWithin(new Set(), budgetMs)
+  if (running !== undefined && running + requested <= cap) return null
+  log.notice("background dispatch refused by maxBackgroundSubagents", {
+    toolName,
+    cap,
+    requested,
+    ...(running === undefined ? { countUnreadable: true } : { running }),
+  })
+  return {
+    kind: "error",
+    message: formatBackgroundCapRefusal({ toolName, cap, running, requested, budgetMs }),
+  }
+}
+
+export function formatBackgroundCapRefusal(opts: {
+  toolName: string
+  cap: number
+  running: number | undefined
+  requested: number
+  budgetMs?: number
+}): string {
+  const batch = opts.toolName === "task_batch"
+  const what = batch
+    ? `This task_batch was not started, none of its tasks: a batch is refused whole.`
+    : `This background task was not started.`
+  const why =
+    opts.running === undefined
+      ? `\`maxBackgroundSubagents\` allows ${opts.cap} background subagent${
+          opts.cap === 1 ? "" : "s"
+        } at once, and the running count could not be read within ${Math.round(
+          (opts.budgetMs ?? BACKGROUND_CAP_BUDGET_MS) / 1000,
+        )} s, so the cap could not be checked.`
+      : `\`maxBackgroundSubagents\` allows ${opts.cap} background subagent${
+          opts.cap === 1 ? "" : "s"
+        } at once, ${opts.running} ${opts.running === 1 ? "is" : "are"} running now, and this ${
+          batch ? "batch" : "dispatch"
+        } would start ${opts.requested} more.`
+  return (
+    `Background dispatch refused. ${why} ${what} ` +
+    `Run this work in the foreground instead (omit \`background\`), which is never capped, ` +
+    `or keep working and dispatch it later: a running subagent's result arrives as a new ` +
+    `message when it finishes. Do not sleep or poll for room.`
+  )
+}
+
 export function formatBackgroundRunningLine(others: number, dispatched: number): string {
   const total = others + dispatched
   const including = dispatched === 1 ? "this one" : `the ${dispatched} just started`

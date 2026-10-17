@@ -1089,6 +1089,15 @@ export async function createProxyMcpServer(
   options: {
     /** Keepalive cadence for streamed replies; a test seam, defaults to `PROXY_KEEPALIVE_MS`. */
     keepaliveMs?: number
+    /**
+     * Asked about every non-intercepted call before it is queued for opencode.
+     * A result answers the call in its place and nothing reaches opencode;
+     * null lets it through. `maxBackgroundSubagents` is the one user (h #g245).
+     */
+    admit?: (
+      toolName: string,
+      input: Record<string, unknown>,
+    ) => Promise<ProxyToolResult | null>
   } = {},
 ): Promise<ProxyMcpServer> {
   const calls = new EventEmitter()
@@ -1325,6 +1334,24 @@ export async function createProxyMcpServer(
           }
           writeToolCallResult(res, requestId, intercepted)
           return
+        }
+
+        if (options.admit) {
+          let refusal: ProxyToolResult | null = null
+          try {
+            refusal = await options.admit(toolName, input)
+          } catch (admitError) {
+            // A gate that throws admits: it exists to bound a cost, and a
+            // bug in it must never become a dispatch that cannot happen.
+            log.warn("proxy-mcp admission check failed; letting the call through", {
+              toolName,
+              error: admitError instanceof Error ? admitError.message : String(admitError),
+            })
+          }
+          if (refusal) {
+            writeToolCallResult(res, requestId, refusal)
+            return
+          }
         }
 
         const callId = crypto.randomUUID()

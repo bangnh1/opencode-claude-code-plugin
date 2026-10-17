@@ -1322,6 +1322,16 @@ export function buildCliArgs(opts: {
   thinkingDisplay?: "summarized" | "omitted"
   fastMode?: boolean
   cliVersion?: CliVersion | null
+  /**
+   * `--max-turns`: API round trips the CLI allows per user message (h #g245).
+   * Already gated by the caller (`resolveSpawnCliCaps`); unset passes nothing.
+   */
+  maxTurns?: number
+  /**
+   * `--max-budget-usd`: dollars the CLI allows over this process's life, reset
+   * on every `--resume` (h #g245). Already gated; subagents only.
+   */
+  maxBudgetUsd?: number
 }): string[] {
   const {
     sessionKey,
@@ -1339,6 +1349,8 @@ export function buildCliArgs(opts: {
     thinkingDisplay,
     fastMode,
     cliVersion,
+    maxTurns,
+    maxBudgetUsd,
   } = opts
   const args = [
     "--print",
@@ -1458,6 +1470,9 @@ export function buildCliArgs(opts: {
   if (fastMode && cliSupportsFastMode(cliVersion ?? null)) {
     args.push("--settings", JSON.stringify({ fastMode: true }))
   }
+
+  if (maxTurns !== undefined) args.push("--max-turns", String(maxTurns))
+  if (maxBudgetUsd !== undefined) args.push("--max-budget-usd", String(maxBudgetUsd))
 
   // Same rule as plan mode below, with a harder edge: `--restricted` and
   // `--dangerously-skip-permissions` together are not a silent override but a

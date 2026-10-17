@@ -122,6 +122,12 @@ export interface ClaudeCodeConfig {
   resumeAcrossModelChanges?: boolean
   /** Carry a conversation's Claude transcript over on an account switch. Default true. */
   crossAccountResume?: boolean
+  /** See `ClaudeCodeProviderSettings.maxBudgetUsd`. Resolved; unset is off. */
+  maxBudgetUsd?: number
+  /** See `ClaudeCodeProviderSettings.budgetWarnAt`. Resolved percentages. */
+  budgetWarnAt?: number[]
+  /** See `ClaudeCodeProviderSettings.maxBackgroundSubagents`. Resolved; unset is off. */
+  maxBackgroundSubagents?: number
   /** Resolved `usageWarnThresholds`, in percent; empty for no notes. */
   usageWarnThresholds?: number[]
   /** Resolved `usageSwitchAt`, in percent, or null for never. */
@@ -294,6 +300,43 @@ export interface ClaudeCodeProviderSettings {
    * the cache they wrote. See `resolveAgentCacheTtl` in `src/agent-models.ts`.
    */
   defaultSubagentCacheTtl?: string
+  /**
+   * `--max-turns` for discovered `mode: subagent` agents that declare no
+   * `maxTurns` of their own. Counted by the CLI per user message, so a reused
+   * process is not used up by it (measured on 2.1.293, h #g245). Unset (the
+   * default) passes nothing. See `resolveAgentCliCaps` in `src/agent-models.ts`.
+   */
+  defaultSubagentMaxTurns?: number
+  /**
+   * `--max-budget-usd` for discovered `mode: subagent` agents that declare no
+   * `maxBudgetUsd` of their own. The CLI counts it over the process's whole
+   * life, which is why it is a subagent-only cap (h #g245). Unset (the
+   * default) passes nothing.
+   */
+  defaultSubagentMaxBudgetUsd?: number
+  /**
+   * A dollar cap on one opencode conversation: its own turns plus every
+   * subagent it dispatched, summed from the CLI's own `total_cost_usd`. Unset
+   * (the default) is no cap and no bookkeeping. Notes at `budgetWarnAt`, and
+   * once the sum reaches the cap the next turn ends before anything is spawned,
+   * with one `▌ **budget:**` note and an error finish. Compaction is exempt.
+   * In memory only: see `src/budget-ledger.ts`.
+   */
+  maxBudgetUsd?: number
+  /**
+   * Percentages of `maxBudgetUsd` at which one `▌ **budget:**` note is
+   * written, each once per conversation. Default `[50, 80]`; `[]` keeps the
+   * stop and drops the notes.
+   */
+  budgetWarnAt?: number[]
+  /**
+   * How many background subagents may run at once, counted from the
+   * dispatches this opencode process saw opencode accept. A `background: true`
+   * `task` or `task_batch` that would go over it is refused as a whole with a
+   * tool result naming the cap and the running count. Foreground dispatch is
+   * never capped. Unset (the default) is no cap.
+   */
+  maxBackgroundSubagents?: number
   /**
    * Models to try, in order, when the model a turn would have run on is
    * refused. The default for every agent that declares no `fallbackModels` of

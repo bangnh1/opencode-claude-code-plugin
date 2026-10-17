@@ -81,6 +81,17 @@ export type AgentRecord = {
    */
   cacheTtl?: string
   /**
+   * `--max-turns` for this agent's own `claude` process. Raw as declared (a
+   * number in opencode.json, a string in frontmatter); `resolveAgentCliCaps`
+   * checks it.
+   */
+  maxTurns?: number | string
+  /**
+   * `--max-budget-usd` for this agent's own `claude` process. Subagents only;
+   * see `resolveAgentCliCaps` for why.
+   */
+  maxBudgetUsd?: number | string
+  /**
    * Models to try, in order, when the one this agent would have run is
    * refused. Same account throughout; see `src/model-fallback.ts`.
    */
@@ -95,6 +106,7 @@ export type AgentRecord = {
 let registry: Record<string, AgentRecord> = {}
 let defaultSubagentModel: string | undefined
 let defaultSubagentCacheTtl: string | undefined
+let defaultSubagentCliCaps: AgentCliCaps = {}
 let providerFallbackModels: string[] = []
 
 export function setAgentRegistry(records: Record<string, AgentRecord>): void {
@@ -127,6 +139,21 @@ export function getDefaultSubagentCacheTtl(): string | undefined {
 }
 
 /**
+ * `defaultSubagentMaxTurns` / `defaultSubagentMaxBudgetUsd`, already
+ * checked by the config hook. Empty (the default) passes nothing.
+ */
+export function setDefaultSubagentCliCaps(caps: AgentCliCaps): void {
+  defaultSubagentCliCaps = {
+    ...(caps.maxTurns !== undefined ? { maxTurns: caps.maxTurns } : {}),
+    ...(caps.maxBudgetUsd !== undefined ? { maxBudgetUsd: caps.maxBudgetUsd } : {}),
+  }
+}
+
+export function getDefaultSubagentCliCaps(): AgentCliCaps {
+  return { ...defaultSubagentCliCaps }
+}
+
+/**
  * The chain every agent that declares none falls back along. Empty (the
  * default) means no chain at all, for the same reason `defaultSubagentModel`
  * is unset by default: an upgrade must not silently start running somebody's
@@ -144,7 +171,9 @@ export function _resetAgentRegistryForTests(): void {
   registry = {}
   defaultSubagentModel = undefined
   defaultSubagentCacheTtl = undefined
+  defaultSubagentCliCaps = {}
   providerFallbackModels = []
+  refusedMainAgentBudgets.clear()
 }
 
 /** `claude-opus-5-fast@work` -> `@work`; a default-account id has none. */
@@ -349,6 +378,87 @@ export function resolveAgentCacheTtl(
   return wanted
 }
 
+/** The two CLI caps an agent's own `claude` process can be started with. */
+export interface AgentCliCaps {
+  /** `--max-turns`: API round trips the CLI allows per user message. */
+  maxTurns?: number
+  /** `--max-budget-usd`: dollars the CLI allows over the process's life. */
+  maxBudgetUsd?: number
+}
+
+const refusedMainAgentBudgets = new Set<string>()
+
+/**
+ * The `--max-turns` and `--max-budget-usd` an agent's spawn carries, or an
+ * empty object for neither. Measured on 2.1.293 (h #g245), and the two
+ * differ in exactly the way that decides who may have them:
+ *
+ *   - `--max-turns` counts per USER MESSAGE: a stream-json process capped at 3
+ *     answered three two-call messages in a row, and a message that hit a cap
+ *     of 1 ended `error_max_turns` while the same process took the next one.
+ *     So it is safe on any agent, a reused main conversation included.
+ *   - `--max-budget-usd` counts over the PROCESS's life: at $0.03 the second
+ *     message ended `error_max_budget_usd` and the third was refused at once
+ *     with no API call, and a `--resume` started from zero again. On a reused
+ *     main conversation it would end every later message once spent, and it
+ *     would reset whenever the process did, so it is honoured only for a
+ *     discovered `mode: subagent` agent, whose dispatch gets a process of its
+ *     own. A main agent declaring it is refused with one WARN per agent;
+ *     `maxBudgetUsd` in the provider options is the conversation-wide cap.
+ *
+ * Order, first match wins for each cap, mirroring `resolveAgentCacheTtl`: the
+ * agent's own value, then for a discovered subagent the provider default. A
+ * value that is not a positive number (a whole one for turns) is refused
+ * rather than forwarded, because the CLI would reject it at spawn.
+ */
+export function resolveAgentCliCaps(
+  agent: string | undefined,
+  overrides?: {
+    records?: Record<string, AgentRecord>
+    defaults?: AgentCliCaps
+  },
+): AgentCliCaps {
+  if (!agent) return {}
+  const record = (overrides?.records ?? registry)[agent]
+  if (!record) return {}
+  const defaults = overrides?.defaults ?? defaultSubagentCliCaps
+  const isSubagent = record.mode === "subagent"
+  const caps: AgentCliCaps = {}
+
+  const turns = parseCap(record.maxTurns, true)
+  if (record.maxTurns !== undefined && turns === undefined) {
+    log.warn("agent maxTurns refused: not a positive whole number", { agent })
+  }
+  const maxTurns = turns ?? (isSubagent ? defaults.maxTurns : undefined)
+  if (maxTurns !== undefined) caps.maxTurns = maxTurns
+
+  const budget = parseCap(record.maxBudgetUsd, false)
+  if (record.maxBudgetUsd !== undefined && budget === undefined) {
+    log.warn("agent maxBudgetUsd refused: not a positive number of dollars", { agent })
+  }
+  if (budget !== undefined && !isSubagent) {
+    if (!refusedMainAgentBudgets.has(agent)) {
+      refusedMainAgentBudgets.add(agent)
+      log.warn(
+        "agent maxBudgetUsd ignored: the CLI counts it over a reused process's whole life, so it applies to subagents only",
+        { agent },
+      )
+    }
+  } else {
+    const maxBudgetUsd = budget ?? (isSubagent ? defaults.maxBudgetUsd : undefined)
+    if (maxBudgetUsd !== undefined) caps.maxBudgetUsd = maxBudgetUsd
+  }
+  return caps
+}
+
+function parseCap(value: number | string | undefined, integer: boolean): number | undefined {
+  if (value === undefined) return undefined
+  const parsed = typeof value === "string" ? (value.trim() ? Number(value) : NaN) : value
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined
+  if (integer && !Number.isInteger(parsed)) return undefined
+  return parsed
+}
+
 /**
  * Read the fields that matter out of an agent markdown file's YAML
  * frontmatter. Hand-parsed rather than pulling a YAML dependency in for four
@@ -405,6 +515,8 @@ export function parseAgentFrontmatter(text: string): AgentRecord {
     else if (key === "forceModel") record.forceModel = value
     else if (key === "reasoningEffort") record.reasoningEffort = value
     else if (key === "cacheTtl") record.cacheTtl = value
+    else if (key === "maxTurns") record.maxTurns = value
+    else if (key === "maxBudgetUsd") record.maxBudgetUsd = value
   }
 
   return record

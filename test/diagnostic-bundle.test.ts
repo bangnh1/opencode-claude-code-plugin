@@ -470,6 +470,7 @@ const report: DoctorReport = {
   hookFailures: [],
   planUsage: { status: "not-requested" },
   backgroundSubagents: { gate: undefined, ledgers: [] },
+  budgets: { warnAt: [], subagentDefaults: {}, sessions: [] },
 }
 
 test("the plain doctor report is byte-identical, with every bundle seam set", () => {

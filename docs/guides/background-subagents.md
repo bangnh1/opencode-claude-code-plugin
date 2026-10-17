@@ -61,6 +61,8 @@ running now: 2 (of 5 started by this process)
 
 That is the number to watch if you dispatch several at once and do not want to overload the machine or the account's usage window. It counts the background dispatches Claude made through this opencode process (a subagent a native model or another opencode window started is not in it), and asks opencode about each one with the same test `task_status` uses: opencode's run state where it answers, the child's own transcript where it does not (opencode 2). It is read-only: it never collects a result, so a result is still handed over exactly once, and a task this process cancelled is not asked about. A child opencode could not tell it about is reported on its own line rather than counted as running. Verified live on opencode 1.18.35 with a scripted `claude`: `running now: 1 (of 1 started by this process)` while a 20-second background child ran, `running now: 0 (of 1 ...)` after it finished.
 
+**A ceiling on it.** `maxBackgroundSubagents` (off unless set) refuses a background dispatch that would put more subagents to work than it allows, before it reaches opencode, with a tool result naming the cap and the count. A `task_batch` is refused whole; foreground dispatch is never capped. The doctor's section prints the cap under the count. See [Budgets and caps](../configuration/budgets.md#a-ceiling-on-background-subagents-maxbackgroundsubagents).
+
 **Claude sees the same number.** A background dispatch's result reaches Claude with one line appended after opencode's own text:
 
 ```text

@@ -22,6 +22,7 @@ import {
   STREAM_TIMEOUT_MARKER,
   UNATTENDED_REPLAY_MARKER,
 } from "./cli-events.js"
+import { BUDGET_MARKER } from "./budget-ledger.js"
 import { DOCTOR_MARKER, parseDoctorCommandContent } from "./doctor.js"
 import { log } from "./logger.js"
 import { MODEL_FALLBACK_MARKER } from "./model-fallback.js"
@@ -61,6 +62,7 @@ const PLUGIN_NOTE_MARKERS = [
   UNATTENDED_REPLAY_MARKER,
   STALE_BUILD_MARKER,
   SUBAGENT_DISPATCH_MARKER,
+  BUDGET_MARKER,
 ]
 
 function isPluginNote(part: any): boolean {

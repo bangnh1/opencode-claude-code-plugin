@@ -312,6 +312,18 @@ export function cliSupportsInteractiveBypass(v: CliVersion | null): boolean {
 }
 
 /**
+ * `--max-turns`, which `--help` does NOT list on 2.1.293, so the
+ * `detectCliSupportsFlag` probe every other help-listed flag uses would always
+ * say no and the cap would never be passed. Read out of the 2.1.280 and 2.1.293
+ * binaries and run on 2.1.293 (h #g245), so the gate sits at the oldest that
+ * was checked. `--max-budget-usd` IS in `--help` and is gated by the probe.
+ */
+export function cliSupportsMaxTurns(v: CliVersion | null): boolean {
+  if (!v) return false
+  return gte(v, { major: 2, minor: 1, patch: 280 })
+}
+
+/**
  * The newest Claude Code the interactive transport was measured on end to end
  * (h #g205). The PTY reads the TUI's screen and its transcript, and neither is
  * a published contract, so a newer CLI is reported, never refused: the

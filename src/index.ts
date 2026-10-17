@@ -29,9 +29,15 @@ import {
   readAgentMarkdownRecords,
   setAgentRegistry,
   setDefaultSubagentCacheTtl,
+  setDefaultSubagentCliCaps,
   setDefaultSubagentModel,
   setProviderFallbackModels,
 } from "./agent-models.js"
+import {
+  resolveBudgetUsd,
+  resolveBudgetWarnAt,
+  resolvePositiveInteger,
+} from "./budget-ledger.js"
 import { cleanupStaleUnscopedInstall } from "./cleanup-stale.js"
 import { DOCTOR_COMMAND, DOCTOR_COMMAND_DESCRIPTION } from "./doctor.js"
 import { configureLogger, log } from "./logger.js"
@@ -250,6 +256,16 @@ export function createClaudeCode(
   const providerName = settings.providerID ?? settings.name ?? "claude-code"
   const proxyTools =
     preset?.proxyTools ?? settings.proxyTools ?? [...DEFAULT_PROXY_TOOL_NAMES]
+  // Budgets and caps (h #g245). Resolved per provider so a bad value WARNs
+  // once, and left undefined when unset so a default install does no
+  // bookkeeping at all.
+  const maxBudgetUsd = resolveBudgetUsd(settings.maxBudgetUsd, "maxBudgetUsd")
+  const budgetWarnAt =
+    maxBudgetUsd === undefined ? undefined : resolveBudgetWarnAt(settings.budgetWarnAt)
+  const maxBackgroundSubagents = resolvePositiveInteger(
+    settings.maxBackgroundSubagents,
+    "maxBackgroundSubagents",
+  )
 
   const createModel = (modelId: string): LanguageModelV3 => {
     return new ClaudeCodeLanguageModel(modelId, {
@@ -317,6 +333,11 @@ export function createClaudeCode(
       resumeAfterRestart: settings.resumeAfterRestart !== false,
       resumeAcrossModelChanges: settings.resumeAcrossModelChanges !== false,
       crossAccountResume: settings.crossAccountResume !== false,
+      // Resolved once per model, not per turn, for the reason `accountGroups`
+      // is: an invalid value WARNs at creation and a turn reads a checked one.
+      maxBudgetUsd,
+      budgetWarnAt,
+      maxBackgroundSubagents,
       usageWarnThresholds: resolveUsageWarnThresholds(settings.usageWarnThresholds),
       usageSwitchAt: resolveUsageSwitchAt(settings.usageSwitchAt),
       transport: settings.transport,
@@ -639,6 +660,13 @@ export async function buildAgentRegistry(config: OpenCodeConfig): Promise<void> 
     typeof configuredTtl === "string" ? configuredTtl : undefined,
   )
   setProviderFallbackModels(parseFallbackModelList(options?.fallbackModels))
+  setDefaultSubagentCliCaps({
+    maxTurns: resolvePositiveInteger(options?.defaultSubagentMaxTurns, "defaultSubagentMaxTurns"),
+    maxBudgetUsd: resolveBudgetUsd(
+      options?.defaultSubagentMaxBudgetUsd,
+      "defaultSubagentMaxBudgetUsd",
+    ),
+  })
 
   // Markdown agents may or may not reach a plugin's config hook (undocumented
   // either way), so they are read from disk and then overlaid with whatever
@@ -656,6 +684,13 @@ export async function buildAgentRegistry(config: OpenCodeConfig): Promise<void> 
       const value = agent[key] ?? bag[key]
       return typeof value === "string" ? value : undefined
     }
+    // The two CLI caps are numbers in opencode.json and strings in markdown
+    // frontmatter, so they are kept raw here and checked once, at spawn, by
+    // `resolveAgentCliCaps`.
+    const pickNumber = (key: string): number | string | undefined => {
+      const value = (agent as Record<string, unknown>)[key] ?? bag[key]
+      return typeof value === "number" || typeof value === "string" ? value : undefined
+    }
 
     // A list, unlike the four scalars, so it cannot go through `pick`, and an
     // empty declaration must not erase what the markdown file said.
@@ -670,6 +705,8 @@ export async function buildAgentRegistry(config: OpenCodeConfig): Promise<void> 
       reasoningEffort:
         pick("reasoningEffort") ?? records[name]?.reasoningEffort,
       cacheTtl: pick("cacheTtl") ?? records[name]?.cacheTtl,
+      maxTurns: pickNumber("maxTurns") ?? records[name]?.maxTurns,
+      maxBudgetUsd: pickNumber("maxBudgetUsd") ?? records[name]?.maxBudgetUsd,
       fallbackModels: declaredChain.length
         ? declaredChain
         : records[name]?.fallbackModels,
