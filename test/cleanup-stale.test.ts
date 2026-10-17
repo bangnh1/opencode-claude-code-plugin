@@ -11,6 +11,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -360,6 +361,11 @@ test("a sweep records the plugin version it ran for", async () => {
     const marker = JSON.parse(readFileSync(markerFile(box), "utf8"))
     assert.equal(marker.version, OUR_VERSION)
     assert.match(marker.at, /^\d{4}-\d{2}-\d{2}T/)
+    // The shared state directory is created here, before any store, and every
+    // store asks for 0700, so the creator must give it that mode.
+    if (process.platform !== "win32") {
+      assert.equal(statSync(dirname(markerFile(box))).mode & 0o777, 0o700)
+    }
   })
 })
 
