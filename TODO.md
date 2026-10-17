@@ -94,7 +94,15 @@ raised, so they survive context compaction; removed when answered, done or dropp
   and the maintainer deleted it ("that was not a go for that but a go for the PRs and repo work the
   post will be later"). It goes out only on an instruction that names the post. 2026-10-16, maintainer:
   "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
-  three P1 items are built and released.
+  three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
+  condition is met; the post still goes out only on an instruction that names it.
+
+- 2026-10-17, maintainer: "other sessions are doing thing dont get in their way and if they are done simply close
+  them (for example the README thing..) but not the actuve ones". By the time the check ran, the three finished
+  windows on this project (the README/funding session `ses_eb99133e6ffeoY4B3G7fLZLxwp`, `ses_f372b4085ffewv0zNM4sraaDZs`
+  from 09-23 and `ses_f51332afeffeOVVb2oXZKG5y5b` from 09-20) were already gone, and at 20:02 Herdr's restore
+  relaunched every window on this Mac with `opencode --session <id>`, those three included. Closing them now means
+  closing Herdr panes the operator just got back, so nothing was closed. Waiting on: now / later / drop.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -125,7 +133,7 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
-- 2026-10-17: the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, history g246).
+- 2026-10-17: the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, PR #121, history g246).
   Asked as "a visual line that represents a status bar/loading bar with an estimation of how much percent the
   task is completed". Maintainer chose, in order: an honest measured line over an estimated percentage
   ("Honest line, sidebar first"), the `▰▱` glyphs over box drawing ("this is nicer: ▰▱ i want this instead"),
@@ -133,8 +141,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   spend on the model line ("1 is ok just make sure we use plenty of colors and highlights and low lights to
   emphisis and distinguish the elements"). Code, tests, docs and the AGENTS.md rules are written, and the live
   rig passed on 1.19.0 and 2.0.31 (the `▰▱` glyphs one cell each, the todo fraction on 1.x, the pulse on 2.x, the
-  linger, the spend on the model line, zero plugin warnings; screens in history g246). Left: the PR and its merge.
-- 2026-10-16: research pass 2's P1 build. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
+  linger, the spend on the model line, zero plugin warnings; screens in history g246). PR #121 is open against
+  master after v0.56.0; left: its merge and the release.
+
+## Done
+
+- 2026-10-16 to 2026-10-17: **done**: research pass 2's P1 build, released as v0.56.0. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
   fresh session, history g242), measured live against opencode's own revert route. Lane B: DONE, PR #118 merged as
   `6cc612a` (`mapReadRules`, history g243; the first implementor died on appical's window, a second continued its
   worktree on the default account). Lanes C (usage before the wall, history g244) and D (budgets and caps, history
@@ -154,12 +166,18 @@ raised, so they survive context compaction; removed when answered, done or dropp
   fake-CLI skip list, the store test guards its POSIX mode asserts), merged as `3729af2`. Lane D2 delivered
   PR #120 (the parent merged master into it, keeping both lanes' additions side by side, added
   `budget.test.ts` to the Windows skip list, gate 1720/1720); its probes ran on the appical account because
-  the default window was closed. Then one release.
+  the default window was closed. Merged as `7d0cdf8`, but not on the first try: the main checkout had been
+  switched to another session's `progress-line` branch, so that merge and the TODO.md record before it landed
+  there, `git push origin master` pushed nothing, and deleting the lane branch closed PR #120 unmerged. Fixed
+  from the release worktree: the branch restored, the PR reopened, master fast-forwarded to the same commits
+  (GitHub then marked it merged). Lesson: a parent session commits from its own worktree on master, never from
+  the shared main checkout. The lane C2 finding below was fixed as `e3b1f6a` before the release, which is one
+  minor bump carrying all four P1 items (PRs #117 to #120).
   - Found by lane D2, follow-up: a headless `result`'s `total_cost_usd` is CUMULATIVE per Claude session, so
     every `turnStats` footer after a process's first shows the session's running total, not that turn's
     cost (h #g245 and the AGENTS.md `turnStats` bullet record it). Fix shape: print the turn's delta, the
     ledger's `costDelta` already computes it.
-  - Found by lane C2, to fix before the release (one line plus a test): `src/cleanup-stale.ts:103` creates the
+  - Found by lane C2, fixed before the release as `e3b1f6a` (one line plus a test): `src/cleanup-stale.ts:103` creates the
     shared `$XDG_STATE_HOME/opencode-claude-code-plugin` directory at startup with no mode, so it is `0755` and
     the `0700` every store's `mkdirSync` asks for applies only when a store creates it first. The files inside
     are `0600` either way, so names leak, not contents.
@@ -169,8 +187,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
     minutes. Candidate: a spawn that has not emitted `init` yet gets at least `MCP_TIMEOUT` plus a margin before
     the first fire. Cause correlated, not proven: the CLI's own MCP logs were not found; a spawn at 12:47:54
     answered within seconds.
-
-## Done
 
 - 2026-10-16: **done** (probes, no code): "go ahead with the recommended". The eleven verify-first probes of
   research pass 2 (h #g241): headless permission mode stays `default` under the hygiene env var; that env var

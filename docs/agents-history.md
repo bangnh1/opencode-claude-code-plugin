@@ -6108,8 +6108,8 @@ dirs, a private `serve`, `accounts: ["appical"]`:**
 
 - Not caused by this work: the shared state directory was `drwxr-xr-x`,
   because `src/cleanup-stale.ts` creates it at startup without a mode, so the
-  `0700` every store asks for only applies when it is first. Reported, not
-  fixed here.
+  `0700` every store asks for only applies when it is first. Reported there and fixed before the release:
+  `writeMarker` creates it `0700` now, with the assertion in `test/cleanup-stale.test.ts`.
 
 Whether a threshold note appears live depends on the account's real usage on
 the day; the thresholds, the dedup and the switch are carried by the fake-CLI

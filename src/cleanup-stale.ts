@@ -100,7 +100,9 @@ function markerVersion(): string | null {
 function writeMarker(version: string): void {
   const file = markerPath()
   try {
-    mkdirSync(dirname(file), { recursive: true })
+    // `0700`: this runs at startup, before any store, so it is usually what
+    // creates the shared state directory, and only the creator's mode counts.
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     writeFileSync(
       file,
       JSON.stringify({ version, at: new Date().toISOString() }, null, 2) + "\n",
