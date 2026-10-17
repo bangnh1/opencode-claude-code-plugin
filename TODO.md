@@ -180,7 +180,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   shasum `ada756b1…` matching the registry's version document). The maintainer's call on the estimate was "lets
   keep this and go forward with it as is later go back and learn from how it behaved and improve then
   contribute": the revisit is in the Future Features note, to be read off real `turn-history.json` samples and
-  the pane's bars, not re-derived.
+  the pane's bars, not re-derived. First observations, from a three-child haiku `task_batch` after the restart
+  (2026-10-18, `explore/claude-haiku-5-5` at low effort on `appical`): one child called Claude's native `Bash`
+  instead of the proxied one and was refused (`Bash is disabled for this session`), opencode reported
+  `Subagent failed`, and that child STILL wrote a 6 s sample beside the two real ones (25.0 s, 26.5 s), because
+  the CLI's own `result` was a success. So a child that failed on opencode's side skews its key's estimate low;
+  candidate for the revisit: skip the sample when the turn's last tool result is an error, or weight it down.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
