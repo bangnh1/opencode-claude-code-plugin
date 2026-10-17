@@ -27,6 +27,8 @@ A **Hooks Claude Code ran that failed** section covers your own Claude Code hook
 
 A **Background subagents** section opens with `running now: N (of M started by this process)`, the number of background subagents Claude dispatched through this opencode process that are still working, read with the same test `task_status` uses and without collecting anything. The rest of it is the gate and the collect/cancel ledger; see [Background subagents](background-subagents.md).
 
+An **Account usage** section lists the last usage reading Claude Code gave for every account and window: how much is used (`unknown` when Claude Code reported no number, which it does for an account with headroom, and `out` for a limit), the status it sent, the reset in your time zone (marked `window over` once it has passed), how long ago it was read, and which warning thresholds a `▌ **usage:**` line already announced in that window. It is read fresh from the same file the sidebar reads, so it covers every opencode process on the machine. `No reading yet` means no turn has reported one: Claude Code only reports when its view of the limits changes, and the interactive transport reports nothing until a limit. See [Usage before the limit](../configuration/accounts.md#usage-before-the-limit).
+
 ```text
 /claude-code-doctor usage
 ```

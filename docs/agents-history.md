@@ -6001,3 +6001,126 @@ default); the doctor's section, its "no spawn yet" state and the bundle
 withholding in `test/doctor.test.ts`; the ready block's count in
 `test/startup-diagnostics.test.ts`; and a `Read(<glob>)` argument surviving
 cmd's two parses, parentheses and all, in `test/windows-spawn.test.ts`.
+
+<a id="g244"></a>
+
+## Account usage before the limit: a reading per account per window, threshold notes, and a switch at a threshold
+
+2026-10-17, opencode 1.19.0, Claude Code 2.1.293. Follows the research pass
+in (h #g240) and (h #g241), which found the plugin threw away every usage
+number it was given except a rejection's.
+
+**The problem.** The headless CLI emits `rate_limit_event` whenever its view
+of the account's limits changes (h #g194). `parseRateLimitEvent` read all of
+it, but only a REJECTED event left anything behind (`rememberAccountLimit`):
+an `allowed_warning` at 90% was a NOTICE in a log that is off by default. So
+the first thing an operator ever saw about a window was the wall.
+
+**The unit, measured.** `utilization` is a FRACTION, not a percent. Read off
+the maintainer's own `plugin.log` on CLI 2.1.293: on 2026-10-17
+`allowed_warning` events carried `0.75` and `0.76` for
+`seven_day_overage_included` (12:48 to 12:55 UTC) and `0.91` for `five_hour`
+(12:57 and 12:59 UTC); the existing NOTICE had always rendered them as
+percents. The second measured fact matters as much: an `allowed` event on an
+account with headroom carries NO number. At 15:26 CEST a haiku `claude -p` on
+the appical account produced `{status: "allowed", rateLimitType: "five_hour",
+utilization: null, resetsAt: 1792261200, overageStatus: "rejected"}`, and the
+live run below got the same frame through the plugin. That is UNKNOWN, never
+zero: it crosses nothing, the doctor prints `unknown` and the sidebar `ok`.
+
+**What was built.**
+
+- `src/account-usage.ts`: `{utilization, resetsAt, status, observedAt,
+  noted}` per account per window, written on EVERY event (compaction and
+  child turns included, because it is a fact about the account), in
+  `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json`, the fifth
+  file there, with the discipline of the resume and spawn stores
+  (merge-on-write, atomic rename, `0600`, bounded to 32 accounts of 8
+  windows and eight days, an unreadable file is an empty store). It imports
+  nothing that logs, because the TUI reads it.
+- `noted` is the dedup: the thresholds a note already announced in that
+  window. It carries over a new reading only while the previous one is
+  current and is cleared once its reset has passed. Comparing two `resetsAt`
+  for equality was rejected: a reset rounded differently would re-announce
+  every crossing. A reading with no reset (the interactive transport's) is
+  current for five hours, the longest window `limitFactsFromText` can name.
+- One `▌ **usage:**` note (`USAGE_MARKER`, `formatUsageNote`) on a SERVED
+  turn whose account has an unannounced crossing of `usageWarnThresholds`
+  (default `[50, 75, 90, 95]`) or `usageSwitchAt` (default 90). Read off the
+  store rather than off this turn's event, so a crossing a compaction or a
+  subagent turn could not announce is said by the next ordinary turn on that
+  account. Gated like the stale-build note (h #g192): never compaction, never
+  `doGenerate`, never a child session. The child check is
+  `watchChildSession`, started in the prologue and read at the result without
+  waiting; an unanswered lookup means "do not speak", so an ordinary turn
+  never waits on opencode for it.
+- At `usageSwitchAt` with `accountFailover: "auto"`, the existing account
+  override is set on the turn's account until the window's reset, aimed at
+  `nextUsageSwitchAccount` (the failover candidates minus the running
+  account, accounts known to be out, and any account whose own reading is at
+  or over the same level, because moving to an account that is no better off
+  only moves the wall). The NEXT turn's prologue then spawns there and carries
+  the conversation exactly as a limit switch does (h #g218). With `"ask"` and
+  `"off"` nothing moves and no form is raised, because the form ends a FAILED
+  turn and this one was served: the note names the other accounts. The
+  override's WARN gets its own wording (`cause: "usage-threshold"`), because
+  "is out of usage" would be false.
+- The sidebar's `Accounts` lines (`src/account-sidebar.ts`, pure) share the
+  Subagents slot rather than claiming a second registration on either major.
+  The refresh clock now also runs while a sidebar is merely mounted, since a
+  reading arrives with no event the TUI can see; an idle tick is one `stat`,
+  and the usage clock moves once a minute so nothing is re-laid out.
+- The doctor's `Account usage` table, read fresh from the file, withholding
+  the TUI's own reset phrase in a bundle.
+- The interactive transport has no event, so its limit reply is the only
+  reading it writes: rejected, utilization unknown, the reset phrase.
+
+**Two traps the tests hit.** A fake-CLI turn with no `tools` argument is a
+title request and is answered by the stub (h #g36), so every turn there
+"finished" in 7 ms with the prompt as its text. And a fake CLI's own
+`--help`-style probes are separate processes, so "how many processes
+answered" has to be counted per answered message by pid, not per start.
+
+**Live, opencode 1.19.0, plugin loaded from the lane worktree, scratch XDG
+dirs, a private `serve`, `accounts: ["appical"]`:**
+
+- A first pair of turns was sent with a top-level `providerID`/`modelID`,
+  which opencode 1.19 reads as no model, so both ran its default on the
+  `default` account, which was out of usage that afternoon. Both ended on the
+  `▌ **usage limit:**` note, nothing was billed, and the store recorded
+  `default/five_hour {utilization: null, resetsAt: 1792249800000, status:
+  "rejected"}`. The probe rule is unchanged: send `model: {providerID,
+  modelID}` with the `@account` marker on the id.
+- The real pair, `claude-code-appical/claude-haiku-4-5@appical`: `one` and
+  `two`, both `stop`, $0.034 and $0.0039. One `spawning new claude process`
+  line for the session, so the second turn reused the child, and the store
+  shows one write: `appical/five_hour {utilization: null, resetsAt:
+  1792261200000, status: "allowed", noted: []}`, the frame measured at 15:26.
+  No note, correctly: the account had headroom and said no number.
+- The file was `-rw-------`. `/claude-code-doctor` over `POST
+  /session/{id}/command` printed:
+
+  ```text
+  | account | window | used | status | resets | observed | noted at |
+  | appical | five_hour | unknown | allowed | 2026-10-17 20:20 | 9.0s ago | none |
+  | default | five_hour | out | rejected | 2026-10-17 17:10 | 40.2s ago | none |
+  ```
+
+- Not caused by this work: the shared state directory was `drwxr-xr-x`,
+  because `src/cleanup-stale.ts` creates it at startup without a mode, so the
+  `0700` every store asks for only applies when it is first. Reported, not
+  fixed here.
+
+Whether a threshold note appears live depends on the account's real usage on
+the day; the thresholds, the dedup and the switch are carried by the fake-CLI
+tests.
+
+**Tests.** `test/account-usage.test.ts` (21: resolvers, the unit, currency,
+crossings and their refusals, `noted` carry-over, the store's round trip and
+modes, two writers, another process's mark, a restart, a reset clearing
+crossings, malformed files and entries, the age cutoff, the switch target,
+the note's wording), `test/account-usage-stream.test.ts` (8, real `doStream`
+over a fake CLI: 76% once, the reused process silent, the null reading,
+`"auto"` moving the next spawn, `"off"` and `"ask"` with no form, compaction
+deferring, a child session, both options off), `test/account-sidebar.test.ts`
+and the doctor's section in `test/doctor.test.ts`.

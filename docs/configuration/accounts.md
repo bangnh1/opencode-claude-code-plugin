@@ -60,6 +60,35 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-work" claude auth login
 
 The account model IDs are internally suffixed, for example `claude-sonnet-4-6@work`, so long-lived Claude subprocess sessions do not collide across accounts. The suffix is stripped before `claude --model` is called: by the wrapper script on macOS and Linux, by the plugin itself on Windows.
 
+### Usage before the limit
+
+Claude Code reports how much of a usage window an account has used whenever its view of the limits changes. The plugin keeps the last reading for every account and every window (the 5-hour one, the 7-day one, and so on), so you hear about a window filling up **before** it runs out, not at the wall. This works with one account too, where the account is called `default`.
+
+When a served turn's reading crosses one of `usageWarnThresholds` (by default 50, 75, 90 and 95 percent), the turn ends with one line after Claude's answer:
+
+```text
+▌ **usage:** the Claude account "work" has used 76% of the 5-hour window,
+which resets at 2026-10-17 18:00.
+```
+
+- Each threshold is said **once per account per window**: not again on the next turn, not by another opencode session on the same account, and not after an opencode restart. Once the window resets, its thresholds can be said again.
+- The reset time is in your own time zone, to the minute.
+- Never on a `/compact` turn (its text becomes the stored summary) or in a subagent's session (its reply can become the parent's `task` result). A crossing those turns could not announce is said by the next ordinary turn on that account.
+- The turn is not changed: it was served, and it finishes as served.
+- `"usageWarnThresholds": []` turns the notes off. The readings are still kept for the sidebar and the doctor.
+
+**Switching before the wall.** At `usageSwitchAt` (default 90 percent) the plugin acts on it, when another account in the same [account group](#account-groups) is configured and is not itself at that level:
+
+- With [`accountFailover: "auto"`](#automatic-failover), **new turns** move to the other account until the window resets, and the note says so: `New turns move to the "default" account until 2026-10-17 18:00.` It is the same account-wide switch a usage limit makes, so every session on the account follows, and the conversation is carried over the same way. The turn that crossed is not moved.
+- With `"ask"` or `"off"`, nothing moves and no form is raised (the form only ever answers a turn that failed): the note ends with `To keep working past the limit, pick a model from the "default" account.`
+- `"usageSwitchAt": false` turns the switch off. Like a limit's switch, it is held in memory and an opencode restart forgets it.
+
+**Where you see it.** The [sidebar](../guides/subagents-sidebar.md) shows one line per account with a current reading (`work · 5h 76% · resets 18:00`), and [`/claude-code-doctor`](../guides/doctor.md) lists every reading with the thresholds already announced.
+
+**Limits.** Claude Code only reports a reading when its view changes, so a long-lived Claude process may say nothing for several turns; the last reading stands until a newer one or its reset. An account with plenty of headroom is reported without a number, which the sidebar shows as `ok` and which never counts as zero. The [interactive transport](./transports.md) gets no reading at all: the only thing it records is a limit reply, which the sidebar shows as `limited` with the reset Claude Code named.
+
+The readings live in `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json` (`0600`): account names, window names, numbers and times, nothing else.
+
 ### When an account runs out of usage
 
 By default the turn ends with one line in the conversation and nothing else:

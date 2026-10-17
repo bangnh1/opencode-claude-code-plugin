@@ -23,7 +23,23 @@ Subagents
 - **Click a row** to open that subagent's session. opencode's own keys take you back: `up` returns to the parent, `left` and `right` step through the siblings. opencode routes to a session, never to a message, so the click opens the child session itself rather than scrolling the parent to the task.
 - **Order and fading**: running rows oldest first, then the last three finished rows newest first; a finished row drops off after ten minutes. With more than two rows the heading gets a `▼` you can click to fold the list into `▶ Subagents (2 running)`, the same way opencode's own MCP and Todo sections fold. With no subagents the section is not there at all.
 
-There is no option for it: it is always on, and it costs nothing while no subagent is listed (its clocks only run while a row is showing).
+There is no option for it: it is always on, and the subagent rows cost nothing while no subagent is listed (their clocks only run while a row is showing).
+
+## Account usage
+
+Under the subagents, an **Accounts** section shows one line per account with a current [usage reading](../configuration/accounts.md#usage-before-the-limit):
+
+```
+Accounts
+default · 5h ok · resets 18:00
+work · 5h 76% · resets 18:00
+```
+
+- **The window** is the one that matters most for that account: a window that ran out first, otherwise the fullest one. `5h` and `7d` are the 5-hour and 7-day windows.
+- **The level** is the percent used, in the theme's warning colour from 75%. `ok` means Claude Code reported the window without a number, which is how it reports an account with headroom. `limited` means the account is out, in the theme's error colour; on the [interactive transport](./interactive-transport.md) this is the only state there is, because it gets no readings.
+- **The reset** is local time, with the date when it is not today. A line disappears once its window has reset.
+
+With no reading at all, a single-account install included, there is no Accounts section. The readings come from `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json`, which the provider half writes and every opencode process shares. While a sidebar is on screen the TUI checks that file's size and time every 1.5 seconds and re-reads it only when it changed.
 
 ## Enabling it
 
