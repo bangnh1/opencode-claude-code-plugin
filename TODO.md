@@ -135,6 +135,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   fresh `claude` spawn of the next three minutes (both lanes and two build sessions) stayed silent past the 90 s
   start watchdog twice and ended as an error, nothing written. Re-dispatched 2026-10-17 13:00 CEST as ONE
   `task_batch` (one form to answer), same briefs (vault `Research pass 2/briefs/`, preamble updated): lane C `ses_eb6181559ffeRDgsFuHUvyd4os`, lane D `ses_eb618154fffeOZ1EYI2dn1OoWk`.
+  Both died on the "default" account's 5-hour window (resets 17:10 CEST) with uncommitted work in their worktrees
+  (C: `src/account-usage.ts`, `src/account-sidebar.ts` and wiring across 11 files; D: `src/budget-ledger.ts`,
+  per-agent caps and option types, not yet wired into the turn; neither had tests, docs or a history entry).
+  Maintainer: "limit hit", then "go". Re-dispatched 2026-10-17 15:35 CEST as ONE `task_batch` on the appical
+  window (fresh, resets 20:20), continuing the same worktrees with continuation briefs `lane-c2.md` and
+  `lane-d2.md` beside the originals: lane C2 `ses_eb5eb6718ffeM0ydCnCYAx6Kau`, lane D2 `ses_eb5eb670dffeKWQnXz9ZmLVDL0`.
   Then one release.
   - Found on the way, not built: the start watchdog (90 s) is shorter than the `MCP_TIMEOUT=120000` the plugin
     sets on every spawn (h #g235), so a fresh spawn whose MCP servers take between 90 and 120 s to answer is
