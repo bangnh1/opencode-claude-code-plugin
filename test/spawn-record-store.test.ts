@@ -63,12 +63,17 @@ test("the file is 0600 in a 0700 directory, because the state directory is share
   }
 })
 
-test("nothing but a model, an effort, an account and a time is ever written", () => {
+test("nothing but a model, an effort, an account, an agent and a time is ever written", () => {
   const dir = scratch()
   try {
-    recordSessionSpawn("ses_a", { model: "claude-opus-5-5", account: "alpha", ...({ prompt: "secret", cwd: "/x" } as object) } as any)
+    recordSessionSpawn("ses_a", {
+      model: "claude-opus-5-5",
+      account: "alpha",
+      agent: "build",
+      ...({ prompt: "secret", cwd: "/x" } as object),
+    } as any)
     const record = onDisk().sessions.ses_a
-    assert.deepEqual(Object.keys(record).sort(), ["account", "at", "model"])
+    assert.deepEqual(Object.keys(record).sort(), ["account", "agent", "at", "model"])
   } finally {
     _setSpawnRecordStorePathForTests(null)
     rmSync(dir, { recursive: true, force: true })
@@ -164,7 +169,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
       // A tool set, or the turn is a title request and never spawns.
       tools: [{ type: "function", name: "read", description: "Read a file", inputSchema: { type: "object", properties: {} } }],
       headers: { "x-session-affinity": affinity },
-      providerOptions: { "claude-code": { reasoningEffort: "high" } },
+      providerOptions: { "claude-code": { reasoningEffort: "high", opencodeAgent: "build" } },
     } as never)
     for await (const _part of (result as { stream: AsyncIterable<unknown> }).stream) {
       // drain
@@ -177,6 +182,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
     const record = onDisk().sessions[affinity]
     assert.equal(record.model, modelId)
     assert.equal(record.effort, "high")
+    assert.equal(record.agent, "build", "the agent the turn ran as, for the turn-history key")
     assert.equal(record.account, undefined, "a single-account install names no account")
   } finally {
     // Only this test's own process: other files' processes are not ours to end.

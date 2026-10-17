@@ -6278,3 +6278,450 @@ defaults in `test/agent-models.test.ts`; the refusal, the batch, the unreadable
 count, a real proxy server and the option off in
 `test/background-subagents.test.ts`; the section and the cap line under the
 count in `test/doctor.test.ts`; the marker in `test/turn-stats.test.ts`.
+
+<a id="g246"></a>
+
+## The sidebar's Progress line, and a subagent's spend on its model line
+
+2026-10-17, opencode 1.19.0 and 2.0.31, plugin from the working tree, a
+scripted fake `claude` reporting 2.1.293. Branch `progress-line`.
+
+**The ask.** "A visual line that represents a status bar/loading bar with an
+estimation of how much percent the task is completed", with a screenshot of
+another tool's thick-line-and-dot bar. Three things were put to the maintainer
+in forms and answered in this order: an honest measured line over an estimated
+percentage ("Honest line, sidebar first"); the `▰▱` glyphs over the box-drawing
+set that screenshot used ("this is nicer: ▰▱ i want this instead"), after the
+box-drawing version had been offered because every glyph in it is already drawn
+by opencode's own frames; and the spend on the model line ("1 is ok just make
+sure we use plenty of colors and highlights and low lights to emphisis and
+distinguish the elements"). On dependencies: "if we can get away with not having
+dependencies its better, but does not mean it should look bad", so the live rig
+below stays scratch and nothing was added to `package.json`.
+
+**Why no percentage.** Nothing a TUI plugin can read predicts how much of a
+model's task is left. The inputs a guess would use (the prompt's length, the
+model, the effort, the token count, this install's usual turn length) were each
+costed and declined: the retained `plugin.log` had turns for one agent spread
+from 18 s to 106 s, so "longer than usual" says nothing, and a bar built from
+them is a guess drawn as a measurement, which reads as the plugin knowing
+something it does not. What IS measurable is on the line instead.
+
+**Where it could go, measured on both binaries.** opencode 1.19.0's TUI slots
+are `sidebar_title` and `sidebar_footer` (`single_winner`, opencode's own),
+`sidebar_content` (append, ours at order 900 since h #g234), `session_prompt`
+(mode `replace`: a plugin claiming it REPLACES the editor mount and gets no
+default children to wrap, so a line above the prompt means remounting opencode's
+editor yourself), `session_prompt_right` (a small append area at the prompt's
+right end) and the `home_*` set. opencode 2.0.31's are `sidebar.content`,
+`sidebar.footer`, `prompt.footer`, `prompt.footer.status` (where its own `/btw`
+indicator sits), `session.panel` and `home.footer`. The sidebar is the one
+place both majors offer with no slot to take over, which is why the line is
+there; `session_prompt_right` and `prompt.footer.status` are the prompt-adjacent
+step if one is ever wanted. Also read off the binaries: 1.x's TUI store carries
+every session's todo list (`api.state.session.todo(id)`, fed by `todo.updated`,
+which is how its own `Todo` section draws), 2.x hands a TUI plugin NO todo state
+at all (its `data.session` is `get`, `root`, `family`, `cost`, `tps`, `status`,
+`permissions`, and `todowrite` is a name it drops from the tool vocabulary, h
+#g34), and BOTH majors keep a live `cost` on the session record (1.x
+`session.get(id).cost`, 2.x `data.session.cost(id)`, which sums a root's family
+and returns a child's own).
+
+**What the line is** (`src/progress-line.ts`, pure, imports only the sidebar
+module's text helpers, nothing that logs, h #g193):
+
+- The bar is ten cells. With a todo list it is the completed fraction, the line
+  says which in bold (`2/4`), and `filledCells` rounds so it is never full before
+  the last item and never empty once the first is done. Without a list it is a
+  pulse, three lit cells (`PULSE_RUN`) sweeping the track one cell every two
+  spinner ticks, which says only "working".
+- Elapsed since the last user message (`turnMessages` hands the host only that
+  tail, so a long session's earlier parts are never read per tick), else since
+  the TUI first saw the session busy (`createStatusWatch`, capped), the tool
+  calls made since it (left out when a fraction is shown), and the running tool
+  (the newest call while it is pending or running). `layoutProgressLine` drops
+  the call count first, then cuts the tool's name, when the line is too wide.
+- The session on screen gets it under a `Progress` heading above `Subagents`
+  while busy and for `PROGRESS_LINGER_MS` (15 s) after, filled behind ✓ or ✗ off
+  the last reply's error; every RUNNING subagent row gets it as a third line,
+  measured from the child's own session, and it leaves with the row's spinner.
+- A row's spend is opencode's own `cost` for that child, `formatCost` (`<$0.01`
+  rather than a false zero), right-aligned on the model line in its own role,
+  kept once the row has finished, and left off only when no space would
+  separate it from the label: the model is never cut for a number.
+- Clocks (h #g234's rule, extended): the 100 ms spinner runs while a subagent
+  OR the viewed session's turn runs, the refresh runs at 1 s while either runs
+  (the lines' second hand) and at 1.5 s while a row is listed or any sidebar is
+  mounted (the usage reading, h #g244).
+
+**Colours**, one theme key per element and only keys both majors supply, in
+`ROLE_COLOR` as a `Record` over the `Segment` role union so a role added without
+a colour fails the typecheck: bar done = 1.x `success` / 2.x
+`text.feedback.success.base`; pulse and spinner = `accent`; track = muted mixed
+half into the panel background; fraction = bold `text`; running tool = `info` /
+`text.feedback.info.base`; spend = 1.x `secondary` / 2.x
+`hue.interactive[shade]`; elapsed and calls stay muted. `Bun.stringWidth` with
+`ambiguousIsNarrow`, which is what OpenTUI lays out with (read off the 1.19.0
+binary), reports `▰`, `▱`, `━`, `╸`, `●`, `✓`, `✗` and `⠋` as one cell each on
+Bun 1.4.2.
+
+**The rig** (scratch, `/tmp/pl-rig`, not committed): the real opencode TUI in
+Bun 1.4.2's PTY at 160×45, mirrored into `@xterm/headless` 5 installed in that
+scratch directory only, scratch `HOME`/XDG dirs per major (1.x with the
+`tui.json` line, 2.x with `plugins: ["<repo>/dist"]` and `--standalone`), the
+last 44 columns captured once a second as text plus every non-blank cell's
+foreground, and a fake `claude` that speaks stream-json, calls the plugin's
+proxy over HTTP with the bearer token off its `--mcp-config`, and runs one of
+two scripts off the prompt: the parent creates four `TaskCreate` todos, starts
+one background `task` child, then four proxied `bash` calls of 6 s each with a
+`TaskUpdate` to `in_progress` and `completed` around each; the child runs four
+proxied `bash` calls of 10 s. `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
+on 1.x (h #g172). Both runs exited 0, and both `plugin.log`s carry zero WARN and
+zero ERROR lines.
+
+opencode 1.19.0, one second after Enter and then mid-turn (text, then the
+cells' colours on the default dark theme):
+
+```
+▼ Todo
+[ ] Read the sidebar sources
+[ ] Design the progress line
+[ ] Write the tests
+[ ] Record the screens
+Progress
+⠇ ▱▱▱▱▱▱▱▱▱▱ 0/4 · 1s
+```
+
+```
+▼ Todo
+[•] Read the sidebar sources
+…
+Progress
+⠧ ▱▱▱▱▱▱▱▱▱▱ 0/4 · 4s · bash
+Subagents
+⠧ general Survey the rig          bg
+  haiku-4.5
+  ▱▱▱▰▰▰▱▱▱▱ 2s · 1 call · bash
+```
+
+```
+Progress
+⠦ ▰▰▰▱▱▱▱▱▱▱ 1/4 · 12s · bash      ⠦ #9d7cd8 (accent)  ▰ #7fd88f (success)  ▱ #4a4a4a
+                                    1/4 #eeeeee bold  12s · #808080  bash #56b6c2 (info)
+```
+
+The fraction followed the ledger, `0/4` through `4/4`, as each `TaskUpdate`
+completed (h #g85's `todowrite` reaching 1.x's store). The turn ended at 33 s:
+
+```
+Progress
+✓ ▰▰▰▰▰▰▰▰▰▰ 4/4 · 33s             ✓ and ▰ #7fb088 (done), the rest muted
+⠏ general Survey the rig          bg
+  haiku-4.5
+  ▰▰▱▱▱▱▱▱▱▰ 38s · 4 calls · bash
+```
+
+and when the child finished ten seconds later its row became `✓ general Survey
+the rig  bg` / `haiku-4.5  $0.84` (the spend in `#5c9cf5`, 1.x's `secondary`),
+and the session line read `✓ ▰▰▰▰▰▰▰▰▰▰ 4/4 · 0s` for a fresh fifteen seconds.
+That `0s` is right: opencode delivered the child's result as a NEW parent turn
+(the `<task ... state="completed">` envelope, h #g172), the fake answered it in
+under a second, and the line measured that turn. The heading and the line were
+gone at t+15 s.
+
+opencode 2.0.31, the same prompt: no todo list, so the pulse, and V2's `shell`
+name (h #g34):
+
+```
+Progress
+⠧ ▱▱▱▰▰▰▱▱▱▱ 8s · 2 calls · shell   ▰ #9d7cd8 (accent)  ▱ #454545  shell #56b6c2
+Subagents
+⠧ general Survey the rig          bg
+  haiku-4.5
+  ▱▱▱▰▰▰▱▱▱▱ 4s · 1 call · shell
+```
+
+```
+Progress
+✓ ▰▰▰▰▰▰▰▰▰▰ 33s · 5 calls          #7fb088
+✓ general Survey the rig          bg
+  haiku-4.5                    $0.42  $0.42 #fab283 (hue.interactive)
+```
+
+The child's completion re-prompted the parent on 2.x as well (the synthetic
+`<subagent sessionID=… state="completed">` message, h #g176), so the same
+`✓ … 0s` turn appeared there, and the section was gone by t+15 s. The two
+spends differ because each major prices the fake's usage with its own catalog;
+both are the host's own number, which is the point.
+
+**Not built, by choice.** No estimated percentage (above). No prompt-adjacent
+line: the two slots for it are named above and nothing in this change stops a
+later step from using them. No per-session cost in the heading. No option: the
+lines cost nothing while nothing runs, and h #g234's "always on, no option"
+holds. The rig is not a dev dependency.
+
+Tests: `test/progress-line.test.ts` (`turnMessages`, `measureProgress` over a
+turn's calls, the running tool and the failed reply, `sessionProgress` while
+busy, the linger and its expiry, a stop older than the turn, `rowProgress`,
+`createStatusWatch` and its cap, `filledCells`' rounding edges, `pulseLit`'s
+wrap, `formatElapsed`, `layoutProgressLine`'s fit); `test/subagent-sidebar.test.ts`
+(`formatCost`, the spend right-aligned in its own role, kept on a finished row,
+left off rather than cutting the model, read through the `cost` input). The
+rendering's proof is the rig above. `dist/tui.js` greps zero for the logger
+prefix.
+
+##### The maintainer's pane review, the same evening
+
+With the `tui.json` line added (the open item above), the maintainer ran a
+turn in their own pane (opencode 1.19.0, Claude Code 2.1.300) and asked for
+three things, verbatim: "between progress bar and time need to be a ·",
+"between the work or default profile needs to be a ·", and "the time notation
+on the accounts needs to be short like 18/10/2026 23:22.123 so it fits fully".
+A fourth message, mid-turn, showed the first one differently: `⠋ ▱▱▱▱▱▰▰▰▱▱
+3m20s · 1 cal` "needs to be" `⠋ ▱▱▱▱▱▰▰▰▱▱  3m20s · 1 cal`, two spaces; asked
+which of the two they meant, they picked "Two spaces". What changed, and the
+cell counts behind each:
+
+- **Two spaces after the bar** (`layoutProgressLine`'s tail and budget). The
+  `·` was built first and taken out again; the tests pin the spaces.
+- **The spend after ` · ` on the model line**, the "profile" being the account
+  piece that ends the label. `sonnet-5.5 · high · appical · $0.42` is 35
+  cells and a row has 36, so the two-cell indent the sub-lines had would have
+  lost the dot on exactly the rows this install runs most (sonnet on a
+  seven-letter account). Both sub-lines now sit one cell in (`ROW_INDENT`),
+  the spend is five cells at most under ten thousand dollars (`$12.4`,
+  `$123`: a cent is noise past ten dollars), and the fit order is the
+  progress line's kind, the dot first (a space stands in), then the spend,
+  never the model: `sonnet-5.5 · xhigh · appical` gets the space form, and
+  `sonnet-5.5 · medium · appical-work` no spend.
+- **The reset in the usage note's notation**, `2026-10-18 01:20`: the same
+  length as the `18/10/2026 23:22` asked for, unambiguous in every locale, and
+  the one the plugin already prints (`formatLocalMinute`, which the pure
+  sidebar module cannot import because `src/cli-events.ts` logs). The row
+  cannot hold the word `resets`, a window, a level and a dated time (`appical ·
+  5h ok · resets 2026-10-18 01:20` is 41), so `resetSpellings` offers three
+  spellings, widest first, and `accountUsageLines` picks the widest that fits
+  EVERY line, so the column reads alike: the word goes, then the year
+  (`10-18 01:20`). A reset today stays `resets 18:00`. What the maintainer had
+  seen was `appical · 5h ok · resets Oct 18 01:…`, the line's own `…` at 37
+  cells, which is what "so it fits fully" was about.
+
+The sidebar is 42 columns whatever the terminal (`f(i,"width",42)`, read off
+the 1.19.0 binary for this), so none of it is a narrow-pane effect. Re-run on
+the rig afterwards with a two-account `account-usage.json` planted in each
+scratch state dir (resets 2026-10-18 01:20 local), both majors, both exited 0,
+no plugin WARN beyond the usual: 1.x running `⠧ ▰▰▰▱▱▱▱▱▱▱  1/4 · 8s` over
+`⠧ general Survey the rig          bg` / ` haiku-4.5` / ` ▱▱▱▰▰▰▱▱▱▱  6s · 1
+call · bash`, finished ` haiku-4.5 · $0.84`, and under it `appical · 5h ok ·
+2026-10-18 01:20` / `default · 5h 72% · 2026-10-18 01:20`; 2.x the same with
+the pulse (`⠇ ▱▱▱▱▰▰▰▱▱▱  8s · 2 calls`), ` haiku-4.5 · $0.42` and the same
+two account lines. Nothing drawn wider than 36 cells.
+
+One more from the same pane, after three background `explore` children had
+each run `sleep 10` under it so the section held three running rows at once:
+"Progress should probably say Main Progress ?". Right above `Subagents`, a
+bare `Progress` read as the subagents' heading, so it is `Main Progress` now
+(`buildHeading` in `src/tui.ts`, the one string; the guide, the skill reference
+and the rules say the same). Nothing else changed and the rig was not re-run
+for a heading string. The edge the name leaves open: viewing a child session
+itself, the line is that child's and the heading still says `Main`; the
+plugin does not read the viewed session's `parentID` for a heading, because
+a sidebar in a child session is a rare view and the word costs nothing there.
+
+## The progress bar estimates the turn from this install's own record (2026-10-17)
+
+h #g247. What the maintainer said, in their own pane with three background
+`explore` children running under the section: "⠦ ▱▱▱▰▰▰▱▱▱▱  these both dont
+make sense", "⠦  this is for progress", "▱▱▱▰▰▰▱▱▱▱  this is soposed to show
+estimation of progress time but it goes on and on.. not showing a begining
+or an end.. we need to show us the educated estimation based on the given
+prompt given amount of tokens needed/used based on the task etc something
+smart and acurate is this possible?". Asked which of three the bar should be
+without a todo list (a usual-duration bar from recorded turns; the same with
+a prompt-aware fit; no bar without a real end), they answered "1 and 2 but
+intelligently and simply genious and mathematic and as acurate as possible",
+then "go". That reverses the rule recorded earlier the same day (h #g246),
+that the prompt, the model, the effort and the token count were deliberately
+not inputs. It was reversed by the person who set it, and this entry records
+what replaced it and why the replacement is honest.
+
+### What is possible, and what is not
+
+A turn's length is not predictable from its prompt: an agentic turn is as
+long as what its tools return makes it, and that has not happened when the
+bar is first drawn. What is knowable is the record of turns like it, so the
+estimate is statistical and conditional, never a reading of the task:
+
+- One sample per served turn, keyed on the agent and the model the turn
+  really ran as (the spawn record's pair, which is why that record now
+  carries `agent`), with the prompt's length and the effort on it:
+  `src/turn-history.ts`, `turn-history.json` beside the other stores.
+- At elapsed `t`, the recorded turns that lasted longer than `t` are the
+  ones this turn can still be like. The estimate is the weighted median of
+  what remained of them at `t` (the median residual life, conditioned on
+  survival to `t`), the total is `t` plus that, and the bar is `t` over the
+  total. Weights: a Gaussian kernel on the log of the prompt's length (a
+  factor of four is one standard deviation, so a prompt four times longer
+  still weighs e^-1/2 and sixteen times e^-2; fifty characters are added to
+  both lengths first so a one-word prompt is not infinitely far from an
+  empty one), times 0.5 for a sample at another effort. Three samples
+  minimum.
+- Past the longest recorded turn nothing is left to condition on: the bar is
+  full in the warning colour and the total shown is the usual one (the
+  weighted median of every sample), so `3m20s/~2m18s` reads as "over the
+  usual by a minute".
+- The line says `elapsed/~total` in the slot the plan's fraction takes,
+  `1m02s/~2m30s`. The raw fill `t/T` can fall when a short sample drops out
+  of the survivors and `T` jumps (samples 20, 60, 100 s: at 19 s the total
+  is 60 s and the fill 0.32; at 21 s the total is 80 s and the fill 0.26),
+  so `createFillMemory` holds the bar at its maximum within a turn, keyed on
+  the turn's own start, and a cell never goes dark again while the total
+  shown still moves.
+- With no record, or fewer than three samples, there is no bar at all: the
+  spinner says the session works, and the pulse said nothing more than that,
+  which is what the maintainer objected to.
+
+The second of the offered options, a per-agent fit of duration against the
+prompt's length, is what the kernel does without a fitted parameter: a
+local estimate in prompt length rather than a regression, which is right
+for a dozen samples and cannot extrapolate wrongly. A token-count
+conditioning was considered and not built: on 1.x the finish of a mid-turn
+step reports zero output tokens on purpose (h #g169), so the TUI has no live
+token count to condition on, and `thinking_tokens` is approximate by the
+CLI's own description (h #g191). The call count is not the same unit on the
+two halves (the TUI counts tool parts, the CLI's `num_turns` counts API
+round trips), so it is not a survival condition either; both stay open to a
+later measurement.
+
+### Where the duration comes from
+
+The start is `Date.now()` at the top of `doStreamForHost`, before the
+prologue's first await, on the step whose prompt `startsTurn`: it ends in a
+user message that does not follow a tool result (a tool-result step
+continues the turn that made the call, and so does a user message the host
+promoted beside one, h #g204). It waits in `markTurnStart`, keyed on the
+session key, because a turn is a run of steps and only the last one sees the
+`result`. The end is `completeResult` after `runAutoContinue` returned
+false, on a result that is not an error and set no `resultFailure`, never on
+compaction or the `default` affinity; `takeTurnStart` is a take, so the
+second `result` a CLI-side background task can produce in one turn (h #g189)
+records nothing. The prologue's own waits (the version probe, the MCP
+connect wait, the spawn) are inside the sample on purpose: the TUI's elapsed
+starts at the user message, and the sample must be in the same clock.
+Measured on the fake CLI in `test/turn-history.test.ts`: a result delayed
+80 ms records a sample of at least 80 ms and no more than the turn's own
+wall time, under `build/claude-sonnet-5-5`, with the prompt's length (the
+`<system-reminder>` block taken off) and the effort.
+
+### What the TUI reads
+
+`createTurnHistoryReader` beside the spawn-record reader, re-read on a
+changed stat on the same tick, so the first estimate appears within a second
+of the result that completed the third sample. The key for a row and for the
+session on screen is the spawn record's `agent` and `model` (a child's title
+agent is the fallback for a record written before this change); the effort
+is the record's; the prompt length is the turn's own user message,
+`promptChars` over its text parts with opencode's `<system-reminder>`, dcp's
+reminder and its message id taken off, the same function the server counts
+with, so the kernel compares like with like. A message with no text at all is
+unknown (weight 1), never zero. On 2.x the user message's text items and a
+synthetic message's `text` are counted; 2.x still hands a TUI plugin no todo
+list, so there the bar is the estimate or nothing.
+
+The roles changed with the bar: `bar-pulse` is gone, `bar-over`, `estimate`
+and `estimate-over` are new, mapped onto the warning and text colours the
+theme already supplies, so neither adapter gained a colour. `estimateCells`
+is never full before `over`, for the reason `filledCells` is never full
+before the last item: a full bar must always mean one thing.
+
+### Not re-run on the rig
+
+The rig's fake `claude` answers in a fixed time, so a rig run would draw the
+bar the unit tests already lay out and prove nothing more; the live proof is
+the maintainer's own pane after a restart, once three turns of their build
+agent are on record. Recorded here rather than claimed.
+
+## Every account in the sidebar from the first draw, and the reset time in its own colour (2026-10-17)
+
+h #g248. The maintainer, after watching the estimate land in their pane:
+"good now lets keep this and go forward with it as is later go back and
+learn from how it behaved and improve then contribute. just 2 things before
+that. make sure all accounts and their info is loaded the first time in
+accounts. also make sure the time has diffrent colow from the middle status
+like limited or 7d extra 87%. the date and time is the exact same colow
+which maybe needs to diffrent colow".
+
+### What they had seen
+
+The live store at that moment, read before anything changed: `appical` with
+a `five_hour` reading of status `rejected` (utilization unknown, reset
+2026-10-18 01:20, `noted` 50/75/90) observed at 22:43, and `default` with a
+`five_hour` `allowed` reading observed at 23:17 plus a
+`seven_day_overage_included` one at 0.9 observed at 23:30. The restart was
+at about 23:15. So the sidebar's first draw after it listed `appical ·
+limited · 2026-10-18 01:20` alone, from the reading that had persisted, and
+`default` joined two minutes later when its first turn's `rate_limit_event`
+arrived, reading `default · 7d extra 90% · 10-21 14:00`. That is "all
+accounts ... loaded the first time": an account was listed only once it had
+reported, and (h #g244) made that worse by design, dropping a line once its
+window had reset. And on both lines the whole tail after the name took the
+level's colour, so `limited` and the time it lifts were one red run.
+
+### What is possible before a turn
+
+Nothing about usage: the CLI reports it on the stream, from API response
+headers, so there is no reading without an API call, and a startup call per
+account is a spend the plugin does not make (the title stub exists to avoid
+one). What the plugin does know at startup is which accounts it is
+configured with and, read-only off each account's own `.claude.json`, its
+plan tier (`src/account-tier.ts`, h #g221). So that is what the first draw
+shows.
+
+- `registerSidebarAccounts` (`src/account-tier.ts`) runs in the V1 config
+  hook before the account expansion deletes the seed entry, and in the V2
+  provider transform after `planV2Providers`, with the configured list or
+  `default` alone. It calls `registerKnownAccounts` (`src/account-usage.ts`),
+  which writes `known: { <account>: { tier?, at } }` into
+  `account-usage.json` beside the readings. The list REPLACES the one on
+  disk: it is the configured set, not an observation, and merging would have
+  kept a removed account on screen until it aged out. The readings are never
+  touched by it, and every reading writer carries `known` through
+  (`parseStore` returns both maps, `writeStore` takes both). Nothing is
+  written when the file already names the same accounts with the same tiers,
+  which is what a second V2 transform pass costs: one read. A `known` another
+  writer mangled reads as nothing registered and leaves the readings legible.
+- The TUI reader gained `known()`, the same map while the file is unchanged,
+  and `accountUsageLines` lays out the union of the readings' accounts and
+  the registered ones. An account with no current reading reads `default ·
+  Max 20x · no reading yet`; the tier is given up before such a line is cut,
+  and such a line never moves the reset column the other lines share.
+- A single-account install now draws `default · <tier> · no reading yet`
+  from its first start, which supersedes (h #g244)'s "no reading, no
+  section".
+- The tests that drive the config hook point the store at a scratch file
+  (`test/index-hooks.test.ts`), and the accounts path is tested through
+  `registerSidebarAccounts` with scratch config dirs rather than through the
+  hook, whose expansion builds a wrapper under the home directory.
+
+### The colours
+
+The tail is segments now, each with a role: the separators and the word
+`resets` muted, the level in its state's colour as before (`limited` error,
+75% and up warning, else muted), the reset TIME in a new `reset` role mapped
+to the theme's info colour on both majors (`theme.info` / `text.feedback.info`,
+what the running tool takes), the tier in a new `tier` role mapped to the
+secondary colour (`theme.secondary` / `hue.interactive`, what the spend
+takes). Info rather than secondary for the time because opencode 2's
+interactive hue read orange beside the warning colour on the rig, and the
+time must read apart from a warning-level level. `fitSegments` cuts a run
+with `…` and ends the line at a separator that does not fit.
+
+### Verified
+
+Unit tests on the line model, the store and the registration
+(`test/account-sidebar.test.ts`, `test/account-usage.test.ts`,
+`test/account-tier.test.ts`, `test/index-hooks.test.ts`); the full suite,
+typecheck and build; `dist/tui.js` with zero logger prefixes. Not re-run on
+the rig: the fake CLI emits no `rate_limit_event`, so a rig run would show
+the registered lines the unit tests already lay out. The live proof is the
+maintainer's pane after a restart.

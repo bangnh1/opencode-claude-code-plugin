@@ -1,45 +1,75 @@
 ---
 title: 'Subagents in the sidebar'
-description: 'A live list of the current session''s subagents, what each really runs as, and one click to open it.'
+description: 'A progress line for the session, and a live list of its subagents: what each really runs as, what it has spent, and one click to open it.'
 sidebar:
   order: 9
 ---
 
-The session sidebar gets a **Subagents** section at the bottom while the session you are looking at has subagents. One row per subagent, running ones first:
+The session sidebar gets a **Subagents** section at the bottom while the session you are looking at has subagents, and a [**Main Progress** line](#progress) above it while that session's turn runs. One row per subagent, running ones first:
 
 ```
+Main Progress
+⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash
 Subagents
 ⠋ explore Survey docs for stale…  bg
-  haiku-4.5 · alpha
+ haiku-4.5 · alpha · $0.07
+ ▰▰▰▱▱▱▱▱▱▱  45s/~2m10s · read
 ⠋ implementor Fix the dispatch form…
-  sonnet-5.5 · high · default
+ sonnet-5.5 · high · default · $0.42
+ ▰▰▰▰▰▰▰▰▱▱  3/4 · 2m10s · edit
 ✓ explore Summarise README        bg
-  haiku-4.5 · alpha
+ haiku-4.5 · alpha · $0.03
 ```
 
 - **The glyph** is a spinner in the theme's accent colour while the subagent runs, a ✓ when it finished and a ✗ when it failed or was cancelled. A finished row is greyed out.
 - **Then the agent type and the task description**, cut with an ellipsis to fit the sidebar. A dim `bg` marks a [background](./background-subagents.md) dispatch, which is the one you would otherwise lose track of.
-- **The muted second line is what the subagent really runs as**: model, reasoning effort, and on a multi-account install the account. It is read from what the plugin actually spawned, not from what opencode asked for, so an agent's `forceModel` or `reasoningEffort`, a [dispatch form](../configuration/subagents.md#choosing-per-dispatch-not-per-file) answer, the fallback chain and an account switch all show up here. opencode's own footer in the child session shows the model it asked for, which can differ. The effort is the one piece in colour, the theme's warning (yellow) colour, faded once the row is finished, because it is what most often differs from one subagent to the next. Effort appears once the subagent's first turn has started; a piece that is not known is left out.
+- **The muted second line is what the subagent really runs as**: model, reasoning effort, and on a multi-account install the account. It is read from what the plugin actually spawned, not from what opencode asked for, so an agent's `forceModel` or `reasoningEffort`, a [dispatch form](../configuration/subagents.md#choosing-per-dispatch-not-per-file) answer, the fallback chain and an account switch all show up here. opencode's own footer in the child session shows the model it asked for, which can differ. The effort is in colour, the theme's warning (yellow) colour, faded once the row is finished, because it is what most often differs from one subagent to the next. Effort appears once the subagent's first turn has started; a piece that is not known is left out. The line ends with **the subagent's spend so far**, `· $0.42`, in the theme's secondary colour: opencode's own cost figure for that child session, to the cent under ten dollars and five characters at most above (`$12.4`, `$123`), kept after the row finishes. When the line has no room for the dot a space stands in for it, and when it has no room for the number the number is left off: the model is never cut to make space for it.
+- **A running row gets a third line**, the same [progress line](#progress) the session itself gets, measured from the subagent's own session.
 - **Click a row** to open that subagent's session. opencode's own keys take you back: `up` returns to the parent, `left` and `right` step through the siblings. opencode routes to a session, never to a message, so the click opens the child session itself rather than scrolling the parent to the task.
 - **Order and fading**: running rows oldest first, then the last three finished rows newest first; a finished row drops off after ten minutes. With more than two rows the heading gets a `▼` you can click to fold the list into `▶ Subagents (2 running)`, the same way opencode's own MCP and Todo sections fold. With no subagents the section is not there at all.
 
-There is no option for it: it is always on, and the subagent rows cost nothing while no subagent is listed (their clocks only run while a row is showing).
+There is no option for any of it: it is always on, and it costs nothing while nothing runs. The spinner and the one-second tick behind the progress lines run only while a turn or a subagent is running; with only finished rows listed the sidebar rechecks them every 1.5 seconds.
+
+## Progress
+
+Above the subagents, under a **Main Progress** heading (main, as against the subagents listed under it), one line for the session you are looking at, while its turn runs and for fifteen seconds after it ends:
+
+```
+Main Progress
+⠋ ▰▰▰▰▱▱▱▱▱▱  1m02s/~2m30s · bash
+```
+
+What the bar shows depends on what the session has, in this order:
+
+- **A todo list** (Claude Code's `TaskCreate` family reaches opencode as `todowrite`; a subagent needs `permission: { todowrite: "allow" }` to keep one): the bar is the share of items completed, in the theme's success colour, and the line says which in bold, `2/4 · 1m03s`. It never fills before the last item is done and never empties once the first is. opencode 2 hands a TUI plugin no todo list, so there the bar is always the next kind.
+- **An estimate from this install's own record.** The plugin records how long every served turn took, per agent and model, in `$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json` (a duration, the prompt's length, the effort and a time; no text). With three or more such turns on record the bar is this turn's elapsed over its expected total, and the line says both: `1m02s/~2m30s`. The total is the weighted median of what remained of the recorded turns that had lasted longer than this one has so far (the ones it can still turn out like), weighted toward turns whose prompt was about as long and that ran at the same effort. It rises as the turn outlasts more of them, and the bar only ever advances within a turn. Past the longest recorded turn the bar is full in the warning colour and the total shown is the usual one, `3m20s/~2m18s`: this turn is over the usual by that much. The first turns of a new agent or model have no estimate yet.
+- **Neither**: no bar. The spinner says the session is working, and a bar that could not fill would say nothing the spinner does not.
+
+Then **elapsed** since your last message (for a subagent, since its dispatch), the **tool calls** made since it (left out when a fraction or an estimate is shown), and the **tool running now** in the theme's info colour. When the line is too wide the call count goes first, then the tool's name is cut.
+
+**When the turn ends** the bar fills in the success colour behind a ✓, or in the error colour behind a ✗ when the last reply failed, stays fifteen seconds, and goes. A subagent's line goes with its spinner. With nothing running there is no Main Progress section at all.
+
+The estimate is honest about its basis and no more: it is this install's own past, not a reading of the task, because what a turn will do depends on what its tools return. Expect it to miss by a factor of two on some turns while the record is short (one agent's turns on one machine ranged from 18 s to 106 s in an afternoon); it tightens as the record fills. Nothing is read from the prompt beyond its length, and no model is asked.
+
+The colours are the theme's own, so every theme supplies them. On opencode 1: filled cells `success` (`warning` once over the usual), the track `textMuted` pulled halfway toward `backgroundPanel`, the fraction `text` in bold and the estimate `text`, the running tool `info`, a subagent's spend `secondary`. On opencode 2: `text.feedback.success` and `text.feedback.warning`, `text.muted` toward `background`, `text.base`, `text.feedback.info`, `hue.interactive`.
 
 ## Account usage
 
-Under the subagents, an **Accounts** section shows one line per account with a current [usage reading](../configuration/accounts.md#usage-before-the-limit):
+Under the subagents, an **Accounts** section lists every account the plugin is configured with (the one `default` account when none is), from the first draw, each with its current [usage reading](../configuration/accounts.md#usage-before-the-limit) once one has arrived:
 
 ```
 Accounts
 default · 5h ok · resets 18:00
-work · 5h 76% · resets 18:00
+home · Max 20x · no reading yet
+work · 7d extra 90% · 10-21 14:00
 ```
 
-- **The window** is the one that matters most for that account: a window that ran out first, otherwise the fullest one. `5h` and `7d` are the 5-hour and 7-day windows.
+- **The window** is the one that matters most for that account: a window that ran out first, otherwise the fullest one. `5h` and `7d` are the 5-hour and 7-day windows, `7d extra` the 7-day one Claude Code reports with extra usage included.
 - **The level** is the percent used, in the theme's warning colour from 75%. `ok` means Claude Code reported the window without a number, which is how it reports an account with headroom. `limited` means the account is out, in the theme's error colour; on the [interactive transport](./interactive-transport.md) this is the only state there is, because it gets no readings.
-- **The reset** is local time, with the date when it is not today. A line disappears once its window has reset.
+- **The reset** is local time, in the theme's info colour so it reads apart from the level beside it (the word `resets` stays muted): `resets 18:00` today, and on another day the date in the notation the usage-limit note uses, `2026-10-18 01:20`. That date is too wide for the word `resets` beside a window and a level, so the word goes first and then the year (`10-18 01:20`), the same way on every line so the column reads alike.
+- **No reading yet** is an account that has not reported in its current window. Claude Code reports usage on the first turn of a process and whenever its view changes, so until an account's first turn its line shows the plan tier read off its own `.claude.json` (`Max 20x`, `Pro`, in the theme's secondary colour) and `no reading yet`, and it reads so again once the last window it reported has reset. On a long account name the tier goes before the line is cut.
 
-With no reading at all, a single-account install included, there is no Accounts section. The readings come from `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json`, which the provider half writes and every opencode process shares. While a sidebar is on screen the TUI checks that file's size and time every 1.5 seconds and re-reads it only when it changed.
+The accounts come from the plugin's own startup: the provider half writes the configured list into `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json` beside the readings, replacing the previous list, so an account removed from the config leaves the sidebar at the next opencode start. While a sidebar is on screen the TUI checks that file's size and time every 1.5 seconds and re-reads it only when it changed.
 
 ## Enabling it
 
@@ -58,3 +88,5 @@ Use the same spec you have in `opencode.json`, a `file://` checkout path include
 ## What it reads
 
 The list is built from opencode's own state in the TUI: the current session's child sessions, its `task` (1.x) or `subagent` (2.x) tool calls, and the message opencode adds to the parent when a background subagent ends. The model, effort and account line comes from a small file the provider half writes, `$XDG_STATE_HOME/opencode-claude-code-plugin/session-spawns.json` (`~/.local/state/...` by default): one entry per session holding a model id, an effort level, an account name and a time, and nothing else. It is rewritten only when what a session spawns as changes, and bounded to the newest 256 sessions of the last seven days.
+
+The progress lines read the session's messages from your last one on, their tool parts, the todo list opencode 1's TUI keeps per session, and opencode's own busy state; a subagent's spend is the `cost` on opencode's session record. They write nothing.

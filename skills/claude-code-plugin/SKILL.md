@@ -425,10 +425,13 @@ at 2026-10-17 18:00.
   to pick a model from. No form after a served turn.
 - The CLI reports only when its view changes, so a reused process can be silent for
   several turns; the last reading stands until a newer one or its reset.
-- Where to look: the TUI sidebar's `Accounts` lines (`work · 5h 76% · resets 18:00`,
-  `ok` for a reading without a number, `limited` for a refusal) and the doctor's
+- Where to look: the TUI sidebar's `Accounts` lines, one per configured account from
+  the first draw (`work · 5h 76% · resets 18:00`, `work · 5h 76% · 2026-10-18 01:20`
+  for a reset on another day, `ok` for a reading without a number, `limited` for a
+  refusal, `home · Max 20x · no reading yet` before an account's first turn reports,
+  the reset time in its own colour apart from the level) and the doctor's
   `Account usage` table, which also shows which thresholds were already noted. "No
-  reading yet" there with a recent turn usually means the interactive transport.
+  reading yet" with a recent turn usually means the interactive transport.
 
 ### When an account runs out of usage
 
@@ -979,6 +982,20 @@ the theme's warning colour, faded on a finished row). That line is what
 the plugin really spawned, read from `$XDG_STATE_HOME/opencode-claude-code-plugin/session-spawns.json`,
 so `forceModel`, an agent's `reasoningEffort`, a dispatch-form answer, the fallback chain
 and a failover all show there, while opencode's own footer shows the model it asked for.
+The model line ends with the subagent's spend so far (`· $0.42`, opencode's own session cost,
+kept after it finishes; on a tight line the dot goes before the number does), and a running
+row gets a third line: the same progress line the viewed session gets above the section
+under a `Main Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
+`▰▱` bar, two spaces, then the todo list's completed fraction with `2/4` when the session has
+one (opencode 1 only; opencode 2 exposes no todo list to a TUI plugin), else the turn's
+elapsed over its estimated total (`1m02s/~2m30s`: the weighted median of what remained of
+this agent and model's recorded turns that lasted longer than this one so far, weighted
+toward turns with a prompt of about this length at this effort, read from
+`$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json`, which the plugin writes at
+every served result; full in the warning colour once past every recorded turn), else no bar
+until three turns of that agent and model are on record; plus the call count (when neither
+is shown) and the running tool. No model call, no option, nothing read from the prompt but
+its length.
 Clicking a row opens the subagent's session; `up` returns to the parent. More than two
 rows fold behind a `▼` heading. Setup: nothing on opencode 2; on opencode 1 the
 `tui.json` line under Minimum install. If the section never appears on 1.x, that line is
