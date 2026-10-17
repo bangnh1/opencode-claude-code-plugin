@@ -48,6 +48,7 @@ let opencodeClient: OpencodeClient | null = null
 export function setOpencodeClient(client: unknown): void {
   if (client && typeof client === "object") {
     opencodeClient = client as OpencodeClient
+    childSessionAnswers.clear()
   }
 }
 
@@ -208,6 +209,31 @@ export async function fetchSessionParentId(
     })
     return undefined
   }
+}
+
+/** Whether a session is a subagent's, per session id; a parent never changes. */
+const childSessionAnswers = new Map<string, boolean>()
+const MAX_CHILD_SESSION_ANSWERS = 256
+
+/**
+ * Whether `sessionID` is a child (subagent) session, asked once per session per
+ * process and without waiting: the returned function reads `undefined` until
+ * opencode has answered, which a caller must treat as "do not speak". For a
+ * decision made inside a synchronous handler long after the prologue started
+ * the lookup (the usage note, h #g244), so an ordinary turn neither waits on
+ * the lookup nor repeats it. `"default"` has no session and is not a child.
+ */
+export function watchChildSession(sessionID: string): () => boolean | undefined {
+  if (!sessionID || sessionID === "default") return () => false
+  const known = childSessionAnswers.get(sessionID)
+  if (known !== undefined) return () => known
+  let answer: boolean | undefined
+  void fetchSessionParentId(sessionID).then((parentID) => {
+    answer = !!parentID
+    if (childSessionAnswers.size >= MAX_CHILD_SESSION_ANSWERS) childSessionAnswers.clear()
+    childSessionAnswers.set(sessionID, answer)
+  })
+  return () => answer
 }
 
 export type SessionRunState = "busy" | "idle" | "unknown"

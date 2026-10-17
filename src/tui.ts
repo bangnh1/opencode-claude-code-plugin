@@ -6,6 +6,13 @@
  * runs as (`sonnet-5.5 · high · alpha`). Clicking a row opens that subagent's
  * session; opencode's own `up` key goes back to the parent.
  *
+ * Below it, in the same slot, an `Accounts` section: one line per account
+ * with a current usage reading (`appical · 5h 72% · resets 18:00`), from the
+ * store the server half writes on every `rate_limit_event`
+ * (`src/account-usage.ts`, laid out by `src/account-sidebar.ts`, h #g244). It
+ * shares the slot rather than claiming a second one, so neither major has a
+ * second registration to accept, and draws nothing until a reading exists.
+ *
  * Always on: there is no option. One module serves both majors (h #g234):
  *
  *   - opencode 1.x loads TUI plugins from `tui.json`'s `plugin` list, never
@@ -42,6 +49,8 @@ import {
   type TaskPartInput,
 } from "./subagent-sidebar.js"
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
+import { createAccountUsageReader, type AccountUsage } from "./account-usage.js"
+import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
 
 export const SUBAGENTS_TUI_PLUGIN_ID = "opencode-claude-code-plugin.subagents"
 
@@ -133,12 +142,23 @@ function createSidebar(host: SidebarHost) {
   const records = createSpawnRecordReader()
   let recordMap: Map<string, SpawnRecord> = attempt(() => records.read(), new Map())
   const [recordVersion, setRecordVersion] = createSignal(0)
+  // The `Accounts` lines (h #g244): every account's last usage reading, from
+  // the store the server half writes on each `rate_limit_event`. Its own clock
+  // value, so a tick that only rechecks the readings does not re-derive the
+  // subagent rows, which walk the session's messages.
+  const usageReader = createAccountUsageReader()
+  const [usage, setUsage] = createSignal<AccountUsage>(attempt(() => usageReader.read(), new Map()))
+  const [usageNow, setUsageNow] = createSignal(Date.now())
 
   // One spinner clock and one refresh clock for every mounted section, each
   // running only while something needs it: nothing ticks while no subagent is
   // listed, and the spinner stops the moment the last one finishes.
   const sectionsRunning = new Set<symbol>()
   const sectionsShowing = new Set<symbol>()
+  // Every mounted sidebar, whatever it shows: a usage reading arrives with no
+  // event the TUI can see, so the one `stat` that finds it runs while a
+  // sidebar is on screen, and nothing runs once none is.
+  const sectionsMounted = new Set<symbol>()
   let spinner: ReturnType<typeof setInterval> | undefined
   let refresh: ReturnType<typeof setInterval> | undefined
   const syncClocks = () => {
@@ -148,16 +168,25 @@ function createSidebar(host: SidebarHost) {
       clearInterval(spinner)
       spinner = undefined
     }
-    if (sectionsShowing.size > 0 && !refresh) {
+    const wanted = sectionsShowing.size > 0 || sectionsMounted.size > 0
+    if (wanted && !refresh) {
       refresh = setInterval(() => {
-        const next = attempt(() => records.read(), recordMap)
-        if (next !== recordMap) {
-          recordMap = next
-          setRecordVersion((value) => value + 1)
+        if (sectionsShowing.size > 0) {
+          const next = attempt(() => records.read(), recordMap)
+          if (next !== recordMap) {
+            recordMap = next
+            setRecordVersion((value) => value + 1)
+          }
+          setNow(Date.now())
         }
-        setNow(Date.now())
+        // The reader hands back the same map while the file is unchanged, and
+        // the clock moves once a minute (a reset is shown to the minute), so
+        // an idle tick re-lays nothing out.
+        setUsage(attempt(() => usageReader.read(), usage()))
+        const minute = Math.floor(Date.now() / 60_000) * 60_000
+        if (minute !== usageNow()) setUsageNow(minute)
       }, REFRESH_INTERVAL_MS)
-    } else if (sectionsShowing.size === 0 && refresh) {
+    } else if (!wanted && refresh) {
       clearInterval(refresh)
       refresh = undefined
     }
@@ -250,9 +279,36 @@ function createSidebar(host: SidebarHost) {
     return section
   }
 
+  const buildAccounts = (lines: AccountUsageLine[]): OpentuiNode => {
+    const section = createElement("box")
+    const title = createElement("text")
+    const bold = createElement("b")
+    insertNode(bold, createTextNode("Accounts"))
+    insertNode(title, bold)
+    effect(() => setProp(title, "fg", host.colors().text))
+    insertNode(section, title)
+    for (const line of lines) {
+      const text = createElement("text")
+      setProp(text, "wrapMode", "none")
+      for (const segment of line.segments) {
+        const span = createElement("span")
+        insertNode(span, createTextNode(segment.text))
+        effect(() => setProp(span, "style", { fg: roleColor(host.colors(), segment.role) }))
+        insertNode(text, span)
+      }
+      insertNode(section, text)
+    }
+    return section
+  }
+
   const render = (sessionID: () => string | undefined): OpentuiNode => {
     const root = createElement("box")
+    const subagentsBox = createElement("box")
+    const accountsBox = createElement("box")
+    insertNode(root, subagentsBox)
+    insertNode(root, accountsBox)
     const key = Symbol("subagents-section")
+    sectionsMounted.add(key)
     const [expanded, setExpanded] = createSignal(true)
     const rows = createMemo(() => {
       const parentID = sessionID()
@@ -270,19 +326,30 @@ function createSidebar(host: SidebarHost) {
     onCleanup(() => {
       sectionsRunning.delete(key)
       sectionsShowing.delete(key)
+      sectionsMounted.delete(key)
       syncClocks()
     })
-    insert(root, () => {
+    insert(subagentsBox, () => {
       const list = rows()
       if (list.length === 0) return null
       return attempt(() => buildSection(list, expanded, setExpanded), null)
     })
+    const accountLines = createMemo(() =>
+      attempt(() => accountUsageLines(usage(), usageNow()), [] as AccountUsageLine[]),
+    )
+    insert(accountsBox, () => {
+      const lines = accountLines()
+      if (lines.length === 0) return null
+      return attempt(() => buildAccounts(lines), null)
+    })
+    syncClocks()
     return root
   }
 
   const dispose = () => {
     sectionsRunning.clear()
     sectionsShowing.clear()
+    sectionsMounted.clear()
     syncClocks()
   }
   return { render, dispose }

@@ -6,6 +6,7 @@ import {
   normalizeAccountName,
 } from "./accounts.js"
 import { accountsShareGroup, type AccountGroups } from "./account-groups.js"
+import { accountUsageAtOrOver } from "./account-usage.js"
 import {
   describeRateLimitWindow,
   formatResetsAt,
@@ -268,6 +269,56 @@ export function formatUsageLimitNote(input: {
   return `\n${USAGE_LIMIT_MARKER} ${what} ${advice}\n`
 }
 
+/** Leading text of the `▌` note a served turn ends with when a window crossed a threshold. */
+export const USAGE_MARKER = "▌ **usage:**"
+
+/**
+ * The one note a served turn ends with when the account's usage crossed one of
+ * `usageWarnThresholds` (or `usageSwitchAt`) in a window, said BEFORE the
+ * window runs out rather than at the wall (h #g244).
+ *
+ * One sentence per window that crossed, each with the utilization and the
+ * reset in the operator's LOCAL time, as the usage-limit note gives it. Then,
+ * when the switch threshold was crossed, either where new turns go now
+ * (`accountFailover: "auto"`) or which other account the operator can pick a
+ * model from. Its own text part, registered in `PLUGIN_NOTE_MARKERS`.
+ */
+export function formatUsageNote(input: {
+  account: string
+  windows: ReadonlyArray<{ window: string; percent: number; resetsAt?: number; resetsText?: string }>
+  /** Set when `"auto"` moved new turns: the account and until when. */
+  movedTo?: { target: string; until?: number }
+  /** The accounts to name when the switch threshold was crossed and nothing moved. */
+  candidates?: readonly string[]
+}): string {
+  const account = normalizeAccountName(input.account || DEFAULT_ACCOUNT)
+  const clauses = input.windows.map((entry) => {
+    const window = describeRateLimitWindow(entry.window) ?? "a usage window"
+    const resets = formatResetsAtLocal(entry.resetsAt)
+    const when = resets
+      ? `, which resets at ${resets}`
+      : entry.resetsText
+        ? `, which resets ${entry.resetsText}`
+        : ""
+    return `${entry.percent}% of ${window}${when}`
+  })
+  const used =
+    clauses.length <= 1
+      ? clauses.join("")
+      : `${clauses.slice(0, -1).join("; ")}; and ${clauses[clauses.length - 1]}`
+  let then = ""
+  if (input.movedTo) {
+    const until = formatResetsAtLocal(input.movedTo.until)
+    then = ` New turns move to the "${normalizeAccountName(input.movedTo.target)}" account ${
+      until ? `until ${until}` : "until opencode restarts"
+    }.`
+  } else {
+    const others = describeOtherAccounts(input.candidates ?? [])
+    if (others) then = ` To keep working past the limit, pick a model from ${others}.`
+  }
+  return `\n${USAGE_MARKER} the Claude account "${account}" has used ${used}.${then}\n`
+}
+
 export function isAccountLimitError(input: {
   rateLimit?: RateLimitInfo | null
   resultText?: string | null
@@ -384,6 +435,11 @@ export function setAccountOverride(
   target: string,
   until?: number,
   now = Date.now(),
+  /**
+   * Why. `"usage-threshold"` is the switch BEFORE the wall (`usageSwitchAt`,
+   * h #g244): the account still has usage, so the WARN must not say it ran out.
+   */
+  cause: "usage-limit" | "usage-threshold" = "usage-limit",
 ): void {
   const from = normalizeAccountName(source || DEFAULT_ACCOUNT)
   const to = normalizeAccountName(target)
@@ -402,6 +458,14 @@ export function setAccountOverride(
     until = undefined
   }
   accountOverrides.set(from, { target: to, until })
+  if (cause === "usage-threshold") {
+    log.warn("claude account is near its usage limit; new turns move to another account until the window resets", {
+      source: from,
+      target: to,
+      until: until ?? null,
+    })
+    return
+  }
   log.warn(
     `Claude account "${from}" is out of usage; this and every other session on it now runs on "${to}"${
       until ? ` until ${new Date(until).toISOString()}` : " until opencode restarts"
@@ -603,6 +667,26 @@ export function nextAutoFailoverAccount(
 ): string | undefined {
   return candidates.find(
     (account) => !tried.has(account) && !isAccountKnownUnavailable(account, now),
+  )
+}
+
+/**
+ * The account a switch at `usageSwitchAt` moves new turns to: the automatic
+ * switch's choice, minus every account whose own recorded usage is already at
+ * or over the same threshold, because moving onto an account that is no better
+ * off only moves the wall (h #g244).
+ */
+export function nextUsageSwitchAccount(
+  candidates: readonly string[],
+  exclude: ReadonlySet<string>,
+  switchAt: number,
+  now = Date.now(),
+): string | undefined {
+  return candidates.find(
+    (account) =>
+      !exclude.has(account) &&
+      !isAccountKnownUnavailable(account, now) &&
+      !accountUsageAtOrOver(account, switchAt, now),
   )
 }
 

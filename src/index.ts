@@ -20,6 +20,7 @@ import {
 } from "./accounts.js"
 import { readAccountTier } from "./account-tier.js"
 import { resolveAccountGroups } from "./account-groups.js"
+import { resolveUsageSwitchAt, resolveUsageWarnThresholds } from "./account-usage.js"
 import {
   type AgentRecord,
   agentDirectories,
@@ -316,6 +317,8 @@ export function createClaudeCode(
       resumeAfterRestart: settings.resumeAfterRestart !== false,
       resumeAcrossModelChanges: settings.resumeAcrossModelChanges !== false,
       crossAccountResume: settings.crossAccountResume !== false,
+      usageWarnThresholds: resolveUsageWarnThresholds(settings.usageWarnThresholds),
+      usageSwitchAt: resolveUsageSwitchAt(settings.usageSwitchAt),
       transport: settings.transport,
       interactive: settings.interactive,
       interactiveBypass: settings.interactiveBypass,
