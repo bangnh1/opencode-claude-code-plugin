@@ -141,7 +141,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   Maintainer: "limit hit", then "go". Re-dispatched 2026-10-17 15:35 CEST as ONE `task_batch` on the appical
   window (fresh, resets 20:20), continuing the same worktrees with continuation briefs `lane-c2.md` and
   `lane-d2.md` beside the originals: lane C2 `ses_eb5eb6718ffeM0ydCnCYAx6Kau`, lane D2 `ses_eb5eb670dffeKWQnXz9ZmLVDL0`.
-  Then one release.
+  Lane C2 delivered PR #119 (two Windows-only test fixes added by the parent: the stream test joined the
+  fake-CLI skip list, the store test guards its POSIX mode asserts). Then one release.
+  - Found by lane C2, to fix before the release (one line plus a test): `src/cleanup-stale.ts:103` creates the
+    shared `$XDG_STATE_HOME/opencode-claude-code-plugin` directory at startup with no mode, so it is `0755` and
+    the `0700` every store's `mkdirSync` asks for applies only when a store creates it first. The files inside
+    are `0600` either way, so names leak, not contents.
   - Found on the way, not built: the start watchdog (90 s) is shorter than the `MCP_TIMEOUT=120000` the plugin
     sets on every spawn (h #g235), so a fresh spawn whose MCP servers take between 90 and 120 s to answer is
     killed before its `system`/`init` frame, and right after a wake from sleep that is every spawn for a few
