@@ -94,7 +94,15 @@ raised, so they survive context compaction; removed when answered, done or dropp
   and the maintainer deleted it ("that was not a go for that but a go for the PRs and repo work the
   post will be later"). It goes out only on an instruction that names the post. 2026-10-16, maintainer:
   "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
-  three P1 items are built and released.
+  three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
+  condition is met; the post still goes out only on an instruction that names it.
+
+- 2026-10-17, maintainer: "other sessions are doing thing dont get in their way and if they are done simply close
+  them (for example the README thing..) but not the actuve ones". By the time the check ran, the three finished
+  windows on this project (the README/funding session `ses_eb99133e6ffeoY4B3G7fLZLxwp`, `ses_f372b4085ffewv0zNM4sraaDZs`
+  from 09-23 and `ses_f51332afeffeOVVb2oXZKG5y5b` from 09-20) were already gone, and at 20:02 Herdr's restore
+  relaunched every window on this Mac with `opencode --session <id>`, those three included. Closing them now means
+  closing Herdr panes the operator just got back, so nothing was closed. Waiting on: now / later / drop.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
