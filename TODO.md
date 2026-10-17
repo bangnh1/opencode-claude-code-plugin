@@ -125,17 +125,23 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
-- 2026-10-16: research pass 2's P1 build, one implementor lane at a time while only the default account has
-  headroom (appical's 5-hour window is out until 2026-10-17 01:00; both first lanes died on it). Lane A: DONE,
-  PR #117 merged as `96c33f4` (replay a rewound thread into a fresh session, history g242); not yet measured
-  against a real opencode `/undo`, a pre-release probe. Lane B: the first implementor
-  (`ses_eb9bcacaaffeucb96z0trWDwtZ`) left an uncommitted first cut in `../opencode-claude-code-plugin-read-rules`
-  (branch `map-read-deny-rules`) and found opencode's default `*.env` read rule is an `ask`, not a deny;
-  continued 22:30 CEST by `ses_eb9917ce8ffeZb1DDSJ5uJxFdL` on the default account (history g243). Next: lane C,
-  usage before the wall (per-account gauge, threshold notes, pre-limit switch); lane D, spend and turn caps
-  (`maxBudgetUsd`, `--max-turns` from `steps`, `--max-budget-usd` per agent, `maxBackgroundSubagents`). Briefs
-  in the vault under `Research pass 2/briefs/` (copies of `/tmp/lane-b2.md`, `/tmp/lane-c.md`, `/tmp/lane-d.md`);
-  dispatch when lane B delivers or appical reopens. Then one release.
+- 2026-10-16: research pass 2's P1 build. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
+  fresh session, history g242), measured live against opencode's own revert route. Lane B: DONE, PR #118 merged as
+  `6cc612a` (`mapReadRules`, history g243; the first implementor died on appical's window, a second continued its
+  worktree on the default account). Lanes C (usage before the wall, history g244) and D (budgets and caps, history
+  g245): first dispatched 2026-10-16 23:17 CEST, but `subagentDispatch: "ask"` held both calls for the operator's
+  answer overnight (`proxy call still waiting, no deadline` every five minutes in plugin.log) until the forms were
+  answered at 12:44 CEST on 2026-10-17, seconds after the Mac woke from sleep (pmset: lid wake 12:44:01); every
+  fresh `claude` spawn of the next three minutes (both lanes and two build sessions) stayed silent past the 90 s
+  start watchdog twice and ended as an error, nothing written. Re-dispatched 2026-10-17 13:00 CEST as ONE
+  `task_batch` (one form to answer), same briefs (vault `Research pass 2/briefs/`, preamble updated): lane C `ses_eb6181559ffeRDgsFuHUvyd4os`, lane D `ses_eb618154fffeOZ1EYI2dn1OoWk`.
+  Then one release.
+  - Found on the way, not built: the start watchdog (90 s) is shorter than the `MCP_TIMEOUT=120000` the plugin
+    sets on every spawn (h #g235), so a fresh spawn whose MCP servers take between 90 and 120 s to answer is
+    killed before its `system`/`init` frame, and right after a wake from sleep that is every spawn for a few
+    minutes. Candidate: a spawn that has not emitted `init` yet gets at least `MCP_TIMEOUT` plus a margin before
+    the first fire. Cause correlated, not proven: the CLI's own MCP logs were not found; a spawn at 12:47:54
+    answered within seconds.
 
 ## Done
 
