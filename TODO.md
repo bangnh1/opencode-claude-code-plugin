@@ -98,14 +98,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it.
 
-- 2026-10-17, maintainer: "other sessions are doing thing dont get in their way and if they are done simply close
-  them (for example the README thing..) but not the actuve ones". By the time the check ran, the three finished
-  windows on this project (the README/funding session `ses_eb99133e6ffeoY4B3G7fLZLxwp`, `ses_f372b4085ffewv0zNM4sraaDZs`
-  from 09-23 and `ses_f51332afeffeOVVb2oXZKG5y5b` from 09-20) were already gone, and at 20:02 Herdr's restore
-  relaunched every window on this Mac with `opencode --session <id>`, those three included. Closing them now means
-  closing Herdr panes the operator just got back, so nothing was closed. 2026-10-17, maintainer: "?" (the
-  question was unclear); re-posed as one form: close those three relaunched panes, or leave them.
-
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
   `.claude.json` (pinned 1.3.0), opencode's slack pinned to 1.3.0 (backups `*.bak-slack-20261008-214042`).
@@ -138,6 +130,14 @@ raised, so they survive context compaction; removed when answered, done or dropp
 Nothing in progress.
 
 ## Done
+
+- 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
+  it and close them if they are already done and finished then like i said close and done". The three finished
+  windows on this project, relaunched by Herdr's restore at 20:02, were checked against opencode's database and
+  the repo: the README/funding session (`51a0aed`, pushed; `.github/FUNDING.yml` already carried the Sponsor
+  key), the skill-bridge dedup session of 09-23 (shipped as PR #45, `f8d93f9`, `bridgeSkipNativeSkills`) and the
+  zshrc/skill session of 09-20 (config work outside the repo, reported complete). Nothing was left to
+  consolidate, so the three opencode processes were ended with SIGTERM; their pane shells were left alone.
 
 - 2026-10-16 to 2026-10-17: **done**: research pass 2's P1 build, released as v0.56.0. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
   fresh session, history g242), measured live against opencode's own revert route. Lane B: DONE, PR #118 merged as
