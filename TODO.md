@@ -69,8 +69,24 @@
 
 ## Backlog
 
-Nothing queued here; the working backlog is the vault note
-`opencode-claude-code-plugin/Future Features.md`.
+Feature ideas live in the vault note `opencode-claude-code-plugin/Future Features.md`; this list is
+checks and suspected defects found in passing.
+
+- 2026-10-17: `resumeAfterRestart` refused in the maintainer's own pane. Restarting opencode 1.19.0 on
+  session `ses_eb61279e8ffexih00sExaC6KYv` (same key, same account wrapper) logged `not resuming the claude
+  session from before the restart {"reason":"conversation-changed"}` and then `replaying the conversation as
+  text ... "reason":"no-sibling-recorded","messages":251` with 50 messages dropped by the 180,000-character
+  bound. So the recorded digest chain was not a prefix of the history the restarted host handed over.
+  Candidates to test: opencode-dcp's `<dcp-message-id>` tags renumbered after the restart (they are part
+  of the hashed message text), or the restarted host rendering an earlier message differently (a tool
+  part's output, a question result). Reproduce with two turns, a restart and a diff of the two digest
+  chains before touching the comparison.
+- 2026-10-17: no todo tool reached this headless main conversation on Claude Code 2.1.300 (`TaskCreate`,
+  `TaskUpdate`, `TaskList` absent from the model's tool list and not found by `ToolSearch`), although the
+  spawn's `--disallowedTools` was only `Bash Edit MultiEdit Write WebFetch Agent AskUserQuestion`. The todo
+  ledger (h #g85) and the sidebar's todo fraction (h #g246) both read `TaskCreate` off the stream, so check
+  whether 2.1.300 still offers it in `--print` mode and under what gate; if it is gone, the fraction is only
+  reachable through opencode's own `todowrite` on 1.x.
 
 ## Deferred decisions
 
@@ -96,6 +112,21 @@ raised, so they survive context compaction; removed when answered, done or dropp
   "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
   three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
   condition is met; the post still goes out only on an instruction that names it.
+
+- 2026-10-17: merge PR #121 (the sidebar's `Progress` line and per-subagent spend, branch `progress-line`,
+  CI green, `MERGEABLE CLEAN`), then the usual `[skip-ci]` record commit on master and the release
+  (`npm version minor`, since it is a new user-visible feature, then `git push origin master --follow-tags`).
+  Live-tested in the maintainer's own pane on 2026-10-17 after `tui.json` gained the plugin line. Waiting on:
+  now / later / drop.
+
+- 2026-10-17: `/tmp/pl-rig`, the scratch PTY rig (fake `claude`, `@xterm/headless` in its own
+  `node_modules`, the captured sidebar logs). Nothing in the repo refers to it. Waiting on: delete now /
+  later / keep.
+
+- 2026-10-17: `~/.config/opencode/tui.json` now carries
+  `"plugin": ["file:///Users/khalil/code/Private/opencode-claude-code-plugin"]`, added so the TUI half could
+  be tested in the maintainer's pane. On 1.x that line is the only way the sidebar sections load, so it stays
+  for daily use unless the maintainer wants the sections gone. Waiting on: keep / remove.
 
 - 2026-10-17, maintainer: "other sessions are doing thing dont get in their way and if they are done simply close
   them (for example the README thing..) but not the actuve ones". By the time the check ran, the three finished
@@ -141,8 +172,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   spend on the model line ("1 is ok just make sure we use plenty of colors and highlights and low lights to
   emphisis and distinguish the elements"). Code, tests, docs and the AGENTS.md rules are written, and the live
   rig passed on 1.19.0 and 2.0.31 (the `▰▱` glyphs one cell each, the todo fraction on 1.x, the pulse on 2.x, the
-  linger, the spend on the model line, zero plugin warnings; screens in history g246). PR #121 is open against
-  master after v0.56.0; left: its merge and the release.
+  linger, the spend on the model line, zero plugin warnings; screens in history g246). The maintainer's own-pane
+  review the same evening asked for two spaces after the bar (first "a ·", then "needs to be" two spaces; asked,
+  picked the spaces), a `·` before the spend, and a reset time that fits: built as `· $0.42` with the two sub-lines
+  one cell in, and `2026-10-18 01:20` with the word and the year dropped in that order, the same way on every
+  line; re-run on the rig, both majors. PR #121 is open against master after v0.56.0; left: its merge and the
+  release.
 
 ## Done
 

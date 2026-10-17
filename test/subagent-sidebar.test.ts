@@ -344,7 +344,7 @@ test("layoutRow fits the sidebar, right-aligns bg, and puts the label on a muted
   const foreground = layoutRow(row(), SIDEBAR_ROW_WIDTH, 0)
   assert.equal(flat(foreground.first), "⠋ implementor Fix the dispatch form…")
   assert.ok(Array.from(flat(foreground.first)).length <= SIDEBAR_ROW_WIDTH)
-  assert.equal(flat(foreground.second), "  sonnet-5.5 · high · alpha")
+  assert.equal(flat(foreground.second), " sonnet-5.5 · high · alpha")
   assert.deepEqual(
     foreground.first.map((segment) => segment.role),
     ["spinner", "muted", "agent", "muted", "description"],
@@ -352,7 +352,7 @@ test("layoutRow fits the sidebar, right-aligns bg, and puts the label on a muted
   // Only the effort is in colour; the separators, model and account stay muted.
   assert.deepEqual(
     foreground.second.map((segment) => [segment.text, segment.role]),
-    [["  ", "muted"], ["sonnet-5.5", "muted"], [" · ", "muted"], ["high", "effort"], [" · ", "muted"], ["alpha", "muted"]],
+    [[" ", "muted"], ["sonnet-5.5", "muted"], [" · ", "muted"], ["high", "effort"], [" · ", "muted"], ["alpha", "muted"]],
   )
 
   const background = layoutRow(row({ agent: "explore", description: "Survey docs for stale links", background: true }))
@@ -402,9 +402,14 @@ test("layoutRow keeps a very long agent name from pushing the description off th
   assert.ok(line.includes("…"), line)
 })
 
-test("formatCost is dollars to the cent, never a false zero, and nothing for nothing", () => {
+test("formatCost is dollars to the cent under ten, five cells under ten thousand, never a false zero, and nothing for nothing", () => {
   assert.equal(formatCost(0.42), "$0.42")
-  assert.equal(formatCost(12.3456), "$12.35")
+  assert.equal(formatCost(9.99), "$9.99")
+  assert.equal(formatCost(9.996), "$10.0")
+  assert.equal(formatCost(12.3456), "$12.3")
+  assert.equal(formatCost(99.96), "$100")
+  assert.equal(formatCost(123.4), "$123")
+  assert.equal(formatCost(1000), "$1000")
   assert.equal(formatCost(0.004), "<$0.01")
   assert.equal(formatCost(0), undefined)
   assert.equal(formatCost(-1), undefined)
@@ -412,39 +417,49 @@ test("formatCost is dollars to the cent, never a false zero, and nothing for not
   assert.equal(formatCost(undefined), undefined)
 })
 
-test("layoutRow right-aligns the spend on the label's line in its own colour, and keeps it once finished", () => {
+test("layoutRow puts the spend after the label behind a dot, in its own colour, and keeps it once finished", () => {
   const running = layoutRow(row({ cost: 0.42 }))
-  assert.equal(flat(running.second), "  sonnet-5.5 · high · alpha    $0.42")
-  assert.equal(Array.from(flat(running.second)).length, SIDEBAR_ROW_WIDTH)
+  assert.equal(flat(running.second), " sonnet-5.5 · high · alpha · $0.42")
+  assert.ok(Array.from(flat(running.second)).length <= SIDEBAR_ROW_WIDTH)
   assert.deepEqual(running.second.slice(-2).map((segment) => [segment.text, segment.role]), [
-    ["    ", "muted"],
+    [" · ", "muted"],
     ["$0.42", "cost"],
   ])
   // Only the spend and the effort are in colour; a finished row keeps the spend's.
   const finished = layoutRow(row({ cost: 0.42, state: "done" }))
-  assert.equal(flat(finished.second), "  sonnet-5.5 · high · alpha    $0.42")
+  assert.equal(flat(finished.second), " sonnet-5.5 · high · alpha · $0.42")
   assert.equal(finished.second.at(-1)?.role, "cost")
   assert.ok(finished.second.slice(0, -1).every((segment) => segment.role === "muted" || segment.text === "high"))
   // Nothing spent yet, or no record of it: the line is as it was.
-  assert.equal(flat(layoutRow(row({ cost: 0 })).second), "  sonnet-5.5 · high · alpha")
-  assert.equal(flat(layoutRow(row({ cost: undefined })).second), "  sonnet-5.5 · high · alpha")
-  // A spend with no label at all still gets the line.
-  assert.equal(flat(layoutRow(row({ label: "", effort: undefined, cost: 1.5 })).second), `${" ".repeat(31)}$1.50`)
+  assert.equal(flat(layoutRow(row({ cost: 0 })).second), " sonnet-5.5 · high · alpha")
+  assert.equal(flat(layoutRow(row({ cost: undefined })).second), " sonnet-5.5 · high · alpha")
+  // A spend with no label at all still gets the line, with nothing to separate it from.
+  assert.equal(flat(layoutRow(row({ label: "", effort: undefined, cost: 1.5 })).second), " $1.50")
 })
 
-test("layoutRow leaves the spend off rather than cut the model to make room for it", () => {
-  // Three accounts' names and a long model: the label alone is 28 cells, the spend needs 6 more.
-  const tight = layoutRow(row({ label: "sonnet-4.5 · high · appical", cost: 0.42 }))
-  assert.equal(flat(tight.second), "  sonnet-4.5 · high · appical  $0.42")
-  const over = layoutRow(row({ label: "sonnet-4.5 · high · appical-work", cost: 0.42 }))
-  assert.equal(flat(over.second), "  sonnet-4.5 · high · appical-work")
+test("layoutRow gives up the dot before the spend, and the spend before the model", () => {
+  // The common sonnet row on a seven-letter account is 27 cells; with the dot
+  // the spend needs eight more, which is why the line sits one cell in.
+  const dotted = layoutRow(row({ label: "sonnet-5.5 · high · appical", cost: 0.42 }))
+  assert.equal(flat(dotted.second), " sonnet-5.5 · high · appical · $0.42")
+  assert.equal(Array.from(flat(dotted.second)).length, SIDEBAR_ROW_WIDTH)
+  // One cell more and the dot goes: a space stands in for it.
+  const tight = layoutRow(row({ label: "sonnet-5.5 · xhigh · appical", cost: 0.42 }))
+  assert.equal(flat(tight.second), " sonnet-5.5 · xhigh · appical $0.42")
+  assert.deepEqual(tight.second.slice(-2).map((segment) => [segment.text, segment.role]), [
+    [" ", "muted"],
+    ["$0.42", "cost"],
+  ])
+  // No room for even that: the spend goes and the label stays whole.
+  const over = layoutRow(row({ label: "sonnet-5.5 · medium · appical-work", cost: 0.42 }))
+  assert.equal(flat(over.second), " sonnet-5.5 · medium · appical-work")
   assert.ok(over.second.every((segment) => segment.role !== "cost"))
   // A label that was itself cut has no room either.
   const cut = layoutRow(row({ label: "sonnet-4.5 · high · an-account-name-this-long", cost: 0.42 }))
   assert.ok(flat(cut.second).endsWith("…"), flat(cut.second))
   assert.ok(cut.second.every((segment) => segment.role !== "cost"))
   // And a spend that does not fit next to no label is no line at all.
-  assert.deepEqual(layoutRow(row({ label: "", effort: undefined, cost: 1.5 }), 6).second, [])
+  assert.deepEqual(layoutRow(row({ label: "", effort: undefined, cost: 1.5 }), 5).second, [])
 })
 
 test("a row's spend comes from the host's session record, through the same input as its status", () => {

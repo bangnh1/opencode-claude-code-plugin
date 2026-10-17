@@ -1,7 +1,8 @@
 /**
  * The model behind the sidebar's `Accounts` section (`src/tui.ts`): one line
  * per account with a current usage reading, `appical · 5h 72% · resets 18:00`
- * (h #g244).
+ * today and `appical · 5h 72% · 2026-10-18 01:20` for a reset on another day
+ * (h #g244, h #g246).
  *
  * Pure, like `src/subagent-sidebar.ts`, and for the same reason: the TUI bundle
  * runs on the terminal's own thread, where a logger writes over the interface
@@ -43,22 +44,40 @@ export function shortWindowName(window: string): string {
   return SHORT_WINDOWS[window] ?? window.replace(/_/g, " ")
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const pad = (value: number) => String(value).padStart(2, "0")
+
+function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
 
 /**
- * A reset time in local time, as short as it can be unambiguous: `18:00` today,
- * `Oct 21 12:00` on another day.
+ * A reset time in local time, in the usage-limit note's own notation
+ * (`formatLocalMinute` in `src/cli-events.ts`, which this module cannot import
+ * because that one logs): `18:00` today, `2026-10-21 12:00` on another day,
+ * and `10-21 12:00` with `year` off, which is what a line falls back on.
  */
-export function formatResetClock(resetsAt: number, now: number): string {
+export function formatResetClock(resetsAt: number, now: number, year = true): string {
   const when = new Date(resetsAt)
-  const today = new Date(now)
-  const pad = (value: number) => String(value).padStart(2, "0")
   const clock = `${pad(when.getHours())}:${pad(when.getMinutes())}`
-  const sameDay =
-    when.getFullYear() === today.getFullYear() &&
-    when.getMonth() === today.getMonth() &&
-    when.getDate() === today.getDate()
-  return sameDay ? clock : `${MONTHS[when.getMonth()]} ${when.getDate()} ${clock}`
+  if (sameDay(when, new Date(now))) return clock
+  const date = `${pad(when.getMonth() + 1)}-${pad(when.getDate())} ${clock}`
+  return year ? `${when.getFullYear()}-${date}` : date
+}
+
+/**
+ * How a line may say when its window resets, widest first: `resets 2026-10-18
+ * 01:20`, then without the word, then without the year. A reset today is
+ * `resets 01:20` only, since that always fits, and the interactive transport's
+ * phrase has no year to drop. Empty when nothing is known.
+ */
+export function resetSpellings(entry: WindowUsage, now: number): string[] {
+  if (entry.resetsAt !== undefined) {
+    const full = formatResetClock(entry.resetsAt, now)
+    if (sameDay(new Date(entry.resetsAt), new Date(now))) return [`resets ${full}`]
+    return [`resets ${full}`, full, formatResetClock(entry.resetsAt, now, false)]
+  }
+  if (entry.resetsText) return [`resets ${entry.resetsText}`, entry.resetsText]
+  return []
 }
 
 function rank(entry: WindowUsage): number {
@@ -80,13 +99,27 @@ export function pressingWindow(
   return best
 }
 
-/** Every account with a current reading, alphabetically, each laid out for `width`. */
+interface LineDraft {
+  account: string
+  window: string
+  state: AccountUsageLine["state"]
+  level: string
+  name: string
+  spellings: string[]
+}
+
+/**
+ * Every account with a current reading, alphabetically, each laid out for
+ * `width`. The reset is spelt the same way on every line, the widest spelling
+ * in `resetSpellings` that fits all of them, so the column reads alike; a line
+ * that fits no spelling is cut.
+ */
 export function accountUsageLines(
   usage: AccountUsage,
   now: number,
   width: number = SIDEBAR_ROW_WIDTH,
 ): AccountUsageLine[] {
-  const lines: AccountUsageLine[] = []
+  const drafts: LineDraft[] = []
   for (const account of [...usage.keys()].sort()) {
     const pressing = pressingWindow(usage.get(account)!, now)
     if (!pressing) continue
@@ -104,26 +137,37 @@ export function accountUsageLines(
         : entry.utilization === null
           ? `${short ? `${short} ` : ""}ok`
           : `${short ? `${short} ` : ""}${Math.round(usagePercent(entry.utilization))}%`
-    const resets =
-      entry.resetsAt !== undefined
-        ? ` · resets ${formatResetClock(entry.resetsAt, now)}`
-        : entry.resetsText
-          ? ` · resets ${entry.resetsText}`
-          : ""
-    const name = truncate(account, Math.max(1, Math.floor(width / 2)))
-    // `truncate` trims, so the space after the name is added outside it.
-    const rest = ` ${truncate(`· ${level}${resets}`, Math.max(0, width - Array.from(name).length - 1))}`
-    lines.push({
+    drafts.push({
       account,
       window,
       state,
-      segments: [
-        { text: name, role: "agent" },
-        { text: rest, role: state === "limited" ? "error" : state === "warning" ? "effort" : "muted" },
-      ],
+      level,
+      name: truncate(account, Math.max(1, Math.floor(width / 2))),
+      spellings: resetSpellings(entry, now),
     })
   }
-  return lines
+  const cells = (value: string) => Array.from(value).length
+  // `truncate` trims, so the space after the name is added outside it.
+  const room = (draft: LineDraft) => Math.max(0, width - cells(draft.name) - 1)
+  const rest = (draft: LineDraft, spelling: number) => {
+    const reset = draft.spellings[Math.min(spelling, draft.spellings.length - 1)]
+    return `· ${draft.level}${reset ? ` · ${reset}` : ""}`
+  }
+  const last = Math.max(0, ...drafts.map((draft) => draft.spellings.length - 1))
+  let spelling = 0
+  while (spelling < last && drafts.some((draft) => cells(rest(draft, spelling)) > room(draft))) spelling += 1
+  return drafts.map((draft) => ({
+    account: draft.account,
+    window: draft.window,
+    state: draft.state,
+    segments: [
+      { text: draft.name, role: "agent" },
+      {
+        text: ` ${truncate(rest(draft, spelling), room(draft))}`,
+        role: draft.state === "limited" ? "error" : draft.state === "warning" ? "effort" : "muted",
+      },
+    ],
+  }))
 }
 
 /** The plain text of a line, for tests and the collapsed summary. */

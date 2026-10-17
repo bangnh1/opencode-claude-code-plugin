@@ -105,6 +105,12 @@ export const FINISHED_KEEP = 3
 export const STARTING_GRACE_MS = 10_000
 /** The usable width of a row in opencode 1.18.35's 42-column sidebar. */
 export const SIDEBAR_ROW_WIDTH = 36
+/**
+ * What a row's second and third lines sit in by, under the glyph's cell. One
+ * cell, not the two that would align them under the agent name, because the
+ * cell is what lets `sonnet-5.5 · high · appical · $0.42` fit a row (h #g246).
+ */
+export const ROW_INDENT = " "
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 const TITLE_SUFFIX = /\s*\(@([^)\s]+) subagent\)\s*$/
@@ -217,12 +223,17 @@ export function subagentLabel(
 }
 
 /**
- * `$0.42`; a spend under a cent reads `<$0.01` rather than a false zero, and
- * nothing at all is nothing: no record, nothing spent yet, or not a number.
+ * `$0.42`, and never more than five cells under ten thousand dollars (`$12.4`,
+ * `$123`), because the spend shares one 36-cell line with the model, the effort
+ * and the account, and a cent is noise past ten dollars. A spend under a cent
+ * reads `<$0.01` rather than a false zero, and nothing at all is nothing: no
+ * record, nothing spent yet, or not a number.
  */
 export function formatCost(value: number | undefined): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
-  return value < 0.005 ? "<$0.01" : `$${value.toFixed(2)}`
+  if (value < 0.005) return "<$0.01"
+  const digits = [2, 1, 0].map((places) => value.toFixed(places)).find((text) => text.length <= 4)
+  return `$${digits ?? value.toFixed(0)}`
 }
 
 /**
@@ -379,13 +390,14 @@ export interface Segment {
  * The two lines of one row, laid out for `width` cells:
  *
  *     ⠋ implementor Fix the dispatch f…  bg
- *       sonnet-5.5 · high · alpha        $0.42
+ *      sonnet-5.5 · high · alpha · $0.42
  *
  * The `bg` marker is right-aligned, the description takes what is left, and a
  * finished row is drawn in the muted role throughout apart from its glyph and
- * its spend. The spend is right-aligned like the marker and only drawn while
- * a space still separates it from the label: the model is never cut to make
- * room for a number, and a label that was cut already has none.
+ * its spend. The second line sits `ROW_INDENT` in. The spend follows the label
+ * after ` · ` while that fits; when it does not, the dot goes first (a space
+ * is left), then the spend itself: the model is never cut to make room for a
+ * number, and a label that was cut already has none.
  */
 export function layoutRow(
   row: SubagentRow,
@@ -422,20 +434,30 @@ export function layoutRow(
   // The effort is the one piece in colour: it is what changes from one
   // subagent to the next and what costs the most, so it is the one to spot.
   const second: Segment[] = []
-  const pieces = row.label ? truncate(row.label, width - 2).split(" · ") : []
+  const content = width - ROW_INDENT.length
+  const pieces = row.label ? truncate(row.label, content).split(" · ") : []
   const labelWidth = pieces.reduce((sum, piece) => sum + Array.from(piece).length, 0) + 3 * Math.max(0, pieces.length - 1)
   const cost = formatCost(row.cost)
-  const costGap = cost ? width - 2 - labelWidth - Array.from(cost).length : 0
-  if (pieces.length > 0 || costGap >= 1) {
+  const costWidth = cost ? Array.from(cost).length : 0
+  // What stands between the label and the spend: ` · ` while that fits, a
+  // space when only that does, nothing after no label, and no spend at all
+  // when even a space will not fit it.
+  let joiner: string | undefined
+  if (cost) {
+    if (pieces.length === 0) joiner = costWidth <= content ? "" : undefined
+    else if (labelWidth + 3 + costWidth <= content) joiner = " · "
+    else if (labelWidth + 1 + costWidth <= content) joiner = " "
+  }
+  if (pieces.length > 0 || joiner !== undefined) {
     const effortAt = row.effort ? pieces.indexOf(row.effort) : -1
-    second.push({ text: "  ", role: "muted" })
+    second.push({ text: ROW_INDENT, role: "muted" })
     pieces.forEach((piece, index) => {
       if (index > 0) second.push({ text: " · ", role: "muted" })
       const role = index !== effortAt ? "muted" : finished ? "effort-faded" : "effort"
       second.push({ text: piece, role })
     })
-    if (cost && costGap >= 1) {
-      second.push({ text: " ".repeat(costGap), role: "muted" })
+    if (cost && joiner !== undefined) {
+      if (joiner) second.push({ text: joiner, role: "muted" })
       second.push({ text: cost, role: "cost" })
     }
   }

@@ -260,19 +260,20 @@ const cells = (value: string) => Array.from(value).length
 
 test("layoutProgressLine draws a plan as the fraction's cells, with the fraction in place of the call count", () => {
   const laid = layoutProgressLine(view({ plan: { done: 2, total: 4 } }), "glyph", SIDEBAR_ROW_WIDTH, 3)
-  assert.equal(progressLineText(laid), `${SPINNER_FRAMES[3]} ▰▰▰▰▰▱▱▱▱▱ 2/4 · 1m03s · bash`)
+  assert.equal(progressLineText(laid), `${SPINNER_FRAMES[3]} ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash`)
   assert.ok(cells(progressLineText(laid)) <= SIDEBAR_ROW_WIDTH)
   assert.deepEqual(roles(laid.lead), ["spinner", "muted"])
   assert.deepEqual(roles(laid.bar), [...Array(5).fill("bar-done"), ...Array(5).fill("bar-track")])
   assert.deepEqual(
     laid.tail.map((segment) => [segment.text, segment.role]),
-    [[" ", "muted"], ["2/4", "fraction"], [" · ", "muted"], ["1m03s", "muted"], [" · ", "muted"], ["bash", "tool"]],
+    [["  ", "muted"], ["2/4", "fraction"], [" · ", "muted"], ["1m03s", "muted"], [" · ", "muted"], ["bash", "tool"]],
   )
 })
 
 test("layoutProgressLine draws no plan as the pulse, with the call count, and under a row as an indent", () => {
   const laid = layoutProgressLine(view(), "indent", SIDEBAR_ROW_WIDTH, 0, 4)
-  assert.equal(progressLineText(laid), "  ▱▱▱▱▰▰▰▱▱▱ 1m03s · 12 calls · bash")
+  // One cell in, two spaces after the bar: exactly the row's width.
+  assert.equal(progressLineText(laid), " ▱▱▱▱▰▰▰▱▱▱  1m03s · 12 calls · bash")
   assert.equal(cells(progressLineText(laid)), SIDEBAR_ROW_WIDTH)
   assert.deepEqual(roles(laid.lead), ["muted"])
   assert.deepEqual(
@@ -280,32 +281,32 @@ test("layoutProgressLine draws no plan as the pulse, with the call count, and un
     ["bar-track", "bar-track", "bar-track", "bar-track", "bar-pulse", "bar-pulse", "bar-pulse", "bar-track", "bar-track", "bar-track"],
   )
   assert.equal(laid.tail.find((segment) => segment.text === "bash")?.role, "tool")
-  assert.equal(progressLineText(layoutProgressLine(view({ calls: 1 }), "indent")), "  ▰▰▰▱▱▱▱▱▱▱ 1m03s · 1 call · bash")
-  assert.equal(progressLineText(layoutProgressLine(view({ calls: 0, tool: undefined }), "indent")), "  ▰▰▰▱▱▱▱▱▱▱ 1m03s")
+  assert.equal(progressLineText(layoutProgressLine(view({ calls: 1 }), "indent")), " ▰▰▰▱▱▱▱▱▱▱  1m03s · 1 call · bash")
+  assert.equal(progressLineText(layoutProgressLine(view({ calls: 0, tool: undefined }), "indent")), " ▰▰▰▱▱▱▱▱▱▱  1m03s")
 })
 
 test("layoutProgressLine fits the width by giving up the call count, then cutting the tool, then dropping it", () => {
-  // Too wide by one: the call count goes.
+  // Too wide: the call count goes.
   const long = layoutProgressLine(view({ calls: 123, tool: "webfetch" }), "glyph")
-  assert.equal(progressLineText(long), "⠋ ▰▰▰▱▱▱▱▱▱▱ 1m03s · webfetch")
+  assert.equal(progressLineText(long), "⠋ ▰▰▰▱▱▱▱▱▱▱  1m03s · webfetch")
   // A tool name that would still not fit is cut, the elapsed never.
   const mcp = layoutProgressLine(view({ tool: "codebase-memory-mcp_search_graph", elapsedMs: 3_720_000 }), "glyph")
   const text = progressLineText(mcp)
   assert.ok(cells(text) <= SIDEBAR_ROW_WIDTH, text)
-  assert.equal(text, "⠋ ▰▰▰▱▱▱▱▱▱▱ 1h02m · codebase-memor…")
+  assert.equal(text, "⠋ ▰▰▰▱▱▱▱▱▱▱  1h02m · codebase-memo…")
   assert.equal(mcp.tail.at(-1)?.role, "tool")
   // No room for even two cells of a tool: it goes, the required pieces stay.
   const narrow = layoutProgressLine(view({ plan: { done: 1, total: 2 }, tool: "bash" }), "glyph", 26)
-  assert.equal(progressLineText(narrow), "⠋ ▰▰▰▰▰▱▱▱▱▱ 1/2 · 1m03s")
+  assert.equal(progressLineText(narrow), "⠋ ▰▰▰▰▰▱▱▱▱▱  1/2 · 1m03s")
 })
 
 test("layoutProgressLine draws an ended line filled, faded, with its glyph and no tool", () => {
   const done = layoutProgressLine(view({ state: "done", animate: false, calls: 12, tool: undefined }), "glyph")
-  assert.equal(progressLineText(done), "✓ ▰▰▰▰▰▰▰▰▰▰ 1m03s · 12 calls")
+  assert.equal(progressLineText(done), "✓ ▰▰▰▰▰▰▰▰▰▰  1m03s · 12 calls")
   assert.deepEqual(roles(done.lead), ["done", "muted"])
   assert.ok(done.bar.every((segment) => segment.role === "done"))
   const failed = layoutProgressLine(view({ state: "error", animate: false, plan: { done: 2, total: 4 }, tool: "bash" }), "glyph")
-  assert.equal(progressLineText(failed), "✗ ▰▰▰▰▰▱▱▱▱▱ 2/4 · 1m03s")
+  assert.equal(progressLineText(failed), "✗ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s")
   assert.equal(failed.lead[0].role, "error")
   assert.deepEqual(roles(failed.bar), [...Array(5).fill("error"), ...Array(5).fill("bar-track")])
   // The fraction is no longer the one bright piece once the line has ended.
@@ -314,6 +315,6 @@ test("layoutProgressLine draws an ended line filled, faded, with its glyph and n
 
 test("layoutProgressLine draws a complete plan full while the session still runs", () => {
   const laid = layoutProgressLine(view({ plan: { done: 4, total: 4 }, tool: "bash" }), "glyph")
-  assert.equal(progressLineText(laid), "⠋ ▰▰▰▰▰▰▰▰▰▰ 4/4 · 1m03s · bash")
+  assert.equal(progressLineText(laid), "⠋ ▰▰▰▰▰▰▰▰▰▰  4/4 · 1m03s · bash")
   assert.ok(laid.bar.every((segment) => segment.role === "bar-done"))
 })

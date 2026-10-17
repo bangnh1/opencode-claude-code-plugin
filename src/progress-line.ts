@@ -34,6 +34,7 @@
  * (h #g193). It imports only that module's text helpers.
  */
 import {
+  ROW_INDENT,
   SIDEBAR_ROW_WIDTH,
   SPINNER_FRAMES,
   truncate,
@@ -301,13 +302,16 @@ export interface ProgressLayout {
 /**
  * One line laid out for `width` cells:
  *
- *     ⠋ ▰▰▰▰▰▱▱▱▱▱ 2/4 · 1m03s · bash        (lead "glyph": the session's own)
- *       ▰▰▰▱▱▱▱▱▱▱ 45s · 12 calls · read     (lead "indent": under a row)
+ *     ⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash       (lead "glyph": the session's own)
+ *      ▰▰▰▱▱▱▱▱▱▱  45s · 12 calls · read      (lead "indent": under a row)
  *
  * The bar is one segment per cell so a renderer can animate the pulse cell by
- * cell. With a plan the fraction takes the call count's place. When the line
- * is too wide the call count goes first, then the tool's name is cut, then
- * the tool goes. An ended line keeps no tool: nothing runs.
+ * cell, and two spaces follow it, not one: the maintainer read one as the
+ * glyphs running into the time (h #g246). With a plan the fraction takes the
+ * call count's place. When the line is too wide the call count goes first,
+ * then the tool's name is cut, then the tool goes. An ended line keeps no
+ * tool: nothing runs. Under a row the line sits `ROW_INDENT` in, beside the
+ * row's model line (`layoutRow`).
  */
 export function layoutProgressLine(
   view: ProgressView,
@@ -320,7 +324,7 @@ export function layoutProgressLine(
   const endedRole: Segment["role"] = view.state === "error" ? "error" : "done"
   const leadSegments: Segment[] =
     lead === "indent"
-      ? [{ text: "  ", role: "muted" }]
+      ? [{ text: ROW_INDENT, role: "muted" }]
       : [
           view.state === "running"
             ? { text: SPINNER_FRAMES[frame % SPINNER_FRAMES.length], role: "spinner" }
@@ -345,7 +349,8 @@ export function layoutProgressLine(
       ? { text: `${view.calls} call${view.calls === 1 ? "" : "s"}`, role: "muted" }
       : undefined
   const tool: Segment | undefined = !ended && view.tool ? { text: view.tool, role: "tool" } : undefined
-  const budget = width - leadSegments.reduce((sum, segment) => sum + cells(segment.text), 0) - BAR_WIDTH - 1
+  // The two spaces after the bar are the 2.
+  const budget = width - leadSegments.reduce((sum, segment) => sum + cells(segment.text), 0) - BAR_WIDTH - 2
   const widthOf = (pieces: Segment[]) =>
     pieces.reduce((sum, piece) => sum + cells(piece.text), 0) + 3 * Math.max(0, pieces.length - 1)
   let pieces = [...required, ...(calls ? [calls] : []), ...(tool ? [tool] : [])]
@@ -354,7 +359,7 @@ export function layoutProgressLine(
     const room = budget - widthOf(required) - 3
     pieces = room >= 2 ? [...required, { text: truncate(tool.text, room), role: "tool" }] : required
   }
-  const tail: Segment[] = [{ text: " ", role: "muted" }]
+  const tail: Segment[] = [{ text: "  ", role: "muted" }]
   pieces.forEach((piece, index) => {
     if (index > 0) tail.push({ text: " · ", role: "muted" })
     tail.push(piece)

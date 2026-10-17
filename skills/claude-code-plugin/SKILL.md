@@ -426,7 +426,8 @@ at 2026-10-17 18:00.
 - The CLI reports only when its view changes, so a reused process can be silent for
   several turns; the last reading stands until a newer one or its reset.
 - Where to look: the TUI sidebar's `Accounts` lines (`work · 5h 76% · resets 18:00`,
-  `ok` for a reading without a number, `limited` for a refusal) and the doctor's
+  `work · 5h 76% · 2026-10-18 01:20` for a reset on another day, `ok` for a reading
+  without a number, `limited` for a refusal) and the doctor's
   `Account usage` table, which also shows which thresholds were already noted. "No
   reading yet" there with a recent turn usually means the interactive transport.
 
@@ -979,10 +980,11 @@ the theme's warning colour, faded on a finished row). That line is what
 the plugin really spawned, read from `$XDG_STATE_HOME/opencode-claude-code-plugin/session-spawns.json`,
 so `forceModel`, an agent's `reasoningEffort`, a dispatch-form answer, the fallback chain
 and a failover all show there, while opencode's own footer shows the model it asked for.
-The model line ends with the subagent's spend so far (`$0.42`, opencode's own session cost,
-kept after it finishes), and a running row gets a third line: the same progress line the
-viewed session gets above the section under a `Progress` heading while its turn runs (and
-15 s after). That line is a ten-cell `▰▱` bar that is the todo list's completed fraction
+The model line ends with the subagent's spend so far (`· $0.42`, opencode's own session cost,
+kept after it finishes; on a tight line the dot goes before the number does), and a running
+row gets a third line: the same progress line the viewed session gets above the section
+under a `Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
+`▰▱` bar, two spaces, then the todo list's completed fraction
 with `2/4` when the session has one (opencode 1 only; opencode 2 exposes no todo list to a
 TUI plugin) and a sweeping pulse otherwise, plus elapsed, the call count and the running
 tool. Nothing on it is estimated from the prompt, the model, the effort or the tokens.

@@ -6469,3 +6469,50 @@ wrap, `formatElapsed`, `layoutProgressLine`'s fit); `test/subagent-sidebar.test.
 left off rather than cutting the model, read through the `cost` input). The
 rendering's proof is the rig above. `dist/tui.js` greps zero for the logger
 prefix.
+
+##### The maintainer's pane review, the same evening
+
+With the `tui.json` line added (the open item above), the maintainer ran a
+turn in their own pane (opencode 1.19.0, Claude Code 2.1.300) and asked for
+three things, verbatim: "between progress bar and time need to be a ·",
+"between the work or default profile needs to be a ·", and "the time notation
+on the accounts needs to be short like 18/10/2026 23:22.123 so it fits fully".
+A fourth message, mid-turn, showed the first one differently: `⠋ ▱▱▱▱▱▰▰▰▱▱
+3m20s · 1 cal` "needs to be" `⠋ ▱▱▱▱▱▰▰▰▱▱  3m20s · 1 cal`, two spaces; asked
+which of the two they meant, they picked "Two spaces". What changed, and the
+cell counts behind each:
+
+- **Two spaces after the bar** (`layoutProgressLine`'s tail and budget). The
+  `·` was built first and taken out again; the tests pin the spaces.
+- **The spend after ` · ` on the model line**, the "profile" being the account
+  piece that ends the label. `sonnet-5.5 · high · appical · $0.42` is 35
+  cells and a row has 36, so the two-cell indent the sub-lines had would have
+  lost the dot on exactly the rows this install runs most (sonnet on a
+  seven-letter account). Both sub-lines now sit one cell in (`ROW_INDENT`),
+  the spend is five cells at most under ten thousand dollars (`$12.4`,
+  `$123`: a cent is noise past ten dollars), and the fit order is the
+  progress line's kind, the dot first (a space stands in), then the spend,
+  never the model: `sonnet-5.5 · xhigh · appical` gets the space form, and
+  `sonnet-5.5 · medium · appical-work` no spend.
+- **The reset in the usage note's notation**, `2026-10-18 01:20`: the same
+  length as the `18/10/2026 23:22` asked for, unambiguous in every locale, and
+  the one the plugin already prints (`formatLocalMinute`, which the pure
+  sidebar module cannot import because `src/cli-events.ts` logs). The row
+  cannot hold the word `resets`, a window, a level and a dated time (`appical ·
+  5h ok · resets 2026-10-18 01:20` is 41), so `resetSpellings` offers three
+  spellings, widest first, and `accountUsageLines` picks the widest that fits
+  EVERY line, so the column reads alike: the word goes, then the year
+  (`10-18 01:20`). A reset today stays `resets 18:00`. What the maintainer had
+  seen was `appical · 5h ok · resets Oct 18 01:…`, the line's own `…` at 37
+  cells, which is what "so it fits fully" was about.
+
+The sidebar is 42 columns whatever the terminal (`f(i,"width",42)`, read off
+the 1.19.0 binary for this), so none of it is a narrow-pane effect. Re-run on
+the rig afterwards with a two-account `account-usage.json` planted in each
+scratch state dir (resets 2026-10-18 01:20 local), both majors, both exited 0,
+no plugin WARN beyond the usual: 1.x running `⠧ ▰▰▰▱▱▱▱▱▱▱  1/4 · 8s` over
+`⠧ general Survey the rig          bg` / ` haiku-4.5` / ` ▱▱▱▰▰▰▱▱▱▱  6s · 1
+call · bash`, finished ` haiku-4.5 · $0.84`, and under it `appical · 5h ok ·
+2026-10-18 01:20` / `default · 5h 72% · 2026-10-18 01:20`; 2.x the same with
+the pulse (`⠇ ▱▱▱▱▰▰▰▱▱▱  8s · 2 calls`), ` haiku-4.5 · $0.42` and the same
+two account lines. Nothing drawn wider than 36 cells.
