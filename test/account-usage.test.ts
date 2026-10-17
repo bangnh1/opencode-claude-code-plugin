@@ -175,8 +175,12 @@ test("store round trip: a reading written is read back, 0600 in a 0700 directory
     status: "allowed_warning",
   }, NOW)
   assert.ok(written)
-  assert.equal(statSync(file).mode & 0o777, 0o600)
-  assert.equal(statSync(join(file, "..")).mode & 0o777, 0o700)
+  // POSIX modes mean nothing on Windows (see .github/windows-skipped-tests.txt);
+  // the round trip itself runs everywhere.
+  if (process.platform !== "win32") {
+    assert.equal(statSync(file).mode & 0o777, 0o600)
+    assert.equal(statSync(join(file, "..")).mode & 0o777, 0o700)
+  }
 
   const raw = JSON.parse(readFileSync(file, "utf8"))
   assert.equal(raw.version, 1)
