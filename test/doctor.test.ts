@@ -833,6 +833,79 @@ test("a bundle withholds the operator's own patterns but keeps the counts", () =
   assert.equal(withheld.readRules?.unmapped[0]?.reason, "contains-dotdot")
 })
 
+// ---------------------------------------------------------------------------
+// Account usage (h #g244)
+// ---------------------------------------------------------------------------
+
+test("the account usage section lists every reading with its reset, age and noted thresholds", () => {
+  const now = Date.now()
+  const inTwoHours = new Date(now + 2 * 60 * 60 * 1000)
+  const text = formatDoctorReport({
+    ...report,
+    accountUsage: new Map([
+      [
+        "appical",
+        new Map([
+          [
+            "five_hour",
+            {
+              utilization: 0.91,
+              resetsAt: inTwoHours.getTime(),
+              status: "allowed_warning",
+              observedAt: now - 90_000,
+              noted: [50, 75, 90],
+            },
+          ],
+          [
+            "seven_day",
+            { utilization: null, resetsAt: now - 1000, status: "allowed", observedAt: now - 60_000, noted: [] },
+          ],
+        ]),
+      ],
+      [
+        "default",
+        new Map([
+          [
+            "unknown",
+            { utilization: null, resetsText: "3pm (Europe/Amsterdam)", status: "rejected", observedAt: now, noted: [] },
+          ],
+        ]),
+      ],
+    ]),
+  })
+  assert.match(text, /\*\*Account usage\*\*/)
+  assert.match(text, /\| account \| window \| used \| status \| resets \| observed \| noted at \|/)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const clock = `${pad(inTwoHours.getHours())}:${pad(inTwoHours.getMinutes())}`
+  assert.match(text, new RegExp(`\\| appical \\| five_hour \\| 91% \\| allowed_warning \\| \\d{4}-\\d\\d-\\d\\d ${clock} \\| 1m ago \\| 50%, 75%, 90% \\|`))
+  // Unknown is said as unknown, never as 0%, and a window that is over says so.
+  assert.match(text, /\| appical \| seven_day \| unknown \| allowed \| .* \(window over\) \| .* \| none \|/)
+  assert.match(text, /\| default \| unknown \| out \| rejected \| 3pm \(Europe\/Amsterdam\) \|/)
+})
+
+test("with no reading the account usage section says why, and a bundle withholds the TUI's reset phrase", () => {
+  const empty = formatDoctorReport({ ...report, accountUsage: new Map() })
+  assert.match(empty, /\*\*Account usage\*\*\n\nNo reading yet\./)
+
+  const withheld = withholdFreeText({
+    ...report,
+    accountUsage: new Map([
+      [
+        "default",
+        new Map([
+          [
+            "five_hour",
+            { utilization: null, resetsText: "3pm (Europe/Amsterdam)", status: "rejected", observedAt: Date.now(), noted: [] },
+          ],
+        ]),
+      ],
+    ]),
+  })
+  const text = formatDoctorReport(withheld)
+  assert.ok(!text.includes("Europe/Amsterdam"))
+  assert.match(text, /\| default \| five_hour \| out \| rejected \| \[redacted, \d+ chars\]/)
+})
+
 // --- budgets and caps (h #g245) -------------------------------------------
 
 test("budgets and caps read as off on a default install", () => {

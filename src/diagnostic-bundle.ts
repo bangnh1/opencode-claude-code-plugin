@@ -169,6 +169,8 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   sse: "flag",
   strictMcpConfig: "flag",
   supported: "flag",
+  // Whether a usage threshold moved new turns to another account (h #g244).
+  switched: "flag",
   turnStats: "flag",
 
   // counts and sizes: a length is a shape, never content
@@ -207,6 +209,10 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   tasks: "count",
   taskIndex: "count",
   skills: "count",
+  // A usage reading crossing a warning threshold (h #g244): the percent used
+  // and the thresholds it crossed, numbers only.
+  utilization: "count",
+  crossed: "count",
   stderrBytes: "count",
   textLength: "count",
   tools: "count",
