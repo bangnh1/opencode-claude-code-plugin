@@ -5,10 +5,10 @@ sidebar:
   order: 9
 ---
 
-The session sidebar gets a **Subagents** section at the bottom while the session you are looking at has subagents, and a [**Progress** line](#progress) above it while that session's turn runs. One row per subagent, running ones first:
+The session sidebar gets a **Subagents** section at the bottom while the session you are looking at has subagents, and a [**Main Progress** line](#progress) above it while that session's turn runs. One row per subagent, running ones first:
 
 ```
-Progress
+Main Progress
 ⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash
 Subagents
 ⠋ explore Survey docs for stale…  bg
@@ -32,10 +32,10 @@ There is no option for any of it: it is always on, and it costs nothing while no
 
 ## Progress
 
-Above the subagents, under a **Progress** heading, one line for the session you are looking at, while its turn runs and for fifteen seconds after it ends:
+Above the subagents, under a **Main Progress** heading (main, as against the subagents listed under it), one line for the session you are looking at, while its turn runs and for fifteen seconds after it ends:
 
 ```
-Progress
+Main Progress
 ⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash
 ```
 
@@ -43,7 +43,7 @@ There is no percentage, by design. Nothing in a model's task predicts how much o
 
 - **The bar.** When the session has a todo list (Claude Code's `TaskCreate` family reaches opencode as `todowrite`; a subagent needs `permission: { todowrite: "allow" }` to keep one), the bar is the share of items completed, in the theme's success colour, and the line says which in bold: `2/4`. It never fills before the last item is done and never empties once the first is. Without a list the bar is a pulse, three cells sweeping the track in the accent colour, which says only that the session is working. opencode 2 hands a TUI plugin no todo list, so there every bar is the pulse.
 - **Elapsed** since your last message (for a subagent, since its dispatch), the **tool calls** made since it (left out when a fraction is shown), and the **tool running now** in the theme's info colour. When the line is too wide the call count goes first, then the tool's name is cut.
-- **When the turn ends** the bar fills in the success colour behind a ✓, or in the error colour behind a ✗ when the last reply failed, stays fifteen seconds, and goes. A subagent's line goes with its spinner. With nothing running there is no Progress section at all.
+- **When the turn ends** the bar fills in the success colour behind a ✓, or in the error colour behind a ✗ when the last reply failed, stays fifteen seconds, and goes. A subagent's line goes with its spinner. With nothing running there is no Main Progress section at all.
 
 The colours are the theme's own, so every theme supplies them. On opencode 1: done cells `success`, the pulse `accent`, the track `textMuted` pulled halfway toward `backgroundPanel`, the fraction `text` in bold, the running tool `info`, a subagent's spend `secondary`. On opencode 2: `text.feedback.success`, `hue.accent`, `text.muted` toward `background`, `text.base`, `text.feedback.info`, `hue.interactive`.
 

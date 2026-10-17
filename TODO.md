@@ -170,8 +170,9 @@ raised, so they survive context compaction; removed when answered, done or dropp
   review the same evening asked for two spaces after the bar (first "a ·", then "needs to be" two spaces; asked,
   picked the spaces), a `·` before the spend, and a reset time that fits: built as `· $0.42` with the two sub-lines
   one cell in, and `2026-10-18 01:20` with the word and the year dropped in that order, the same way on every
-  line; re-run on the rig, both majors. PR #121 is open against master after v0.56.0; left: its merge and the
-  release.
+  line; re-run on the rig, both majors. Then, with three background children running under it, "Progress should
+  probably say Main Progress ?": the heading is `Main Progress` now, since right above `Subagents` a bare
+  `Progress` read as theirs. PR #121 is open against master after v0.56.0; left: its merge and the release.
 
 ## Done
 

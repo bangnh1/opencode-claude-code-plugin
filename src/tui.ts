@@ -8,7 +8,7 @@
  * Clicking a row opens that subagent's session; opencode's own `up` key goes
  * back to the parent.
  *
- * Above it, under a `Progress` heading, the same line for the session on
+ * Above it, under a `Main Progress` heading, the same line for the session on
  * screen while its turn runs and for a moment after it ends (h #g246). What
  * it says is measured, never estimated: a todo list's fraction when the
  * session has one, else a pulse, plus elapsed, calls and the running tool.
@@ -428,10 +428,14 @@ function createSidebar(host: SidebarHost) {
     return section
   }
 
-  /** The `Progress` heading and the session's own line, rebuilt as the line changes. */
+  /**
+   * The `Main Progress` heading and the session's own line, rebuilt as the
+   * line changes. `Main`, because right above `Subagents` a bare `Progress`
+   * read as theirs (the maintainer, in their own pane, h #g246).
+   */
   const buildProgress = (progress: () => ProgressView | undefined): OpentuiNode => {
     const section = createElement("box")
-    insertNode(section, buildHeading("Progress"))
+    insertNode(section, buildHeading("Main Progress"))
     const body = createElement("box")
     insert(body, () => {
       const view = progress()

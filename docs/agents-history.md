@@ -6516,3 +6516,14 @@ call · bash`, finished ` haiku-4.5 · $0.84`, and under it `appical · 5h ok ·
 2026-10-18 01:20` / `default · 5h 72% · 2026-10-18 01:20`; 2.x the same with
 the pulse (`⠇ ▱▱▱▱▰▰▰▱▱▱  8s · 2 calls`), ` haiku-4.5 · $0.42` and the same
 two account lines. Nothing drawn wider than 36 cells.
+
+One more from the same pane, after three background `explore` children had
+each run `sleep 10` under it so the section held three running rows at once:
+"Progress should probably say Main Progress ?". Right above `Subagents`, a
+bare `Progress` read as the subagents' heading, so it is `Main Progress` now
+(`buildHeading` in `src/tui.ts`, the one string; the guide, the skill reference
+and the rules say the same). Nothing else changed and the rig was not re-run
+for a heading string. The edge the name leaves open: viewing a child session
+itself, the line is that child's and the heading still says `Main`; the
+plugin does not read the viewed session's `parentID` for a heading, because
+a sidebar in a child session is a rare view and the word costs nothing there.

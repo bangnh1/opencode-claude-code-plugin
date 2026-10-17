@@ -983,7 +983,7 @@ and a failover all show there, while opencode's own footer shows the model it as
 The model line ends with the subagent's spend so far (`· $0.42`, opencode's own session cost,
 kept after it finishes; on a tight line the dot goes before the number does), and a running
 row gets a third line: the same progress line the viewed session gets above the section
-under a `Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
+under a `Main Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
 `▰▱` bar, two spaces, then the todo list's completed fraction
 with `2/4` when the session has one (opencode 1 only; opencode 2 exposes no todo list to a
 TUI plugin) and a sweeping pulse otherwise, plus elapsed, the call count and the running

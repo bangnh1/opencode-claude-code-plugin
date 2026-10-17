@@ -1,9 +1,9 @@
 /**
  * The model behind the sidebar's progress lines (`src/tui.ts`, h #g246): one
- * for the session on screen, under a `Progress` heading above `Subagents`, and
- * one under each RUNNING subagent row:
+ * for the session on screen, under a `Main Progress` heading above
+ * `Subagents`, and one under each RUNNING subagent row:
  *
- *     Progress
+ *     Main Progress
  *     ⠋ ▰▰▰▰▰▱▱▱▱▱ 2/4 · 1m03s · bash
  *     Subagents
  *     ⠋ implementor Fix the dispatch form…
