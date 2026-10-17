@@ -73,6 +73,8 @@ export interface SidebarInput {
   record: (sessionID: string) => SpawnRecordInput | undefined
   /** When the TUI first saw a child stop, by session id. */
   stoppedAt: (sessionID: string) => number | undefined
+  /** A child's spend so far in dollars, as the host's session record carries it (h #g246). */
+  cost?: (sessionID: string) => number | undefined
   now: number
 }
 
@@ -87,6 +89,8 @@ export interface SubagentRow {
   label: string
   /** The effort piece of `label`, drawn in the theme's warning colour. */
   effort?: string
+  /** Spend so far in dollars, right-aligned on the label's line while it fits; kept once finished. */
+  cost?: number
   started: number
   finished?: number
 }
@@ -213,6 +217,15 @@ export function subagentLabel(
 }
 
 /**
+ * `$0.42`; a spend under a cent reads `<$0.01` rather than a false zero, and
+ * nothing at all is nothing: no record, nothing spent yet, or not a number.
+ */
+export function formatCost(value: number | undefined): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
+  return value < 0.005 ? "<$0.01" : `$${value.toFixed(2)}`
+}
+
+/**
  * Cut `value` to `width` cells with a trailing ellipsis. Counts code points,
  * which is a cell each for the text a task description holds; a wide glyph
  * can overrun by one cell and is left to the renderer's own clipping.
@@ -324,6 +337,7 @@ function rowFor(
   if (state !== "running" && finished === undefined) {
     finished = input.stoppedAt(child.id) ?? child.updated ?? started
   }
+  const cost = input.cost?.(child.id)
   return {
     sessionID: child.id,
     agent: parsed.agent ?? (part ? partAgent(part) : undefined) ?? text(child.agent) ?? "subagent",
@@ -332,25 +346,46 @@ function rowFor(
     state,
     label: subagentLabel(input.record(child.id), part),
     effort: text(input.record(child.id)?.effort),
+    ...(cost !== undefined ? { cost } : {}),
     started,
     finished,
   }
 }
 
-/** A run of text with the role the TUI maps onto a theme colour. */
+/**
+ * A run of text with the role the TUI maps onto a theme colour. The last six
+ * are the progress line's and the spend (`src/progress-line.ts`, h #g246).
+ */
 export interface Segment {
   text: string
-  role: "spinner" | "done" | "error" | "agent" | "description" | "muted" | "effort" | "effort-faded"
+  role:
+    | "spinner"
+    | "done"
+    | "error"
+    | "agent"
+    | "description"
+    | "muted"
+    | "effort"
+    | "effort-faded"
+    | "bar-done"
+    | "bar-pulse"
+    | "bar-track"
+    | "fraction"
+    | "tool"
+    | "cost"
 }
 
 /**
  * The two lines of one row, laid out for `width` cells:
  *
  *     ⠋ implementor Fix the dispatch f…  bg
- *       sonnet-5.5 · high · alpha
+ *       sonnet-5.5 · high · alpha        $0.42
  *
  * The `bg` marker is right-aligned, the description takes what is left, and a
- * finished row is drawn in the muted role throughout apart from its glyph.
+ * finished row is drawn in the muted role throughout apart from its glyph and
+ * its spend. The spend is right-aligned like the marker and only drawn while
+ * a space still separates it from the label: the model is never cut to make
+ * room for a number, and a label that was cut already has none.
  */
 export function layoutRow(
   row: SubagentRow,
@@ -387,8 +422,11 @@ export function layoutRow(
   // The effort is the one piece in colour: it is what changes from one
   // subagent to the next and what costs the most, so it is the one to spot.
   const second: Segment[] = []
-  if (row.label) {
-    const pieces = truncate(row.label, width - 2).split(" · ")
+  const pieces = row.label ? truncate(row.label, width - 2).split(" · ") : []
+  const labelWidth = pieces.reduce((sum, piece) => sum + Array.from(piece).length, 0) + 3 * Math.max(0, pieces.length - 1)
+  const cost = formatCost(row.cost)
+  const costGap = cost ? width - 2 - labelWidth - Array.from(cost).length : 0
+  if (pieces.length > 0 || costGap >= 1) {
     const effortAt = row.effort ? pieces.indexOf(row.effort) : -1
     second.push({ text: "  ", role: "muted" })
     pieces.forEach((piece, index) => {
@@ -396,6 +434,10 @@ export function layoutRow(
       const role = index !== effortAt ? "muted" : finished ? "effort-faded" : "effort"
       second.push({ text: piece, role })
     })
+    if (cost && costGap >= 1) {
+      second.push({ text: " ".repeat(costGap), role: "muted" })
+      second.push({ text: cost, role: "cost" })
+    }
   }
   return { first, second }
 }

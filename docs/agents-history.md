@@ -6278,3 +6278,194 @@ defaults in `test/agent-models.test.ts`; the refusal, the batch, the unreadable
 count, a real proxy server and the option off in
 `test/background-subagents.test.ts`; the section and the cap line under the
 count in `test/doctor.test.ts`; the marker in `test/turn-stats.test.ts`.
+
+<a id="g246"></a>
+
+## The sidebar's Progress line, and a subagent's spend on its model line
+
+2026-10-17, opencode 1.19.0 and 2.0.31, plugin from the working tree, a
+scripted fake `claude` reporting 2.1.293. Branch `progress-line`.
+
+**The ask.** "A visual line that represents a status bar/loading bar with an
+estimation of how much percent the task is completed", with a screenshot of
+another tool's thick-line-and-dot bar. Three things were put to the maintainer
+in forms and answered in this order: an honest measured line over an estimated
+percentage ("Honest line, sidebar first"); the `▰▱` glyphs over the box-drawing
+set that screenshot used ("this is nicer: ▰▱ i want this instead"), after the
+box-drawing version had been offered because every glyph in it is already drawn
+by opencode's own frames; and the spend on the model line ("1 is ok just make
+sure we use plenty of colors and highlights and low lights to emphisis and
+distinguish the elements"). On dependencies: "if we can get away with not having
+dependencies its better, but does not mean it should look bad", so the live rig
+below stays scratch and nothing was added to `package.json`.
+
+**Why no percentage.** Nothing a TUI plugin can read predicts how much of a
+model's task is left. The inputs a guess would use (the prompt's length, the
+model, the effort, the token count, this install's usual turn length) were each
+costed and declined: the retained `plugin.log` had turns for one agent spread
+from 18 s to 106 s, so "longer than usual" says nothing, and a bar built from
+them is a guess drawn as a measurement, which reads as the plugin knowing
+something it does not. What IS measurable is on the line instead.
+
+**Where it could go, measured on both binaries.** opencode 1.19.0's TUI slots
+are `sidebar_title` and `sidebar_footer` (`single_winner`, opencode's own),
+`sidebar_content` (append, ours at order 900 since h #g234), `session_prompt`
+(mode `replace`: a plugin claiming it REPLACES the editor mount and gets no
+default children to wrap, so a line above the prompt means remounting opencode's
+editor yourself), `session_prompt_right` (a small append area at the prompt's
+right end) and the `home_*` set. opencode 2.0.31's are `sidebar.content`,
+`sidebar.footer`, `prompt.footer`, `prompt.footer.status` (where its own `/btw`
+indicator sits), `session.panel` and `home.footer`. The sidebar is the one
+place both majors offer with no slot to take over, which is why the line is
+there; `session_prompt_right` and `prompt.footer.status` are the prompt-adjacent
+step if one is ever wanted. Also read off the binaries: 1.x's TUI store carries
+every session's todo list (`api.state.session.todo(id)`, fed by `todo.updated`,
+which is how its own `Todo` section draws), 2.x hands a TUI plugin NO todo state
+at all (its `data.session` is `get`, `root`, `family`, `cost`, `tps`, `status`,
+`permissions`, and `todowrite` is a name it drops from the tool vocabulary, h
+#g34), and BOTH majors keep a live `cost` on the session record (1.x
+`session.get(id).cost`, 2.x `data.session.cost(id)`, which sums a root's family
+and returns a child's own).
+
+**What the line is** (`src/progress-line.ts`, pure, imports only the sidebar
+module's text helpers, nothing that logs, h #g193):
+
+- The bar is ten cells. With a todo list it is the completed fraction, the line
+  says which in bold (`2/4`), and `filledCells` rounds so it is never full before
+  the last item and never empty once the first is done. Without a list it is a
+  pulse, three lit cells (`PULSE_RUN`) sweeping the track one cell every two
+  spinner ticks, which says only "working".
+- Elapsed since the last user message (`turnMessages` hands the host only that
+  tail, so a long session's earlier parts are never read per tick), else since
+  the TUI first saw the session busy (`createStatusWatch`, capped), the tool
+  calls made since it (left out when a fraction is shown), and the running tool
+  (the newest call while it is pending or running). `layoutProgressLine` drops
+  the call count first, then cuts the tool's name, when the line is too wide.
+- The session on screen gets it under a `Progress` heading above `Subagents`
+  while busy and for `PROGRESS_LINGER_MS` (15 s) after, filled behind ✓ or ✗ off
+  the last reply's error; every RUNNING subagent row gets it as a third line,
+  measured from the child's own session, and it leaves with the row's spinner.
+- A row's spend is opencode's own `cost` for that child, `formatCost` (`<$0.01`
+  rather than a false zero), right-aligned on the model line in its own role,
+  kept once the row has finished, and left off only when no space would
+  separate it from the label: the model is never cut for a number.
+- Clocks (h #g234's rule, extended): the 100 ms spinner runs while a subagent
+  OR the viewed session's turn runs, the refresh runs at 1 s while either runs
+  (the lines' second hand) and at 1.5 s while a row is listed or any sidebar is
+  mounted (the usage reading, h #g244).
+
+**Colours**, one theme key per element and only keys both majors supply, in
+`ROLE_COLOR` as a `Record` over the `Segment` role union so a role added without
+a colour fails the typecheck: bar done = 1.x `success` / 2.x
+`text.feedback.success.base`; pulse and spinner = `accent`; track = muted mixed
+half into the panel background; fraction = bold `text`; running tool = `info` /
+`text.feedback.info.base`; spend = 1.x `secondary` / 2.x
+`hue.interactive[shade]`; elapsed and calls stay muted. `Bun.stringWidth` with
+`ambiguousIsNarrow`, which is what OpenTUI lays out with (read off the 1.19.0
+binary), reports `▰`, `▱`, `━`, `╸`, `●`, `✓`, `✗` and `⠋` as one cell each on
+Bun 1.4.2.
+
+**The rig** (scratch, `/tmp/pl-rig`, not committed): the real opencode TUI in
+Bun 1.4.2's PTY at 160×45, mirrored into `@xterm/headless` 5 installed in that
+scratch directory only, scratch `HOME`/XDG dirs per major (1.x with the
+`tui.json` line, 2.x with `plugins: ["<repo>/dist"]` and `--standalone`), the
+last 44 columns captured once a second as text plus every non-blank cell's
+foreground, and a fake `claude` that speaks stream-json, calls the plugin's
+proxy over HTTP with the bearer token off its `--mcp-config`, and runs one of
+two scripts off the prompt: the parent creates four `TaskCreate` todos, starts
+one background `task` child, then four proxied `bash` calls of 6 s each with a
+`TaskUpdate` to `in_progress` and `completed` around each; the child runs four
+proxied `bash` calls of 10 s. `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
+on 1.x (h #g172). Both runs exited 0, and both `plugin.log`s carry zero WARN and
+zero ERROR lines.
+
+opencode 1.19.0, one second after Enter and then mid-turn (text, then the
+cells' colours on the default dark theme):
+
+```
+▼ Todo
+[ ] Read the sidebar sources
+[ ] Design the progress line
+[ ] Write the tests
+[ ] Record the screens
+Progress
+⠇ ▱▱▱▱▱▱▱▱▱▱ 0/4 · 1s
+```
+
+```
+▼ Todo
+[•] Read the sidebar sources
+…
+Progress
+⠧ ▱▱▱▱▱▱▱▱▱▱ 0/4 · 4s · bash
+Subagents
+⠧ general Survey the rig          bg
+  haiku-4.5
+  ▱▱▱▰▰▰▱▱▱▱ 2s · 1 call · bash
+```
+
+```
+Progress
+⠦ ▰▰▰▱▱▱▱▱▱▱ 1/4 · 12s · bash      ⠦ #9d7cd8 (accent)  ▰ #7fd88f (success)  ▱ #4a4a4a
+                                    1/4 #eeeeee bold  12s · #808080  bash #56b6c2 (info)
+```
+
+The fraction followed the ledger, `0/4` through `4/4`, as each `TaskUpdate`
+completed (h #g85's `todowrite` reaching 1.x's store). The turn ended at 33 s:
+
+```
+Progress
+✓ ▰▰▰▰▰▰▰▰▰▰ 4/4 · 33s             ✓ and ▰ #7fb088 (done), the rest muted
+⠏ general Survey the rig          bg
+  haiku-4.5
+  ▰▰▱▱▱▱▱▱▱▰ 38s · 4 calls · bash
+```
+
+and when the child finished ten seconds later its row became `✓ general Survey
+the rig  bg` / `haiku-4.5  $0.84` (the spend in `#5c9cf5`, 1.x's `secondary`),
+and the session line read `✓ ▰▰▰▰▰▰▰▰▰▰ 4/4 · 0s` for a fresh fifteen seconds.
+That `0s` is right: opencode delivered the child's result as a NEW parent turn
+(the `<task ... state="completed">` envelope, h #g172), the fake answered it in
+under a second, and the line measured that turn. The heading and the line were
+gone at t+15 s.
+
+opencode 2.0.31, the same prompt: no todo list, so the pulse, and V2's `shell`
+name (h #g34):
+
+```
+Progress
+⠧ ▱▱▱▰▰▰▱▱▱▱ 8s · 2 calls · shell   ▰ #9d7cd8 (accent)  ▱ #454545  shell #56b6c2
+Subagents
+⠧ general Survey the rig          bg
+  haiku-4.5
+  ▱▱▱▰▰▰▱▱▱▱ 4s · 1 call · shell
+```
+
+```
+Progress
+✓ ▰▰▰▰▰▰▰▰▰▰ 33s · 5 calls          #7fb088
+✓ general Survey the rig          bg
+  haiku-4.5                    $0.42  $0.42 #fab283 (hue.interactive)
+```
+
+The child's completion re-prompted the parent on 2.x as well (the synthetic
+`<subagent sessionID=… state="completed">` message, h #g176), so the same
+`✓ … 0s` turn appeared there, and the section was gone by t+15 s. The two
+spends differ because each major prices the fake's usage with its own catalog;
+both are the host's own number, which is the point.
+
+**Not built, by choice.** No estimated percentage (above). No prompt-adjacent
+line: the two slots for it are named above and nothing in this change stops a
+later step from using them. No per-session cost in the heading. No option: the
+lines cost nothing while nothing runs, and h #g234's "always on, no option"
+holds. The rig is not a dev dependency.
+
+Tests: `test/progress-line.test.ts` (`turnMessages`, `measureProgress` over a
+turn's calls, the running tool and the failed reply, `sessionProgress` while
+busy, the linger and its expiry, a stop older than the turn, `rowProgress`,
+`createStatusWatch` and its cap, `filledCells`' rounding edges, `pulseLit`'s
+wrap, `formatElapsed`, `layoutProgressLine`'s fit); `test/subagent-sidebar.test.ts`
+(`formatCost`, the spend right-aligned in its own role, kept on a finished row,
+left off rather than cutting the model, read through the `cost` input). The
+rendering's proof is the rig above. `dist/tui.js` greps zero for the logger
+prefix.

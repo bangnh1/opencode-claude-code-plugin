@@ -22,6 +22,7 @@ import {
   collapsedSummary,
   completionsIn,
   deriveSubagentRows,
+  formatCost,
   layoutRow,
   parseChildTitle,
   shortModelName,
@@ -399,6 +400,65 @@ test("layoutRow keeps a very long agent name from pushing the description off th
   assert.ok(Array.from(line).length <= SIDEBAR_ROW_WIDTH, line)
   assert.ok(line.endsWith("bg"), line)
   assert.ok(line.includes("…"), line)
+})
+
+test("formatCost is dollars to the cent, never a false zero, and nothing for nothing", () => {
+  assert.equal(formatCost(0.42), "$0.42")
+  assert.equal(formatCost(12.3456), "$12.35")
+  assert.equal(formatCost(0.004), "<$0.01")
+  assert.equal(formatCost(0), undefined)
+  assert.equal(formatCost(-1), undefined)
+  assert.equal(formatCost(Number.NaN), undefined)
+  assert.equal(formatCost(undefined), undefined)
+})
+
+test("layoutRow right-aligns the spend on the label's line in its own colour, and keeps it once finished", () => {
+  const running = layoutRow(row({ cost: 0.42 }))
+  assert.equal(flat(running.second), "  sonnet-5.5 · high · alpha    $0.42")
+  assert.equal(Array.from(flat(running.second)).length, SIDEBAR_ROW_WIDTH)
+  assert.deepEqual(running.second.slice(-2).map((segment) => [segment.text, segment.role]), [
+    ["    ", "muted"],
+    ["$0.42", "cost"],
+  ])
+  // Only the spend and the effort are in colour; a finished row keeps the spend's.
+  const finished = layoutRow(row({ cost: 0.42, state: "done" }))
+  assert.equal(flat(finished.second), "  sonnet-5.5 · high · alpha    $0.42")
+  assert.equal(finished.second.at(-1)?.role, "cost")
+  assert.ok(finished.second.slice(0, -1).every((segment) => segment.role === "muted" || segment.text === "high"))
+  // Nothing spent yet, or no record of it: the line is as it was.
+  assert.equal(flat(layoutRow(row({ cost: 0 })).second), "  sonnet-5.5 · high · alpha")
+  assert.equal(flat(layoutRow(row({ cost: undefined })).second), "  sonnet-5.5 · high · alpha")
+  // A spend with no label at all still gets the line.
+  assert.equal(flat(layoutRow(row({ label: "", effort: undefined, cost: 1.5 })).second), `${" ".repeat(31)}$1.50`)
+})
+
+test("layoutRow leaves the spend off rather than cut the model to make room for it", () => {
+  // Three accounts' names and a long model: the label alone is 28 cells, the spend needs 6 more.
+  const tight = layoutRow(row({ label: "sonnet-4.5 · high · appical", cost: 0.42 }))
+  assert.equal(flat(tight.second), "  sonnet-4.5 · high · appical  $0.42")
+  const over = layoutRow(row({ label: "sonnet-4.5 · high · appical-work", cost: 0.42 }))
+  assert.equal(flat(over.second), "  sonnet-4.5 · high · appical-work")
+  assert.ok(over.second.every((segment) => segment.role !== "cost"))
+  // A label that was itself cut has no room either.
+  const cut = layoutRow(row({ label: "sonnet-4.5 · high · an-account-name-this-long", cost: 0.42 }))
+  assert.ok(flat(cut.second).endsWith("…"), flat(cut.second))
+  assert.ok(cut.second.every((segment) => segment.role !== "cost"))
+  // And a spend that does not fit next to no label is no line at all.
+  assert.deepEqual(layoutRow(row({ label: "", effort: undefined, cost: 1.5 }), 6).second, [])
+})
+
+test("a row's spend comes from the host's session record, through the same input as its status", () => {
+  const rows = deriveSubagentRows(
+    input({
+      children: [child("ses_c", "Costed", "explore", NOW - 100)],
+      statuses: { ses_c: "busy" },
+      cost: (id) => (id === "ses_c" ? 0.07 : undefined),
+    }),
+  )
+  assert.equal(rows[0]?.cost, 0.07)
+  // No cost accessor at all (an older host shape): the row simply has none.
+  const none = deriveSubagentRows(input({ children: [child("ses_c", "Costed", "explore", NOW - 100)], statuses: { ses_c: "busy" } }))
+  assert.equal(none[0]?.cost, undefined)
 })
 
 test("collapsedSummary counts what is running, else what is done", () => {

@@ -2,9 +2,17 @@
  * The TUI half of the package: a `Subagents` section at the bottom of
  * opencode's session sidebar listing the current session's subagents, running
  * first, each with a spinner (or ✓ / ✗), its agent type, its task description,
- * a `bg` marker for background ones, and a muted line saying what it really
- * runs as (`sonnet-5.5 · high · alpha`). Clicking a row opens that subagent's
- * session; opencode's own `up` key goes back to the parent.
+ * a `bg` marker for background ones, a muted line saying what it really runs
+ * as with its spend so far (`sonnet-5.5 · high · alpha        $0.42`), and
+ * while it runs a progress line (`▰▰▰▱▱▱▱▱▱▱ 45s · 12 calls · read`).
+ * Clicking a row opens that subagent's session; opencode's own `up` key goes
+ * back to the parent.
+ *
+ * Above it, under a `Progress` heading, the same line for the session on
+ * screen while its turn runs and for a moment after it ends (h #g246). What
+ * it says is measured, never estimated: a todo list's fraction when the
+ * session has one, else a pulse, plus elapsed, calls and the running tool.
+ * `src/progress-line.ts` decides all of it.
  *
  * Below it, in the same slot, an `Accounts` section: one line per account
  * with a current usage reading (`appical · 5h 72% · resets 18:00`), from the
@@ -23,11 +31,11 @@
  *     `setup` key and 2.x a `tui` key, so the default export carries both.
  *
  * Everything that decides WHAT to show lives in `src/subagent-sidebar.ts`
- * (pure, tested). Each major gets a thin adapter that gathers that module's
- * inputs from its own TUI state and supplies its own theme colours; the
- * section itself is drawn by one renderer. Nothing in here may throw into the
- * host or log: on the TUI's own thread stderr is the screen (h #g193), so every
- * failure degrades to drawing less.
+ * and `src/progress-line.ts` (pure, tested). Each major gets a thin adapter
+ * that gathers those modules' inputs from its own TUI state and supplies its
+ * own theme colours; the sections themselves are drawn by one renderer.
+ * Nothing in here may throw into the host or log: on the TUI's own thread
+ * stderr is the screen (h #g193), so every failure degrades to drawing less.
  */
 import { RGBA } from "@opentui/core"
 import { createElement, createTextNode, effect, insert, insertNode, setProp } from "@opentui/solid"
@@ -48,6 +56,22 @@ import {
   type SubagentRow,
   type TaskPartInput,
 } from "./subagent-sidebar.js"
+import {
+  BAR_DONE,
+  BAR_TODO,
+  BAR_WIDTH,
+  createStatusWatch,
+  layoutProgressLine,
+  measureProgress,
+  pulseLit,
+  rowProgress,
+  sessionProgress,
+  turnMessages,
+  type ProgressMessage,
+  type ProgressSource,
+  type ProgressToolCall,
+  type ProgressView,
+} from "./progress-line.js"
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
 import { createAccountUsageReader, type AccountUsage } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
@@ -59,6 +83,15 @@ const SECTION_ORDER = 900
 const SPINNER_INTERVAL_MS = 100
 /** How often the spawn records and the finished rows' fade are rechecked. */
 const REFRESH_INTERVAL_MS = 1500
+/** The refresh while something runs: the progress lines' elapsed moves by the second. */
+const PROGRESS_TICK_MS = 1000
+/** Spinner ticks per cell the pulse advances: 200 ms a cell, two seconds a sweep. */
+const PULSE_TICKS_PER_CELL = 2
+/**
+ * The spinner counter wraps here, a multiple of the spinner's frame count and
+ * of the pulse's cells times its ticks per cell, so neither skips at the wrap.
+ */
+const FRAME_WRAP = SPINNER_FRAMES.length * PULSE_TICKS_PER_CELL * BAR_WIDTH
 
 /** The tool names a subagent dispatch has: `task` on 1.x, `subagent` on 2.x. */
 const TASK_TOOLS = new Set(["task", "subagent"])
@@ -76,13 +109,49 @@ export interface SidebarColors {
   effort: Color
   effortFaded: Color
   hover: Color
+  /** A plan bar's done cells: the theme's success colour. */
+  barDone: Color
+  /** The pulse that stands in for a plan: the spinner's accent. */
+  barPulse: Color
+  /** The track still to go: the muted colour pulled toward the background. */
+  barTrack: Color
+  /** `2/4`: the text colour, drawn bold. */
+  fraction: Color
+  /** The tool running now: the theme's info colour. */
+  tool: Color
+  /** A subagent's spend so far: the theme's secondary colour. */
+  cost: Color
+}
+
+/**
+ * Which colour each segment role takes. A `Record` over the role union, so a
+ * role added to `Segment` without a colour here fails the typecheck rather
+ * than drawing muted by accident.
+ */
+const ROLE_COLOR: Record<Segment["role"], keyof SidebarColors> = {
+  spinner: "spinner",
+  done: "done",
+  error: "error",
+  agent: "text",
+  description: "text",
+  muted: "muted",
+  effort: "effort",
+  "effort-faded": "effortFaded",
+  "bar-done": "barDone",
+  "bar-pulse": "barPulse",
+  "bar-track": "barTrack",
+  fraction: "fraction",
+  tool: "tool",
+  cost: "cost",
 }
 
 /** What one major has to supply; the renderer below does everything else. */
 interface SidebarHost {
   colors(): SidebarColors
   /** The inputs for one parent session, minus the clock and the records. */
-  gather(parentID: string): Pick<SidebarInput, "children" | "parts" | "completions" | "status" | "stoppedAt">
+  gather(parentID: string): Pick<SidebarInput, "children" | "parts" | "completions" | "status" | "stoppedAt" | "cost">
+  /** A session's own messages and todo list, what its progress line is measured from. */
+  progress(sessionID: string): ProgressSource
   navigate(sessionID: string): void
 }
 
@@ -113,27 +182,22 @@ function mix(a: Color, b: Color, weight: number): Color {
 }
 
 function roleColor(colors: SidebarColors, role: Segment["role"]): Color {
-  switch (role) {
-    case "spinner":
-      return colors.spinner
-    case "done":
-      return colors.done
-    case "error":
-      return colors.error
-    case "effort":
-      return colors.effort
-    case "effort-faded":
-      return colors.effortFaded
-    case "agent":
-    case "description":
-      return colors.text
-    default:
-      return colors.muted
-  }
+  return colors[ROLE_COLOR[role] ?? "muted"]
 }
 
+const EMPTY_SOURCE: ProgressSource = { messages: [], todos: [] }
+
+/** What one sidebar shows for its session: the rows, each running row's line, and the session's own. */
+interface SidebarView {
+  rows: SubagentRow[]
+  lines: Map<string, ProgressView>
+  progress?: ProgressView
+}
+
+const EMPTY_VIEW: SidebarView = { rows: [], lines: new Map() }
+
 /**
- * The section, its clocks and the spawn-record reader, for one host. Returns
+ * The sections, their clocks and the store readers, for one host. Returns
  * the slot renderer and a disposer.
  */
 function createSidebar(host: SidebarHost) {
@@ -142,6 +206,10 @@ function createSidebar(host: SidebarHost) {
   const records = createSpawnRecordReader()
   let recordMap: Map<string, SpawnRecord> = attempt(() => records.read(), new Map())
   const [recordVersion, setRecordVersion] = createSignal(0)
+  // What the TUI itself remembers about each session's status (h #g246): when
+  // it first saw a run and when it saw the stop, for the one line whose turn
+  // no message dates and for the linger after a turn.
+  const watch = createStatusWatch()
   // The `Accounts` lines (h #g244): every account's last usage reading, from
   // the store the server half writes on each `rate_limit_event`. Its own clock
   // value, so a tick that only rechecks the readings does not re-derive the
@@ -161,47 +229,121 @@ function createSidebar(host: SidebarHost) {
   const sectionsMounted = new Set<symbol>()
   let spinner: ReturnType<typeof setInterval> | undefined
   let refresh: ReturnType<typeof setInterval> | undefined
+  let refreshPeriod = 0
+  const refreshTick = () => {
+    if (sectionsShowing.size > 0) {
+      const next = attempt(() => records.read(), recordMap)
+      if (next !== recordMap) {
+        recordMap = next
+        setRecordVersion((value) => value + 1)
+      }
+      setNow(Date.now())
+    }
+    // The reader hands back the same map while the file is unchanged, and
+    // the clock moves once a minute (a reset is shown to the minute), so
+    // an idle tick re-lays nothing out.
+    setUsage(attempt(() => usageReader.read(), usage()))
+    const minute = Math.floor(Date.now() / 60_000) * 60_000
+    if (minute !== usageNow()) setUsageNow(minute)
+  }
   const syncClocks = () => {
     if (sectionsRunning.size > 0 && !spinner) {
-      spinner = setInterval(() => setFrame((value) => (value + 1) % SPINNER_FRAMES.length), SPINNER_INTERVAL_MS)
+      spinner = setInterval(() => setFrame((value) => (value + 1) % FRAME_WRAP), SPINNER_INTERVAL_MS)
     } else if (sectionsRunning.size === 0 && spinner) {
       clearInterval(spinner)
       spinner = undefined
     }
     const wanted = sectionsShowing.size > 0 || sectionsMounted.size > 0
-    if (wanted && !refresh) {
-      refresh = setInterval(() => {
-        if (sectionsShowing.size > 0) {
-          const next = attempt(() => records.read(), recordMap)
-          if (next !== recordMap) {
-            recordMap = next
-            setRecordVersion((value) => value + 1)
-          }
-          setNow(Date.now())
-        }
-        // The reader hands back the same map while the file is unchanged, and
-        // the clock moves once a minute (a reset is shown to the minute), so
-        // an idle tick re-lays nothing out.
-        setUsage(attempt(() => usageReader.read(), usage()))
-        const minute = Math.floor(Date.now() / 60_000) * 60_000
-        if (minute !== usageNow()) setUsageNow(minute)
-      }, REFRESH_INTERVAL_MS)
+    // While something runs the refresh is also the progress lines' second
+    // hand; otherwise it is the slower recheck of the records and the fades.
+    const period = sectionsRunning.size > 0 ? PROGRESS_TICK_MS : REFRESH_INTERVAL_MS
+    if (wanted && (!refresh || refreshPeriod !== period)) {
+      if (refresh) clearInterval(refresh)
+      refreshPeriod = period
+      refresh = setInterval(refreshTick, period)
     } else if (!wanted && refresh) {
       clearInterval(refresh)
       refresh = undefined
+      refreshPeriod = 0
     }
   }
 
-  const deriveRows = (parentID: string): SubagentRow[] => {
+  const progressOf = (sessionID: string): ProgressSource =>
+    attempt(() => host.progress(sessionID), EMPTY_SOURCE)
+
+  const deriveView = (sessionID: string): SidebarView => {
     recordVersion()
-    return deriveSubagentRows({
-      ...host.gather(parentID),
+    // The clock signal is what re-runs this every second; the time itself is
+    // read fresh, because a change in the host's store re-runs it between
+    // ticks too, when the signal can be a tick stale.
+    now()
+    const clock = Date.now()
+    const gathered = host.gather(sessionID)
+    const rows = deriveSubagentRows({
+      ...gathered,
       record: (id) => recordMap.get(id),
-      now: now(),
+      now: clock,
     })
+    const lines = new Map<string, ProgressView>()
+    for (const row of rows) {
+      if (row.state !== "running" || !row.sessionID) continue
+      const measure = measureProgress(progressOf(row.sessionID))
+      lines.set(
+        row.sessionID,
+        rowProgress(measure, { started: row.started, status: gathered.status(row.sessionID), now: clock }),
+      )
+    }
+    const status = gathered.status(sessionID)
+    const memory = watch.observe(sessionID, status, clock)
+    const progress = sessionProgress(measureProgress(progressOf(sessionID)), {
+      status,
+      busySince: memory.busySince,
+      stoppedAt: gathered.stoppedAt(sessionID) ?? memory.stoppedAt,
+      now: clock,
+    })
+    return { rows, lines, progress }
   }
 
-  const buildRow = (row: SubagentRow): OpentuiNode => {
+  const styled = (segment: Segment): OpentuiNode => {
+    // The fraction is the one bold piece; `b` is a text chunk like `span`.
+    const span = createElement(segment.role === "fraction" ? "b" : "span")
+    insertNode(span, createTextNode(segment.text))
+    effect(() => setProp(span, "style", { fg: roleColor(host.colors(), segment.role) }))
+    return span
+  }
+
+  /** One progress line; the spinner glyph and a plan-less pulse follow the spinner clock. */
+  const buildProgressLine = (view: ProgressView, lead: "glyph" | "indent"): OpentuiNode => {
+    const line = createElement("text")
+    setProp(line, "wrapMode", "none")
+    const layout = layoutProgressLine(view, lead, SIDEBAR_ROW_WIDTH)
+    layout.lead.forEach((segment, index) => {
+      if (index === 0 && lead === "glyph" && view.state === "running") {
+        const span = createElement("span")
+        insert(span, () => SPINNER_FRAMES[frame() % SPINNER_FRAMES.length])
+        effect(() => setProp(span, "style", { fg: roleColor(host.colors(), segment.role) }))
+        insertNode(line, span)
+      } else {
+        insertNode(line, styled(segment))
+      }
+    })
+    const pulsing = view.state === "running" && view.animate && !view.plan
+    layout.bar.forEach((segment, cell) => {
+      if (!pulsing) {
+        insertNode(line, styled(segment))
+        return
+      }
+      const span = createElement("span")
+      const lit = () => pulseLit(Math.floor(frame() / PULSE_TICKS_PER_CELL), cell)
+      insert(span, () => (lit() ? BAR_DONE : BAR_TODO))
+      effect(() => setProp(span, "style", { fg: roleColor(host.colors(), lit() ? "bar-pulse" : "bar-track") }))
+      insertNode(line, span)
+    })
+    for (const segment of layout.tail) insertNode(line, styled(segment))
+    return line
+  }
+
+  const buildRow = (row: SubagentRow, progress: ProgressView | undefined): OpentuiNode => {
     const box = createElement("box")
     const layout = layoutRow(row, SIDEBAR_ROW_WIDTH)
     const first = createElement("text")
@@ -218,17 +360,14 @@ function createSidebar(host: SidebarHost) {
     })
     insertNode(box, first)
     if (layout.second.length > 0) {
-      // One line of spans, like the first, so the effort can take its own colour.
+      // One line of spans, like the first, so the effort and the spend can
+      // take their own colours.
       const second = createElement("text")
       setProp(second, "wrapMode", "none")
-      for (const segment of layout.second) {
-        const span = createElement("span")
-        insertNode(span, createTextNode(segment.text))
-        effect(() => setProp(span, "style", { fg: roleColor(host.colors(), segment.role) }))
-        insertNode(second, span)
-      }
+      for (const segment of layout.second) insertNode(second, styled(segment))
       insertNode(box, second)
     }
+    if (progress) insertNode(box, attempt(() => buildProgressLine(progress, "indent"), createElement("box")))
     if (row.sessionID) {
       const sessionID = row.sessionID
       setProp(box, "onMouseDown", () => attempt(() => host.navigate(sessionID), undefined))
@@ -242,11 +381,21 @@ function createSidebar(host: SidebarHost) {
     return box
   }
 
+  const buildHeading = (label: string): OpentuiNode => {
+    const title = createElement("text")
+    const bold = createElement("b")
+    insertNode(bold, createTextNode(label))
+    insertNode(title, bold)
+    effect(() => setProp(title, "fg", host.colors().text))
+    return title
+  }
+
   const buildSection = (
-    list: SubagentRow[],
+    view: SidebarView,
     expanded: () => boolean,
     setExpanded: (next: (value: boolean) => boolean) => boolean,
   ): OpentuiNode => {
+    const list = view.rows
     const section = createElement("box")
     // Heading, styled like opencode 1.x's own MCP and Todo sections: a bold
     // title, and with more than two rows a caret that folds the list away
@@ -261,41 +410,44 @@ function createSidebar(host: SidebarHost) {
       effect(() => setProp(caret, "fg", host.colors().text))
       insertNode(header, caret)
     }
-    const title = createElement("text")
-    const bold = createElement("b")
-    insertNode(bold, createTextNode("Subagents"))
-    insertNode(title, bold)
+    const title = buildHeading("Subagents")
     const summary = createElement("span")
     insert(summary, () => (expanded() ? "" : ` (${collapsedSummary(list)})`))
     effect(() => setProp(summary, "style", { fg: host.colors().muted }))
     insertNode(title, summary)
-    effect(() => setProp(title, "fg", host.colors().text))
     insertNode(header, title)
     insertNode(section, header)
 
     const body = createElement("box")
-    insert(body, () => (expanded() || list.length <= 2 ? list.map(buildRow) : null))
+    insert(body, () =>
+      expanded() || list.length <= 2
+        ? list.map((row) => buildRow(row, row.sessionID ? view.lines.get(row.sessionID) : undefined))
+        : null,
+    )
+    insertNode(section, body)
+    return section
+  }
+
+  /** The `Progress` heading and the session's own line, rebuilt as the line changes. */
+  const buildProgress = (progress: () => ProgressView | undefined): OpentuiNode => {
+    const section = createElement("box")
+    insertNode(section, buildHeading("Progress"))
+    const body = createElement("box")
+    insert(body, () => {
+      const view = progress()
+      return view ? attempt(() => buildProgressLine(view, "glyph"), null) : null
+    })
     insertNode(section, body)
     return section
   }
 
   const buildAccounts = (lines: AccountUsageLine[]): OpentuiNode => {
     const section = createElement("box")
-    const title = createElement("text")
-    const bold = createElement("b")
-    insertNode(bold, createTextNode("Accounts"))
-    insertNode(title, bold)
-    effect(() => setProp(title, "fg", host.colors().text))
-    insertNode(section, title)
+    insertNode(section, buildHeading("Accounts"))
     for (const line of lines) {
       const text = createElement("text")
       setProp(text, "wrapMode", "none")
-      for (const segment of line.segments) {
-        const span = createElement("span")
-        insertNode(span, createTextNode(segment.text))
-        effect(() => setProp(span, "style", { fg: roleColor(host.colors(), segment.role) }))
-        insertNode(text, span)
-      }
+      for (const segment of line.segments) insertNode(text, styled(segment))
       insertNode(section, text)
     }
     return section
@@ -303,23 +455,26 @@ function createSidebar(host: SidebarHost) {
 
   const render = (sessionID: () => string | undefined): OpentuiNode => {
     const root = createElement("box")
+    const progressBox = createElement("box")
     const subagentsBox = createElement("box")
     const accountsBox = createElement("box")
+    insertNode(root, progressBox)
     insertNode(root, subagentsBox)
     insertNode(root, accountsBox)
     const key = Symbol("subagents-section")
     sectionsMounted.add(key)
     const [expanded, setExpanded] = createSignal(true)
-    const rows = createMemo(() => {
+    const view = createMemo(() => {
       const parentID = sessionID()
-      if (!parentID) return [] as SubagentRow[]
-      return attempt(() => deriveRows(parentID), [] as SubagentRow[])
+      if (!parentID) return EMPTY_VIEW
+      return attempt(() => deriveView(parentID), EMPTY_VIEW)
     })
     effect(() => {
-      const list = rows()
-      if (list.some((row) => row.state === "running")) sectionsRunning.add(key)
+      const { rows, progress } = view()
+      const running = rows.some((row) => row.state === "running") || progress?.state === "running"
+      if (running) sectionsRunning.add(key)
       else sectionsRunning.delete(key)
-      if (list.length > 0) sectionsShowing.add(key)
+      if (rows.length > 0 || progress) sectionsShowing.add(key)
       else sectionsShowing.delete(key)
       syncClocks()
     })
@@ -329,10 +484,15 @@ function createSidebar(host: SidebarHost) {
       sectionsMounted.delete(key)
       syncClocks()
     })
+    // The heading is built once per run; only the line under it follows the clock.
+    const hasProgress = createMemo(() => view().progress !== undefined)
+    insert(progressBox, () =>
+      hasProgress() ? attempt(() => buildProgress(() => view().progress), null) : null,
+    )
     insert(subagentsBox, () => {
-      const list = rows()
-      if (list.length === 0) return null
-      return attempt(() => buildSection(list, expanded, setExpanded), null)
+      const current = view()
+      if (current.rows.length === 0) return null
+      return attempt(() => buildSection(current, expanded, setExpanded), null)
     })
     const accountLines = createMemo(() =>
       attempt(() => accountUsageLines(usage(), usageNow()), [] as AccountUsageLine[]),
@@ -368,6 +528,13 @@ interface V1SessionInfo {
   title?: string
   agent?: string
   time?: { created?: number; updated?: number }
+  cost?: number
+}
+interface V1Message {
+  id: string
+  role: string
+  time?: { created?: number }
+  error?: unknown
 }
 interface V1Part {
   type: string
@@ -386,8 +553,10 @@ interface V1Api {
   state: {
     session: {
       get(sessionID: string): V1SessionInfo | undefined
-      messages(sessionID: string): ReadonlyArray<{ id: string; role: string; time?: { created?: number } }> | undefined
+      messages(sessionID: string): ReadonlyArray<V1Message> | undefined
       status(sessionID: string): { type?: string } | undefined
+      /** The session's todo list, as its own Todo section reads it. */
+      todo?(sessionID: string): ReadonlyArray<{ status?: string }> | undefined
     }
     part(messageID: string): ReadonlyArray<V1Part> | undefined
   }
@@ -400,6 +569,10 @@ interface V1Api {
       warning: Color
       error: Color
       backgroundElement: Color
+      backgroundPanel?: Color
+      info?: Color
+      primary?: Color
+      secondary?: Color
     }
   }
   route: { navigate(name: string, params?: Record<string, unknown>): void }
@@ -460,6 +633,8 @@ export function registerV1(api: V1Api): void {
     lastStatus.set(id, type)
     if (type === "idle" && previous && previous !== "idle") stoppedAt.set(id, Date.now())
     if (type !== "idle") stoppedAt.delete(id)
+    // A session going busy with nothing listed has no clock to notice it.
+    bump()
   })
 
   const fetchChildren = (parentID: string) => {
@@ -480,15 +655,22 @@ export function registerV1(api: V1Api): void {
   const host: SidebarHost = {
     colors() {
       const theme = api.theme.current
+      const muted = theme.textMuted
       return {
         text: theme.text,
-        muted: theme.textMuted,
+        muted,
         spinner: theme.accent,
-        done: mix(theme.success, theme.textMuted, 0.45),
-        error: mix(theme.error, theme.textMuted, 0.35),
-        effort: theme.warning ?? theme.textMuted,
-        effortFaded: mix(theme.warning ?? theme.textMuted, theme.textMuted, 0.45),
+        done: mix(theme.success, muted, 0.45),
+        error: mix(theme.error, muted, 0.35),
+        effort: theme.warning ?? muted,
+        effortFaded: mix(theme.warning ?? muted, muted, 0.45),
         hover: theme.backgroundElement,
+        barDone: theme.success ?? theme.accent,
+        barPulse: theme.accent,
+        barTrack: mix(muted, theme.backgroundPanel ?? theme.backgroundElement, 0.5),
+        fraction: theme.text,
+        tool: theme.info ?? theme.accent,
+        cost: theme.secondary ?? theme.primary ?? muted,
       }
     },
     gather(parentID) {
@@ -543,7 +725,29 @@ export function registerV1(api: V1Api): void {
           return "unknown"
         },
         stoppedAt: (id: string) => stoppedAt.get(id),
+        cost: (id: string) => attempt(() => api.state.session.get(id)?.cost, undefined),
       }
+    },
+    progress(sessionID) {
+      const messages: ProgressMessage[] = []
+      // The turn only: the parts of every earlier message are never read.
+      const turn = turnMessages(api.state.session.messages(sessionID) ?? [], (message) => message.role === "user")
+      for (const message of turn) {
+        const tools: ProgressToolCall[] = []
+        if (message.role === "assistant") {
+          for (const part of api.state.part(message.id) ?? []) {
+            if (part.type === "tool") tools.push({ name: part.tool, status: part.state?.status })
+          }
+        }
+        messages.push({
+          role: message.role,
+          created: message.time?.created,
+          error: message.error !== undefined && message.error !== null,
+          tools,
+        })
+      }
+      const todos = attempt(() => api.state.session.todo?.(sessionID), undefined) ?? []
+      return { messages, todos: todos.map((todo) => ({ status: todo.status })) }
     },
     navigate(sessionID) {
       api.route.navigate("session", { sessionID })
@@ -575,6 +779,8 @@ export function registerV1(api: V1Api): void {
 // `content[]` items named `subagent` (with `metadata.sessionID` set while the
 // call still runs, unlike 1.x), and a background child's end is a message of
 // type `synthetic` whose text is `<subagent sessionID="..." state="...">`.
+// It hands a TUI plugin no todo list (h #g246), so a 2.x progress line is
+// always the pulse.
 interface V2Session {
   id: string
   parentID?: string
@@ -586,6 +792,7 @@ interface V2Message {
   type?: string
   text?: string
   time?: { created?: number }
+  error?: unknown
   content?: Array<{
     type?: string
     name?: string
@@ -599,13 +806,19 @@ interface V2Context {
     session: {
       list(): V2Session[] | undefined
       status(sessionID: string): string
+      /** A child's own spend; a root's is its family's sum, which is not read. */
+      cost?(sessionID: string): number
       message: { list(sessionID: string): V2Message[] | undefined }
     }
   }
   theme: {
-    text: { base: Color; muted: Color; feedback: { success: V2Shade; warning?: V2Shade; error: V2Shade } }
-    background: { raised: { base: Color } }
-    hue: { accent: V2Shade }
+    text: {
+      base: Color
+      muted: Color
+      feedback: { success: V2Shade; warning?: V2Shade; error: V2Shade; info?: V2Shade }
+    }
+    background: { base?: Color; raised: { base: Color } }
+    hue: { accent: V2Shade; interactive?: V2Shade }
   }
   themeMode?: "dark" | "light"
   ui: {
@@ -619,8 +832,9 @@ export function setupV2(context: V2Context): () => void {
     colors() {
       const theme = context.theme
       const muted = theme.text.muted
-      // The accent hue at the shade that reads on this mode's background.
-      const accent = theme.hue.accent[context.themeMode === "light" ? "500" : "200"] ?? theme.text.base
+      // The accent and interactive hues at the shade that reads on this mode's background.
+      const shade = context.themeMode === "light" ? "500" : "200"
+      const accent = theme.hue.accent[shade] ?? theme.text.base
       return {
         text: theme.text.base,
         muted,
@@ -630,6 +844,12 @@ export function setupV2(context: V2Context): () => void {
         effort: theme.text.feedback.warning?.base ?? muted,
         effortFaded: mix(theme.text.feedback.warning?.base ?? muted, muted, 0.45),
         hover: theme.background.raised.base,
+        barDone: theme.text.feedback.success.base ?? accent,
+        barPulse: accent,
+        barTrack: mix(muted, theme.background.base ?? theme.background.raised.base, 0.5),
+        fraction: theme.text.base,
+        tool: theme.text.feedback.info?.base ?? accent,
+        cost: theme.hue.interactive?.[shade] ?? accent,
       }
     },
     gather(parentID) {
@@ -671,7 +891,33 @@ export function setupV2(context: V2Context): () => void {
           return "unknown"
         },
         stoppedAt: () => undefined,
+        cost: (id: string) => attempt(() => context.data.session.cost?.(id), undefined),
       }
+    },
+    progress(sessionID) {
+      const messages: ProgressMessage[] = []
+      // The turn only, as on 1.x; a synthetic message starts one like a user's.
+      const turn = turnMessages(
+        context.data.session.message.list(sessionID) ?? [],
+        (message) => message.type === "user" || message.type === "synthetic",
+      )
+      for (const message of turn) {
+        const tools: ProgressToolCall[] = []
+        if (message.type === "assistant") {
+          for (const item of message.content ?? []) {
+            if (item.type === "tool") tools.push({ name: item.name, status: item.state?.status })
+          }
+        }
+        messages.push({
+          // A synthetic message (a background child's end) prompts the parent
+          // like a user message does: it starts a turn.
+          role: message.type === "synthetic" ? "user" : (message.type ?? ""),
+          created: message.time?.created,
+          error: message.error !== undefined && message.error !== null,
+          tools,
+        })
+      }
+      return { messages, todos: [] }
     },
     navigate(sessionID) {
       context.ui.router.navigate({ type: "session", sessionID })

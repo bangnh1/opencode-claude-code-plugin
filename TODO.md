@@ -125,6 +125,15 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
+- 2026-10-17: the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, history g246).
+  Asked as "a visual line that represents a status bar/loading bar with an estimation of how much percent the
+  task is completed". Maintainer chose, in order: an honest measured line over an estimated percentage
+  ("Honest line, sidebar first"), the `▰▱` glyphs over box drawing ("this is nicer: ▰▱ i want this instead"),
+  no dependency for the live rig ("if we can get away with not having dependencies its better"), and the
+  spend on the model line ("1 is ok just make sure we use plenty of colors and highlights and low lights to
+  emphisis and distinguish the elements"). Code, tests, docs and the AGENTS.md rules are written, and the live
+  rig passed on 1.19.0 and 2.0.31 (the `▰▱` glyphs one cell each, the todo fraction on 1.x, the pulse on 2.x, the
+  linger, the spend on the model line, zero plugin warnings; screens in history g246). Left: the PR and its merge.
 - 2026-10-16: research pass 2's P1 build. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
   fresh session, history g242), measured live against opencode's own revert route. Lane B: DONE, PR #118 merged as
   `6cc612a` (`mapReadRules`, history g243; the first implementor died on appical's window, a second continued its
