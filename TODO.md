@@ -125,7 +125,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
-- 2026-10-16: research pass 2's P1 build. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
+Nothing in progress.
+
+## Done
+
+- 2026-10-16 to 2026-10-17: **done**: research pass 2's P1 build, released as v0.56.0. Lane A: DONE, PR #117 merged as `96c33f4` (replay a rewound thread into a
   fresh session, history g242), measured live against opencode's own revert route. Lane B: DONE, PR #118 merged as
   `6cc612a` (`mapReadRules`, history g243; the first implementor died on appical's window, a second continued its
   worktree on the default account). Lanes C (usage before the wall, history g244) and D (budgets and caps, history
@@ -145,12 +149,18 @@ raised, so they survive context compaction; removed when answered, done or dropp
   fake-CLI skip list, the store test guards its POSIX mode asserts), merged as `3729af2`. Lane D2 delivered
   PR #120 (the parent merged master into it, keeping both lanes' additions side by side, added
   `budget.test.ts` to the Windows skip list, gate 1720/1720); its probes ran on the appical account because
-  the default window was closed. Then one release.
+  the default window was closed. Merged as `7d0cdf8`, but not on the first try: the main checkout had been
+  switched to another session's `progress-line` branch, so that merge and the TODO.md record before it landed
+  there, `git push origin master` pushed nothing, and deleting the lane branch closed PR #120 unmerged. Fixed
+  from the release worktree: the branch restored, the PR reopened, master fast-forwarded to the same commits
+  (GitHub then marked it merged). Lesson: a parent session commits from its own worktree on master, never from
+  the shared main checkout. The lane C2 finding below was fixed as `e3b1f6a` before the release, which is one
+  minor bump carrying all four P1 items (PRs #117 to #120).
   - Found by lane D2, follow-up: a headless `result`'s `total_cost_usd` is CUMULATIVE per Claude session, so
     every `turnStats` footer after a process's first shows the session's running total, not that turn's
     cost (h #g245 and the AGENTS.md `turnStats` bullet record it). Fix shape: print the turn's delta, the
     ledger's `costDelta` already computes it.
-  - Found by lane C2, to fix before the release (one line plus a test): `src/cleanup-stale.ts:103` creates the
+  - Found by lane C2, fixed before the release as `e3b1f6a` (one line plus a test): `src/cleanup-stale.ts:103` creates the
     shared `$XDG_STATE_HOME/opencode-claude-code-plugin` directory at startup with no mode, so it is `0755` and
     the `0700` every store's `mkdirSync` asks for applies only when a store creates it first. The files inside
     are `0600` either way, so names leak, not contents.
@@ -160,8 +170,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
     minutes. Candidate: a spawn that has not emitted `init` yet gets at least `MCP_TIMEOUT` plus a margin before
     the first fire. Cause correlated, not proven: the CLI's own MCP logs were not found; a spawn at 12:47:54
     answered within seconds.
-
-## Done
 
 - 2026-10-16: **done** (probes, no code): "go ahead with the recommended". The eleven verify-first probes of
   research pass 2 (h #g241): headless permission mode stays `default` under the hygiene env var; that env var
