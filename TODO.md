@@ -142,7 +142,14 @@ raised, so they survive context compaction; removed when answered, done or dropp
   window (fresh, resets 20:20), continuing the same worktrees with continuation briefs `lane-c2.md` and
   `lane-d2.md` beside the originals: lane C2 `ses_eb5eb6718ffeM0ydCnCYAx6Kau`, lane D2 `ses_eb5eb670dffeKWQnXz9ZmLVDL0`.
   Lane C2 delivered PR #119 (two Windows-only test fixes added by the parent: the stream test joined the
-  fake-CLI skip list, the store test guards its POSIX mode asserts). Then one release.
+  fake-CLI skip list, the store test guards its POSIX mode asserts), merged as `3729af2`. Lane D2 delivered
+  PR #120 (the parent merged master into it, keeping both lanes' additions side by side, added
+  `budget.test.ts` to the Windows skip list, gate 1720/1720); its probes ran on the appical account because
+  the default window was closed. Then one release.
+  - Found by lane D2, follow-up: a headless `result`'s `total_cost_usd` is CUMULATIVE per Claude session, so
+    every `turnStats` footer after a process's first shows the session's running total, not that turn's
+    cost (h #g245 and the AGENTS.md `turnStats` bullet record it). Fix shape: print the turn's delta, the
+    ledger's `costDelta` already computes it.
   - Found by lane C2, to fix before the release (one line plus a test): `src/cleanup-stale.ts:103` creates the
     shared `$XDG_STATE_HOME/opencode-claude-code-plugin` directory at startup with no mode, so it is `0755` and
     the `0700` every store's `mkdirSync` asks for applies only when a store creates it first. The files inside
