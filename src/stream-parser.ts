@@ -18,7 +18,9 @@ import {
   reportRateLimitEvent,
   reportSystemInit,
   reportToolProgress,
+  resetsAtToMs,
 } from "./cli-events.js"
+import { recordUsageReading } from "./account-usage.js"
 import {
   accountBlockKind,
   formatAccountBlockNote,
@@ -88,6 +90,13 @@ export interface StreamParserContext {
   interactive: boolean
   /** The account this turn spawned on; the account-block note names it. */
   sourceAccount: string
+  /**
+   * The account whose CLI is actually answering, which is what a usage
+   * reading describes (`recordUsageReading`, h #g244). It differs from
+   * `sourceAccount` under `"off"` and `"ask"` while an override is moving this
+   * account's work elsewhere.
+   */
+  usageAccount: string
   /** That account's config dir, for the account-block note's login command. */
   accountConfigDir: string | undefined
   /** Whether a usage limit should end the turn on the switch form. */
@@ -312,6 +321,18 @@ export function createLineHandler(
           // a reused child gets no event of its own. See
           // `rememberAccountLimit`.
           rememberAccountLimit(ctx.sourceAccount, state.accountLimitHit)
+        }
+        // Every event is a reading, not only a rejection: the window filling
+        // up is what lets the operator hear about it before the wall
+        // (h #g244). Recorded on every turn, compaction and subagents
+        // included, because it is a fact about the account; only the note is
+        // kept to the turns that can speak (`completeResult`).
+        if (info?.rateLimitType && info.status) {
+          recordUsageReading(ctx.usageAccount, info.rateLimitType, {
+            utilization: info.utilization ?? null,
+            resetsAt: resetsAtToMs(info.resetsAt),
+            status: info.status,
+          })
         }
         const note = reportRateLimitEvent(msg)
         if (note) {
@@ -779,6 +800,18 @@ export function createLineHandler(
             ...(known.resetsAt === undefined && said.resetsText
               ? { resetsText: said.resetsText }
               : {}),
+          }
+          // The interactive transport has no `rate_limit_event`, so this reply
+          // is the only reading it ever gets: refused, utilization unknown
+          // (h #g244). Headless already recorded the event itself.
+          if (ctx.interactive) {
+            const hit = state.accountLimitHit
+            recordUsageReading(ctx.usageAccount, hit.window ?? "unknown", {
+              utilization: null,
+              resetsAt: resetsAtToMs(hit.resetsAt),
+              resetsText: hit.resetsText,
+              status: "rejected",
+            })
           }
         }
 

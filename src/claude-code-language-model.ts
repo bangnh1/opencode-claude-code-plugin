@@ -81,8 +81,10 @@ import {
   formatFailoverNote,
   formatFailoverStopNote,
   formatUsageLimitNote,
+  formatUsageNote,
   isAccountFailoverQuestionActive,
   nextAutoFailoverAccount,
+  nextUsageSwitchAccount,
   resolveFailoverSpawn,
   setAccountOverride,
   stripAccountSuffix,
@@ -90,6 +92,14 @@ import {
   type AutoFailoverRun,
   type FailoverSpawn,
 } from "./account-failover.js"
+import {
+  accountUsageAtOrOver,
+  markUsageNoted,
+  resolveUsageSwitchAt,
+  resolveUsageWarnThresholds,
+  usageCrossings,
+  usagePercent,
+} from "./account-usage.js"
 import {
   DOCTOR_COMMAND,
   buildDoctorReport,
@@ -115,6 +125,7 @@ import {
   resolveSpawnCwdForSession,
   fetchSessionRunState,
   settleSessionRunState,
+  watchChildSession,
 } from "./runtime-status.js"
 import {
   getActiveProcess,
@@ -2440,6 +2451,25 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     const usageLimitNoteActive =
       !compactionMode && mode !== "generate" && !failoverAskActive
 
+    // Usage BEFORE the limit (h #g244): the thresholds a served turn may
+    // announce in one `▌ **usage:**` note, the switch threshold among them so
+    // a switch is said exactly once per window. Kept off the same turns the
+    // stale-build note is, for the same reasons: a `/compact` turn's text is
+    // the stored summary, a `doGenerate` turn's is a return value, and a
+    // subagent's reply can become its parent's `task` result. The child lookup
+    // is started here and read at the result without waiting; until opencode
+    // answers, the note stays unsaid and the crossing stays pending for the
+    // next turn that can say it.
+    const usageWarnThresholds = resolveUsageWarnThresholds(this.config.usageWarnThresholds)
+    const usageSwitchAt =
+      this.config.usageSwitchAt === null ? null : resolveUsageSwitchAt(this.config.usageSwitchAt)
+    const usageNoteThresholds = [
+      ...new Set([...usageWarnThresholds, ...(usageSwitchAt === null ? [] : [usageSwitchAt])]),
+    ]
+    const usageNotesPossible =
+      usageNoteThresholds.length > 0 && !compactionMode && mode !== "generate"
+    const usageChildSession = usageNotesPossible ? watchChildSession(affinity) : () => true
+
     // Whether this turn tells the operator that the opencode process they are
     // talking to is running an older plugin build than the one on disk
     // (src/stale-build.ts, h #g192). Resolved here, in the prologue, because
@@ -3446,6 +3476,72 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         // live in src/turn-controller.ts now, taking the `TurnState` they used
         // to close over. What stayed is what also reads the turn's prologue:
         // the line handler, the close handler and `completeResult` below.
+        // The `▌ **usage:**` note and, at `usageSwitchAt`, the switch BEFORE
+        // the wall (h #g244). Read off the account usage store, which the
+        // parser has already updated from this turn's `rate_limit_event`; a
+        // turn that carried no event still says a crossing an earlier turn
+        // could not (a compaction, a subagent), and says nothing already said.
+        const writeUsageNote = () => {
+          const crossings = usageCrossings(spawnedAccount, usageNoteThresholds)
+          if (crossings.length === 0) return
+          const switching =
+            usageSwitchAt !== null &&
+            crossings.some((crossing) => crossing.crossed.includes(usageSwitchAt))
+          let movedTo: { target: string; until?: number } | undefined
+          let candidates: string[] = []
+          if (switching && usageSwitchAt !== null) {
+            if (accountRun) {
+              // `"auto"`: the override the limit switch sets, keyed on this
+              // turn's own account, set early. The turn that crossed was
+              // served and finishes as served; the NEXT turn starts elsewhere.
+              const target = nextUsageSwitchAccount(
+                failoverAccounts,
+                new Set([spawnedAccount, sourceAccount]),
+                usageSwitchAt,
+              )
+              if (target) {
+                const until = Math.max(
+                  ...crossings
+                    .filter((crossing) => crossing.crossed.includes(usageSwitchAt))
+                    .map((crossing) => crossing.entry.resetsAt ?? 0),
+                )
+                movedTo = { target, ...(until > 0 ? { until } : {}) }
+                setAccountOverride(sourceAccount, target, movedTo.until, Date.now(), "usage-threshold")
+              }
+            } else {
+              // `"off"` and `"ask"`: never a form after a served turn, only the
+              // accounts the operator can pick a model from.
+              candidates = failoverAccounts.filter(
+                (account) =>
+                  account !== spawnedAccount && !accountUsageAtOrOver(account, usageSwitchAt),
+              )
+            }
+          }
+          const windows = crossings.map((crossing) => ({
+            window: crossing.window,
+            percent: usagePercent(crossing.entry.utilization ?? 0),
+            resetsAt: crossing.entry.resetsAt,
+            resetsText: crossing.entry.resetsText,
+          }))
+          for (const crossing of crossings) {
+            log.notice("claude account usage crossed a warning threshold", {
+              sessionKey: sk,
+              account: spawnedAccount,
+              rateLimitType: crossing.window,
+              utilization: usagePercent(crossing.entry.utilization ?? 0),
+              crossed: crossing.crossed,
+              switched: movedTo !== undefined,
+            })
+            markUsageNoted(spawnedAccount, crossing.window, crossing.crossed)
+          }
+          controller.enqueue({
+            type: "text-delta",
+            id: state.startTextBlock(),
+            delta: formatUsageNote({ account: spawnedAccount, windows, movedTo, candidates }),
+          })
+          state.endTextBlock()
+        }
+
         const completeResult = (msg: ClaudeStreamMessage) => {
           if (state.controllerClosed) return
           // Which Claude session answered this conversation, for the next
@@ -3710,6 +3806,21 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             state.endTextBlock()
           }
 
+          // The account's usage crossed a threshold in a window, and the turn
+          // was served (h #g244). Said once per account per window per
+          // threshold, persisted, so neither a reused process's next turn nor a
+          // restarted opencode repeats it. A failed turn is left to the notes
+          // above: a limit gets `▌ **usage limit:**`, and a turn that crossed
+          // is never turned into a failure or a form by this.
+          if (
+            usageNotesPossible &&
+            msg.is_error !== true &&
+            !state.resultFailure &&
+            usageChildSession() === false
+          ) {
+            writeUsageNote()
+          }
+
           // A failed compaction turn ends on an error, never on text. What
           // this stream says is what opencode stores as the summary, so a
           // usage limit used to become the conversation's own memory of
@@ -3789,6 +3900,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           planModeQuestionActive,
           interactive: useInteractive,
           sourceAccount: limitAccount,
+          usageAccount: spawnedAccount,
           accountConfigDir: accountRun ? self.skillBridgeSpawn(failover).configDir : self.config.configDir,
           failoverAskActive,
           autoFailoverTarget,

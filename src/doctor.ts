@@ -19,6 +19,7 @@ import {
   type RedactionContext,
 } from "./diagnostic-bundle.js"
 import {
+  formatResetsAtLocal,
   snapshotHookFailures,
   snapshotMcpServerErrors,
   snapshotPluginLoadFailures,
@@ -32,6 +33,12 @@ import {
   type ReadRuleMapping,
 } from "./read-rules.js"
 import { describeLogFile, log } from "./logger.js"
+import {
+  isReadingCurrent,
+  snapshotAccountUsage,
+  usagePercent,
+  type AccountUsage,
+} from "./account-usage.js"
 import { fetchPlanUsage, wantsPlanUsage, type PlanUsage } from "./plan-usage.js"
 import {
   snapshotPendingProxyCalls,
@@ -199,6 +206,11 @@ export interface DoctorReport {
   hookFailures: HookFailure[]
   /** The CLI's own plan-usage report, only when `usage` was asked for. */
   planUsage: PlanUsage
+  /**
+   * Every account's last usage reading, from the store (h #g244). Optional so a
+   * hand-built report in a test needs no entry; the live report always has one.
+   */
+  accountUsage?: AccountUsage
   /** Background subagents: the gate as last read, and what this process did. */
   backgroundSubagents: {
     gate: BackgroundSubagentGate | undefined
@@ -437,6 +449,13 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push("")
   lines.push(...formatReadRules(report.readRules))
 
+  if (report.accountUsage) {
+    lines.push("")
+    lines.push("**Account usage**")
+    lines.push("")
+    lines.push(...formatAccountUsage(report.accountUsage))
+  }
+
   lines.push("")
   lines.push("**Background subagents**")
   lines.push("")
@@ -556,6 +575,53 @@ function formatReadRules(mapping: ReadRuleMapping | undefined): string[] {
   }
 
   return lines
+}
+
+/**
+ * What each account's usage windows looked like the last time Claude Code said
+ * (h #g244): the reading, its reset, how old it is, and which warning
+ * thresholds a `▌ **usage:**` note already announced in that window. A window
+ * whose reset has passed is listed as over rather than dropped, because "the
+ * last reading is from before the reset" is itself the answer to "why is the
+ * sidebar empty".
+ */
+function formatAccountUsage(usage: AccountUsage, now: number = Date.now()): string[] {
+  const rows: string[] = []
+  for (const account of [...usage.keys()].sort()) {
+    for (const [window, entry] of usage.get(account)!) {
+      const used =
+        entry.status === "rejected" && entry.utilization === null
+          ? "out"
+          : entry.utilization === null
+            ? "unknown"
+            : `${usagePercent(entry.utilization)}%`
+      const resets =
+        entry.resetsAt !== undefined
+          ? formatResetsAtLocal(entry.resetsAt) ?? "unknown"
+          : entry.resetsText
+            ? tableCell(entry.resetsText)
+            : "unknown"
+      rows.push(
+        `| ${account} | ${window} | ${used} | ${entry.status} | ${resets}${
+          isReadingCurrent(entry, now) ? "" : " (window over)"
+        } | ${formatAge(Math.max(0, now - entry.observedAt))} ago | ${
+          entry.noted.length > 0 ? entry.noted.map((t) => `${t}%`).join(", ") : "none"
+        } |`,
+      )
+    }
+  }
+  if (rows.length === 0) {
+    return [
+      "No reading yet. Claude Code reports an account's usage on the stream when its view " +
+        "of the limits changes, usually on the first turn of a process; the interactive " +
+        "transport reports nothing until a limit.",
+    ]
+  }
+  return [
+    "| account | window | used | status | resets | observed | noted at |",
+    "|---|---|---|---|---|---|---|",
+    ...rows,
+  ]
 }
 
 /**
@@ -795,6 +861,7 @@ export async function gatherDoctorReport(
     pluginLoadFailures: snapshotPluginLoadFailures(),
     hookFailures: snapshotHookFailures(),
     planUsage,
+    accountUsage: snapshotAccountUsage(),
     backgroundSubagents: {
       gate: snapshotBackgroundSubagentGate(),
       ledgers: snapshotBackgroundTasks(),
@@ -856,6 +923,20 @@ export function withholdFreeText(report: DoctorReport): DoctorReport {
       ...failure,
       stderr: withhold(failure.stderr),
     })),
+    // The reset phrase the TUI printed is Claude Code's text, not the plugin's.
+    accountUsage:
+      report.accountUsage &&
+      new Map(
+        [...report.accountUsage].map(([account, windows]) => [
+          account,
+          new Map(
+            [...windows].map(([window, entry]) => [
+              window,
+              entry.resetsText ? { ...entry, resetsText: withhold(entry.resetsText) } : entry,
+            ]),
+          ),
+        ]),
+      ),
     // The operator's own glob patterns. Not plugin-authored, so they follow
     // the same rule as a hook's stderr: the shape and the counts survive a
     // bundle, the text does not.

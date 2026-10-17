@@ -122,6 +122,10 @@ export interface ClaudeCodeConfig {
   resumeAcrossModelChanges?: boolean
   /** Carry a conversation's Claude transcript over on an account switch. Default true. */
   crossAccountResume?: boolean
+  /** Resolved `usageWarnThresholds`, in percent; empty for no notes. */
+  usageWarnThresholds?: number[]
+  /** Resolved `usageSwitchAt`, in percent, or null for never. */
+  usageSwitchAt?: number | null
   logging?: LoggingConfig
 }
 
@@ -704,6 +708,25 @@ export interface ClaudeCodeProviderSettings {
    * verified live. Set `false` to keep the replay.
    */
   crossAccountResume?: boolean
+
+  /**
+   * Usage levels, in percent of a window, at which a served turn ends with one
+   * `▌ **usage:**` note naming the account, the window, how much is used and
+   * when it resets. Default `[50, 75, 90, 95]`; `[]` turns the notes off. Each
+   * threshold is said once per account per window, and again only after the
+   * window resets. Read from Claude Code's own `rate_limit_event`, so the
+   * headless transport only. See docs/configuration/accounts.md.
+   */
+  usageWarnThresholds?: number[]
+
+  /**
+   * The usage level, in percent, at which work should leave this account
+   * BEFORE it hits the wall. Default `90`; `false` or `0` never. With
+   * `accountFailover: "auto"` and another eligible account, new turns move to
+   * it until the window resets; otherwise the note names the other accounts to
+   * pick a model from. The turn that crossed is never changed: it was served.
+   */
+  usageSwitchAt?: number | false
 
   /**
    * Routing for Claude's built-in `WebSearch` tool.
