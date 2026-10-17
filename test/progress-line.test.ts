@@ -1,11 +1,11 @@
 /**
- * The model behind the sidebar's progress lines (h #g246): what a line
- * measures, when the session's own line shows and lingers, the bar's rounding
- * and the pulse's wrap, the width fit, and what the TUI remembers about a
- * session's status.
+ * The model behind the sidebar's progress lines (h #g246, h #g247): what a
+ * line measures, when the session's own line shows and lingers, a plan's and
+ * an estimate's cells, the fill memory that keeps a bar from stepping back,
+ * the width fit, and what the TUI remembers about a session's status.
  *
- * Every number on a line is measured off the session's own messages and todo
- * list; nothing here estimates.
+ * The estimate itself is `src/turn-history.ts`' and is tested there; here a
+ * view carries one and the line is laid out from it.
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -13,15 +13,15 @@ import { test } from "node:test"
 import {
   BAR_WIDTH,
   PROGRESS_LINGER_MS,
-  PULSE_RUN,
   STATUS_WATCH_CAP,
+  createFillMemory,
   createStatusWatch,
+  estimateCells,
   filledCells,
   formatElapsed,
   layoutProgressLine,
   measureProgress,
   progressLineText,
-  pulseLit,
   rowProgress,
   sessionProgress,
   turnMessages,
@@ -33,7 +33,7 @@ import { SIDEBAR_ROW_WIDTH, SPINNER_FRAMES } from "../src/subagent-sidebar.js"
 
 const NOW = 1_800_000_000_000
 
-const user = (created: number): ProgressMessage => ({ role: "user", created, tools: [] })
+const user = (created: number, chars?: number): ProgressMessage => ({ role: "user", created, tools: [], chars })
 const assistant = (
   created: number,
   tools: Array<[string, string]> = [],
@@ -67,21 +67,24 @@ test("turnMessages is the last user message and what follows, or everything with
   assert.deepEqual(measureProgress(source([...turnMessages(thread, isUser)])), whole)
 })
 
-test("measureProgress dates the turn from the last user message and counts the calls after it", () => {
+test("measureProgress dates the turn from the last user message, keeps its length, and counts the calls after it", () => {
   const measure = measureProgress(
     source([
-      user(NOW - 90_000),
+      user(NOW - 90_000, 2_000),
       assistant(NOW - 89_000, [["read", "completed"], ["bash", "completed"]]),
-      user(NOW - 60_000),
+      user(NOW - 60_000, 420),
       assistant(NOW - 59_000, [["grep", "completed"]]),
       assistant(NOW - 30_000, [["edit", "completed"], ["bash", "running"]]),
     ]),
   )
   assert.equal(measure.startedAt, NOW - 60_000)
+  assert.equal(measure.chars, 420)
   assert.equal(measure.calls, 3)
   assert.equal(measure.tool, "bash")
   assert.equal(measure.failed, false)
   assert.equal(measure.plan, undefined)
+  // A message of unknown length is unknown, not zero.
+  assert.equal(measureProgress(source([user(1)])).chars, undefined)
 })
 
 test("measureProgress names a tool only while the newest call still runs", () => {
@@ -116,6 +119,7 @@ test("measureProgress reads the failure off the newest reply and the plan off th
 test("measureProgress with no user message at all takes the whole transcript as the turn", () => {
   const measure = measureProgress(source([assistant(5, [["bash", "completed"]]), assistant(6, [["read", "running"]])]))
   assert.equal(measure.startedAt, undefined)
+  assert.equal(measure.chars, undefined)
   assert.equal(measure.calls, 2)
   assert.equal(measure.tool, "read")
 })
@@ -125,7 +129,6 @@ test("sessionProgress runs while busy, elapsed from the turn's start, else from 
   const running = sessionProgress(measure, { status: "busy", now: NOW })
   assert.deepEqual(running, {
     state: "running",
-    animate: true,
     plan: undefined,
     elapsedMs: 63_000,
     calls: 1,
@@ -142,7 +145,6 @@ test("sessionProgress lingers a finished turn with its final state, then leaves"
   const lingering = sessionProgress(ok, { status: "idle", stoppedAt: NOW - PROGRESS_LINGER_MS, now: NOW })
   assert.deepEqual(lingering, {
     state: "done",
-    animate: false,
     plan: undefined,
     elapsedMs: 130_000 - PROGRESS_LINGER_MS,
     calls: 1,
@@ -165,23 +167,17 @@ test("sessionProgress never lingers a stop older than the turn it would describe
   assert.equal(sessionProgress(measure, { status: "idle", stoppedAt: NOW - 2_000, now: NOW }), undefined)
 })
 
-test("rowProgress runs by the row's say-so and animates only while the child reads busy", () => {
+test("rowProgress runs by the row's say-so, dated from its own turn, else from the dispatch", () => {
   const measure = measureProgress(source([user(NOW - 45_000), assistant(NOW - 44_000, [["read", "running"]])]))
-  const busy = rowProgress(measure, { started: NOW - 50_000, status: "busy", now: NOW })
-  assert.deepEqual(busy, {
+  assert.deepEqual(rowProgress(measure, { started: NOW - 50_000, now: NOW }), {
     state: "running",
-    animate: true,
     plan: undefined,
     elapsedMs: 45_000,
     calls: 1,
     tool: "read",
   })
-  // A background child inside the starting grace reads idle: frozen, not gone.
-  const frozen = rowProgress(measure, { started: NOW - 50_000, status: "idle", now: NOW })
-  assert.equal(frozen.state, "running")
-  assert.equal(frozen.animate, false)
   // A child whose messages the TUI does not hold is dated from the dispatch.
-  const unseen = rowProgress(measureProgress(source([])), { started: NOW - 50_000, status: "busy", now: NOW })
+  const unseen = rowProgress(measureProgress(source([])), { started: NOW - 50_000, now: NOW })
   assert.equal(unseen.elapsedMs, 50_000)
   assert.equal(unseen.calls, 0)
 })
@@ -212,6 +208,24 @@ test("createStatusWatch remembers a run's start and its stop, both ways, and for
   assert.deepEqual(capped.observe("ses_0", "idle", 2_000), { busySince: undefined, stoppedAt: undefined })
 })
 
+test("createFillMemory only ever advances a bar within a turn, and starts over with the next", () => {
+  const fills = createFillMemory()
+  assert.equal(fills.hold("ses_a", 100, 0.3), 0.3)
+  // The estimate's total rose and the raw fill fell: the bar holds.
+  assert.equal(fills.hold("ses_a", 100, 0.2), 0.3)
+  assert.equal(fills.hold("ses_a", 100, 0.5), 0.5)
+  // A new turn, a new bar.
+  assert.equal(fills.hold("ses_a", 200, 0.1), 0.1)
+  // Another session is its own.
+  assert.equal(fills.hold("ses_b", 100, 0.05), 0.05)
+
+  const capped = createFillMemory()
+  for (let index = 0; index < STATUS_WATCH_CAP; index += 1) capped.hold(`ses_${index}`, 1, 0.9)
+  capped.hold("ses_new", 1, 0.9)
+  assert.equal(capped.hold("ses_1", 1, 0.1), 0.9, "the second observed is still held")
+  assert.equal(capped.hold("ses_0", 1, 0.1), 0.1, "the first was forgotten for the newcomer")
+})
+
 test("filledCells rounds, but is never full before the last item nor empty after the first", () => {
   assert.equal(filledCells({ done: 0, total: 4 }), 0)
   assert.equal(filledCells({ done: 4, total: 4 }), BAR_WIDTH)
@@ -224,16 +238,14 @@ test("filledCells rounds, but is never full before the last item nor empty after
   assert.equal(filledCells({ done: 0, total: 0 }), 0)
 })
 
-test("pulseLit lights a run that wraps round the end of the bar", () => {
-  const lit = (position: number) =>
-    Array.from({ length: BAR_WIDTH }, (_, cell) => (pulseLit(position, cell) ? "▰" : "▱")).join("")
-  assert.equal(lit(0), "▰▰▰▱▱▱▱▱▱▱")
-  assert.equal(lit(4), "▱▱▱▱▰▰▰▱▱▱")
-  assert.equal(lit(8), "▰▱▱▱▱▱▱▱▰▰")
-  assert.equal(lit(9), "▰▰▱▱▱▱▱▱▱▰")
-  assert.equal(lit(10), lit(0))
-  assert.equal(lit(-1), lit(9))
-  assert.equal(Array.from(lit(3)).filter((cell) => cell === "▰").length, PULSE_RUN)
+test("estimateCells rounds the fill, is never full until the turn is over every recorded one, and is full then", () => {
+  assert.equal(estimateCells({ totalMs: 1, fill: 0, over: false }), 0)
+  assert.equal(estimateCells({ totalMs: 1, fill: 0.04, over: false }), 0)
+  assert.equal(estimateCells({ totalMs: 1, fill: 0.05, over: false }), 1)
+  assert.equal(estimateCells({ totalMs: 1, fill: 0.42, over: false }), 4)
+  assert.equal(estimateCells({ totalMs: 1, fill: 0.97, over: false }), BAR_WIDTH - 1)
+  assert.equal(estimateCells({ totalMs: 1, fill: 1, over: false }), BAR_WIDTH - 1)
+  assert.equal(estimateCells({ totalMs: 1, fill: 1, over: true }), BAR_WIDTH)
 })
 
 test("formatElapsed reads as seconds, then minutes and seconds, then hours and minutes", () => {
@@ -248,7 +260,6 @@ test("formatElapsed reads as seconds, then minutes and seconds, then hours and m
 
 const view = (overrides: Partial<ProgressView> = {}): ProgressView => ({
   state: "running",
-  animate: true,
   elapsedMs: 63_000,
   calls: 12,
   tool: "bash",
@@ -270,45 +281,68 @@ test("layoutProgressLine draws a plan as the fraction's cells, with the fraction
   )
 })
 
-test("layoutProgressLine draws no plan as the pulse, with the call count, and under a row as an indent", () => {
-  const laid = layoutProgressLine(view(), "indent", SIDEBAR_ROW_WIDTH, 0, 4)
-  // One cell in, two spaces after the bar: exactly the row's width.
-  assert.equal(progressLineText(laid), " ▱▱▱▱▰▰▰▱▱▱  1m03s · 12 calls · bash")
-  assert.equal(cells(progressLineText(laid)), SIDEBAR_ROW_WIDTH)
+test("layoutProgressLine draws an estimate as elapsed over the total, in the estimate's own role", () => {
+  const laid = layoutProgressLine(view({ estimate: { totalMs: 150_000, fill: 0.42, over: false } }), "indent")
+  assert.equal(progressLineText(laid), " ▰▰▰▰▱▱▱▱▱▱  1m03s/~2m30s · bash")
+  assert.ok(cells(progressLineText(laid)) <= SIDEBAR_ROW_WIDTH)
   assert.deepEqual(roles(laid.lead), ["muted"])
+  assert.deepEqual(roles(laid.bar), [...Array(4).fill("bar-done"), ...Array(6).fill("bar-track")])
   assert.deepEqual(
-    roles(laid.bar),
-    ["bar-track", "bar-track", "bar-track", "bar-track", "bar-pulse", "bar-pulse", "bar-pulse", "bar-track", "bar-track", "bar-track"],
+    laid.tail.map((segment) => [segment.text, segment.role]),
+    [["  ", "muted"], ["1m03s/~2m30s", "estimate"], [" · ", "muted"], ["bash", "tool"]],
   )
+  // Past every recorded turn: the bar is full in the over role and the slot says how far over the usual.
+  const over = layoutProgressLine(view({ estimate: { totalMs: 40_000, fill: 1, over: true } }), "glyph")
+  assert.equal(progressLineText(over), "⠋ ▰▰▰▰▰▰▰▰▰▰  1m03s/~40s · bash")
+  assert.ok(over.bar.every((segment) => segment.role === "bar-over"))
+  assert.equal(over.tail.find((segment) => segment.text === "1m03s/~40s")?.role, "estimate-over")
+  // A plan outranks an estimate.
+  const both = layoutProgressLine(view({ plan: { done: 2, total: 4 }, estimate: { totalMs: 150_000, fill: 0.42, over: false } }), "glyph")
+  assert.equal(progressLineText(both), "⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash")
+})
+
+test("layoutProgressLine draws no bar with neither a plan nor an estimate, with the call count, and under a row as an indent", () => {
+  const laid = layoutProgressLine(view(), "indent", SIDEBAR_ROW_WIDTH, 0)
+  assert.equal(progressLineText(laid), " 1m03s · 12 calls · bash")
+  assert.deepEqual(laid.bar, [])
+  assert.deepEqual(roles(laid.lead), ["muted"])
+  assert.equal(laid.tail[0]?.text, "1m03s", "no bar, no gap after it")
   assert.equal(laid.tail.find((segment) => segment.text === "bash")?.role, "tool")
-  assert.equal(progressLineText(layoutProgressLine(view({ calls: 1 }), "indent")), " ▰▰▰▱▱▱▱▱▱▱  1m03s · 1 call · bash")
-  assert.equal(progressLineText(layoutProgressLine(view({ calls: 0, tool: undefined }), "indent")), " ▰▰▰▱▱▱▱▱▱▱  1m03s")
+  assert.equal(progressLineText(layoutProgressLine(view({ calls: 1 }), "glyph")), "⠋ 1m03s · 1 call · bash")
+  assert.equal(progressLineText(layoutProgressLine(view({ calls: 0, tool: undefined }), "indent")), " 1m03s")
 })
 
 test("layoutProgressLine fits the width by giving up the call count, then cutting the tool, then dropping it", () => {
   // Too wide: the call count goes.
-  const long = layoutProgressLine(view({ calls: 123, tool: "webfetch" }), "glyph")
-  assert.equal(progressLineText(long), "⠋ ▰▰▰▱▱▱▱▱▱▱  1m03s · webfetch")
-  // A tool name that would still not fit is cut, the elapsed never.
-  const mcp = layoutProgressLine(view({ tool: "codebase-memory-mcp_search_graph", elapsedMs: 3_720_000 }), "glyph")
+  const long = layoutProgressLine(view({ calls: 123, tool: "codebase-memory-mcp_search_graph" }), "glyph")
+  assert.equal(progressLineText(long), "⠋ 1m03s · codebase-memory-mcp_searc…")
+  assert.ok(cells(progressLineText(long)) <= SIDEBAR_ROW_WIDTH, progressLineText(long))
+  // With a bar, less room: the tool is cut shorter, the elapsed never.
+  const mcp = layoutProgressLine(
+    view({ tool: "codebase-memory-mcp_search_graph", estimate: { totalMs: 150_000, fill: 0.3, over: false } }),
+    "glyph",
+  )
   const text = progressLineText(mcp)
   assert.ok(cells(text) <= SIDEBAR_ROW_WIDTH, text)
-  assert.equal(text, "⠋ ▰▰▰▱▱▱▱▱▱▱  1h02m · codebase-memo…")
+  assert.equal(text, "⠋ ▰▰▰▱▱▱▱▱▱▱  1m03s/~2m30s · codeba…")
   assert.equal(mcp.tail.at(-1)?.role, "tool")
   // No room for even two cells of a tool: it goes, the required pieces stay.
   const narrow = layoutProgressLine(view({ plan: { done: 1, total: 2 }, tool: "bash" }), "glyph", 26)
   assert.equal(progressLineText(narrow), "⠋ ▰▰▰▰▰▱▱▱▱▱  1/2 · 1m03s")
 })
 
-test("layoutProgressLine draws an ended line filled, faded, with its glyph and no tool", () => {
-  const done = layoutProgressLine(view({ state: "done", animate: false, calls: 12, tool: undefined }), "glyph")
+test("layoutProgressLine draws an ended line filled, faded, with its glyph and no tool, whatever it estimated", () => {
+  const done = layoutProgressLine(
+    view({ state: "done", calls: 12, tool: undefined, estimate: { totalMs: 150_000, fill: 0.42, over: false } }),
+    "glyph",
+  )
   assert.equal(progressLineText(done), "✓ ▰▰▰▰▰▰▰▰▰▰  1m03s · 12 calls")
   assert.deepEqual(roles(done.lead), ["done", "muted"])
   assert.ok(done.bar.every((segment) => segment.role === "done"))
-  const failed = layoutProgressLine(view({ state: "error", animate: false, plan: { done: 2, total: 4 }, tool: "bash" }), "glyph")
-  assert.equal(progressLineText(failed), "✗ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s")
+  const failed = layoutProgressLine(view({ state: "error", plan: { done: 2, total: 4 }, tool: "bash" }), "glyph")
+  assert.equal(progressLineText(failed), "✗ ▰▰▰▰▰▰▰▰▰▰  2/4 · 1m03s")
   assert.equal(failed.lead[0].role, "error")
-  assert.deepEqual(roles(failed.bar), [...Array(5).fill("error"), ...Array(5).fill("bar-track")])
+  assert.ok(failed.bar.every((segment) => segment.role === "error"))
   // The fraction is no longer the one bright piece once the line has ended.
   assert.equal(failed.tail.find((segment) => segment.text === "2/4")?.role, "muted")
 })

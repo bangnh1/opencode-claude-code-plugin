@@ -22,14 +22,17 @@
  *
  * ```json
  * { "version": 1, "sessions": {
- *     "ses_abc": { "model": "claude-sonnet-5-5", "effort": "high", "account": "alpha", "at": 1760000000000 } } }
+ *     "ses_abc": { "model": "claude-sonnet-5-5", "effort": "high", "account": "alpha", "agent": "implementor", "at": 1760000000000 } } }
  * ```
  *
- * A model id, an effort level and an account NAME: the same three strings the
- * dispatch store keeps (h #g228), none secret. No prompt, no path, no session
- * key. `account` is written only on a multi-account install, where it tells
- * two configured accounts apart; on a single-account install there is nothing
- * to tell apart and it stays out.
+ * A model id, an effort level, an account NAME and an agent name: the three
+ * strings the dispatch store keeps (h #g228) plus the agent the session runs
+ * as, none secret. No prompt, no path, no session key. `account` is written
+ * only on a multi-account install, where it tells two configured accounts
+ * apart; on a single-account install there is nothing to tell apart and it
+ * stays out. `agent` is what the turn-history key needs beside the model
+ * (h #g247): the TUI knows a child's agent from its title but the session on
+ * screen's from nothing else.
  *
  * ## Cost and failure
  *
@@ -55,6 +58,8 @@ export interface SpawnRecord {
   model?: string
   effort?: string
   account?: string
+  /** The opencode agent the session ran as: `build`, `explore`, a subagent's type. */
+  agent?: string
   at: number
 }
 
@@ -78,7 +83,7 @@ function isRecord(value: unknown): value is SpawnRecord {
   if (!record || typeof record !== "object" || Array.isArray(record)) return false
   if (typeof record.at !== "number" || !Number.isFinite(record.at)) return false
   const ok = (field: unknown) => field === undefined || typeof field === "string"
-  if (!ok(record.model) || !ok(record.effort) || !ok(record.account)) return false
+  if (!ok(record.model) || !ok(record.effort) || !ok(record.account) || !ok(record.agent)) return false
   return !!record.model
 }
 
@@ -98,6 +103,7 @@ function readEntries(file: string): Map<string, SpawnRecord> {
         model: record.model,
         ...(record.effort ? { effort: record.effort } : {}),
         ...(record.account ? { account: record.account } : {}),
+        ...(record.agent ? { agent: record.agent } : {}),
         at: record.at,
       })
     }
@@ -115,7 +121,7 @@ function readEntries(file: string): Map<string, SpawnRecord> {
  */
 export function recordSessionSpawn(
   sessionID: string,
-  spawn: { model: string; effort?: string; account?: string },
+  spawn: { model: string; effort?: string; account?: string; agent?: string },
   now: number = Date.now(),
 ): boolean {
   if (!sessionID || sessionID === "default" || !spawn.model) return false
@@ -123,9 +129,10 @@ export function recordSessionSpawn(
     model: spawn.model,
     ...(spawn.effort ? { effort: spawn.effort } : {}),
     ...(spawn.account ? { account: spawn.account } : {}),
+    ...(spawn.agent ? { agent: spawn.agent } : {}),
     at: now,
   }
-  const fingerprint = `${record.model}\n${record.effort ?? ""}\n${record.account ?? ""}`
+  const fingerprint = `${record.model}\n${record.effort ?? ""}\n${record.account ?? ""}\n${record.agent ?? ""}`
   if (lastWritten.get(sessionID) === fingerprint) return false
   const file = spawnRecordStorePath()
   const merged = readEntries(file)

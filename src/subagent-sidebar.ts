@@ -379,9 +379,11 @@ export interface Segment {
     | "effort"
     | "effort-faded"
     | "bar-done"
-    | "bar-pulse"
+    | "bar-over"
     | "bar-track"
     | "fraction"
+    | "estimate"
+    | "estimate-over"
     | "tool"
     | "cost"
 }

@@ -984,10 +984,16 @@ The model line ends with the subagent's spend so far (`· $0.42`, opencode's own
 kept after it finishes; on a tight line the dot goes before the number does), and a running
 row gets a third line: the same progress line the viewed session gets above the section
 under a `Main Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
-`▰▱` bar, two spaces, then the todo list's completed fraction
-with `2/4` when the session has one (opencode 1 only; opencode 2 exposes no todo list to a
-TUI plugin) and a sweeping pulse otherwise, plus elapsed, the call count and the running
-tool. Nothing on it is estimated from the prompt, the model, the effort or the tokens.
+`▰▱` bar, two spaces, then the todo list's completed fraction with `2/4` when the session has
+one (opencode 1 only; opencode 2 exposes no todo list to a TUI plugin), else the turn's
+elapsed over its estimated total (`1m02s/~2m30s`: the weighted median of what remained of
+this agent and model's recorded turns that lasted longer than this one so far, weighted
+toward turns with a prompt of about this length at this effort, read from
+`$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json`, which the plugin writes at
+every served result; full in the warning colour once past every recorded turn), else no bar
+until three turns of that agent and model are on record; plus the call count (when neither
+is shown) and the running tool. No model call, no option, nothing read from the prompt but
+its length.
 Clicking a row opens the subagent's session; `up` returns to the parent. More than two
 rows fold behind a `▼` heading. Setup: nothing on opencode 2; on opencode 1 the
 `tui.json` line under Minimum install. If the section never appears on 1.x, that line is

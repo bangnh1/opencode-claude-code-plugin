@@ -3,16 +3,17 @@
  * opencode's session sidebar listing the current session's subagents, running
  * first, each with a spinner (or ✓ / ✗), its agent type, its task description,
  * a `bg` marker for background ones, a muted line saying what it really runs
- * as with its spend so far (`sonnet-5.5 · high · alpha        $0.42`), and
- * while it runs a progress line (`▰▰▰▱▱▱▱▱▱▱ 45s · 12 calls · read`).
+ * as with its spend so far (`sonnet-5.5 · high · alpha · $0.42`), and
+ * while it runs a progress line (`▰▰▰▱▱▱▱▱▱▱  45s/~2m10s · read`).
  * Clicking a row opens that subagent's session; opencode's own `up` key goes
  * back to the parent.
  *
  * Above it, under a `Main Progress` heading, the same line for the session on
- * screen while its turn runs and for a moment after it ends (h #g246). What
- * it says is measured, never estimated: a todo list's fraction when the
- * session has one, else a pulse, plus elapsed, calls and the running tool.
- * `src/progress-line.ts` decides all of it.
+ * screen while its turn runs and for a moment after it ends (h #g246). The
+ * bar is a todo list's fraction when the session has one, else the turn's
+ * elapsed over the total its agent and model's own recorded turns predict
+ * (`src/turn-history.ts`, h #g247), else nothing; the rest is elapsed, calls
+ * and the running tool. `src/progress-line.ts` decides all of it.
  *
  * Below it, in the same slot, an `Accounts` section: one line per account
  * with a current usage reading (`appical · 5h 72% · resets 18:00`), from the
@@ -57,22 +58,21 @@ import {
   type TaskPartInput,
 } from "./subagent-sidebar.js"
 import {
-  BAR_DONE,
-  BAR_TODO,
-  BAR_WIDTH,
+  createFillMemory,
   createStatusWatch,
   layoutProgressLine,
   measureProgress,
-  pulseLit,
   rowProgress,
   sessionProgress,
   turnMessages,
+  type ProgressMeasure,
   type ProgressMessage,
   type ProgressSource,
   type ProgressToolCall,
   type ProgressView,
 } from "./progress-line.js"
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
+import { createTurnHistoryReader, estimateTurn, promptChars, turnHistoryKey, type TurnHistory } from "./turn-history.js"
 import { createAccountUsageReader, type AccountUsage } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
 
@@ -85,13 +85,8 @@ const SPINNER_INTERVAL_MS = 100
 const REFRESH_INTERVAL_MS = 1500
 /** The refresh while something runs: the progress lines' elapsed moves by the second. */
 const PROGRESS_TICK_MS = 1000
-/** Spinner ticks per cell the pulse advances: 200 ms a cell, two seconds a sweep. */
-const PULSE_TICKS_PER_CELL = 2
-/**
- * The spinner counter wraps here, a multiple of the spinner's frame count and
- * of the pulse's cells times its ticks per cell, so neither skips at the wrap.
- */
-const FRAME_WRAP = SPINNER_FRAMES.length * PULSE_TICKS_PER_CELL * BAR_WIDTH
+/** The spinner counter wraps here, a multiple of the spinner's frame count, so it never skips at the wrap. */
+const FRAME_WRAP = SPINNER_FRAMES.length * 600
 
 /** The tool names a subagent dispatch has: `task` on 1.x, `subagent` on 2.x. */
 const TASK_TOOLS = new Set(["task", "subagent"])
@@ -109,13 +104,11 @@ export interface SidebarColors {
   effort: Color
   effortFaded: Color
   hover: Color
-  /** A plan bar's done cells: the theme's success colour. */
+  /** A bar's filled cells: the theme's success colour. */
   barDone: Color
-  /** The pulse that stands in for a plan: the spinner's accent. */
-  barPulse: Color
   /** The track still to go: the muted colour pulled toward the background. */
   barTrack: Color
-  /** `2/4`: the text colour, drawn bold. */
+  /** `2/4`: the text colour, drawn bold; an estimate's `1m02s/~2m30s` takes it unbolded. */
   fraction: Color
   /** The tool running now: the theme's info colour. */
   tool: Color
@@ -138,9 +131,12 @@ const ROLE_COLOR: Record<Segment["role"], keyof SidebarColors> = {
   effort: "effort",
   "effort-faded": "effortFaded",
   "bar-done": "barDone",
-  "bar-pulse": "barPulse",
+  // Past every recorded turn: the warning colour, which the effort already takes.
+  "bar-over": "effort",
   "bar-track": "barTrack",
   fraction: "fraction",
+  estimate: "fraction",
+  "estimate-over": "effort",
   tool: "tool",
   cost: "cost",
 }
@@ -205,11 +201,19 @@ function createSidebar(host: SidebarHost) {
   const [now, setNow] = createSignal(Date.now())
   const records = createSpawnRecordReader()
   let recordMap: Map<string, SpawnRecord> = attempt(() => records.read(), new Map())
+  // How long turns of each agent and model took before (h #g247), what the
+  // bar is drawn from when the session has no todo list. The server half
+  // writes it at every served `result`.
+  const history = createTurnHistoryReader()
+  let historyMap: TurnHistory = attempt(() => history.read(), new Map())
   const [recordVersion, setRecordVersion] = createSignal(0)
   // What the TUI itself remembers about each session's status (h #g246): when
   // it first saw a run and when it saw the stop, for the one line whose turn
   // no message dates and for the linger after a turn.
   const watch = createStatusWatch()
+  // And the fill each bar has reached this turn, so an estimate's bar never
+  // steps back while its total rises.
+  const fills = createFillMemory()
   // The `Accounts` lines (h #g244): every account's last usage reading, from
   // the store the server half writes on each `rate_limit_event`. Its own clock
   // value, so a tick that only rechecks the readings does not re-derive the
@@ -233,8 +237,10 @@ function createSidebar(host: SidebarHost) {
   const refreshTick = () => {
     if (sectionsShowing.size > 0) {
       const next = attempt(() => records.read(), recordMap)
-      if (next !== recordMap) {
+      const nextHistory = attempt(() => history.read(), historyMap)
+      if (next !== recordMap || nextHistory !== historyMap) {
         recordMap = next
+        historyMap = nextHistory
         setRecordVersion((value) => value + 1)
       }
       setNow(Date.now())
@@ -271,6 +277,30 @@ function createSidebar(host: SidebarHost) {
   const progressOf = (sessionID: string): ProgressSource =>
     attempt(() => host.progress(sessionID), EMPTY_SOURCE)
 
+  /**
+   * A running line's estimate (h #g247): the session's recorded agent and
+   * model name the history, the turn's prompt length and the effort weight
+   * it, and the fill is held so the bar only advances within the turn. No
+   * spawn record, no history or too little of it is no estimate, and the
+   * line then draws no bar.
+   */
+  const estimateFor = (
+    sessionID: string,
+    measure: ProgressMeasure,
+    view: ProgressView,
+    agentFallback?: string,
+  ): ProgressView => {
+    if (view.state !== "running") return view
+    const record = recordMap.get(sessionID)
+    if (!record?.model) return view
+    const samples = historyMap.get(turnHistoryKey(record.agent ?? agentFallback, record.model))
+    if (!samples) return view
+    const estimate = estimateTurn(samples, { elapsedMs: view.elapsedMs, chars: measure.chars, effort: record.effort })
+    if (!estimate) return view
+    const turn = measure.startedAt ?? 0
+    return { ...view, estimate: { ...estimate, fill: fills.hold(sessionID, turn, estimate.fill) } }
+  }
+
   const deriveView = (sessionID: string): SidebarView => {
     recordVersion()
     // The clock signal is what re-runs this every second; the time itself is
@@ -288,19 +318,19 @@ function createSidebar(host: SidebarHost) {
     for (const row of rows) {
       if (row.state !== "running" || !row.sessionID) continue
       const measure = measureProgress(progressOf(row.sessionID))
-      lines.set(
-        row.sessionID,
-        rowProgress(measure, { started: row.started, status: gathered.status(row.sessionID), now: clock }),
-      )
+      const line = rowProgress(measure, { started: row.started, now: clock })
+      lines.set(row.sessionID, estimateFor(row.sessionID, measure, line, row.agent))
     }
     const status = gathered.status(sessionID)
     const memory = watch.observe(sessionID, status, clock)
-    const progress = sessionProgress(measureProgress(progressOf(sessionID)), {
+    const measure = measureProgress(progressOf(sessionID))
+    const session = sessionProgress(measure, {
       status,
       busySince: memory.busySince,
       stoppedAt: gathered.stoppedAt(sessionID) ?? memory.stoppedAt,
       now: clock,
     })
+    const progress = session ? estimateFor(sessionID, measure, session) : undefined
     return { rows, lines, progress }
   }
 
@@ -312,7 +342,7 @@ function createSidebar(host: SidebarHost) {
     return span
   }
 
-  /** One progress line; the spinner glyph and a plan-less pulse follow the spinner clock. */
+  /** One progress line; only the spinner glyph follows the spinner clock, the bar moves with the second hand. */
   const buildProgressLine = (view: ProgressView, lead: "glyph" | "indent"): OpentuiNode => {
     const line = createElement("text")
     setProp(line, "wrapMode", "none")
@@ -327,18 +357,7 @@ function createSidebar(host: SidebarHost) {
         insertNode(line, styled(segment))
       }
     })
-    const pulsing = view.state === "running" && view.animate && !view.plan
-    layout.bar.forEach((segment, cell) => {
-      if (!pulsing) {
-        insertNode(line, styled(segment))
-        return
-      }
-      const span = createElement("span")
-      const lit = () => pulseLit(Math.floor(frame() / PULSE_TICKS_PER_CELL), cell)
-      insert(span, () => (lit() ? BAR_DONE : BAR_TODO))
-      effect(() => setProp(span, "style", { fg: roleColor(host.colors(), lit() ? "bar-pulse" : "bar-track") }))
-      insertNode(line, span)
-    })
+    for (const segment of layout.bar) insertNode(line, styled(segment))
     for (const segment of layout.tail) insertNode(line, styled(segment))
     return line
   }
@@ -670,7 +689,6 @@ export function registerV1(api: V1Api): void {
         effortFaded: mix(theme.warning ?? muted, muted, 0.45),
         hover: theme.backgroundElement,
         barDone: theme.success ?? theme.accent,
-        barPulse: theme.accent,
         barTrack: mix(muted, theme.backgroundPanel ?? theme.backgroundElement, 0.5),
         fraction: theme.text,
         tool: theme.info ?? theme.accent,
@@ -738,16 +756,19 @@ export function registerV1(api: V1Api): void {
       const turn = turnMessages(api.state.session.messages(sessionID) ?? [], (message) => message.role === "user")
       for (const message of turn) {
         const tools: ProgressToolCall[] = []
-        if (message.role === "assistant") {
-          for (const part of api.state.part(message.id) ?? []) {
-            if (part.type === "tool") tools.push({ name: part.tool, status: part.state?.status })
-          }
+        const texts: string[] = []
+        for (const part of api.state.part(message.id) ?? []) {
+          if (message.role === "assistant" && part.type === "tool") tools.push({ name: part.tool, status: part.state?.status })
+          // Every text part, synthetic ones included: a background child's
+          // end starts a turn too, and the server counts its envelope.
+          if (message.role === "user" && part.type === "text" && typeof part.text === "string") texts.push(part.text)
         }
         messages.push({
           role: message.role,
           created: message.time?.created,
           error: message.error !== undefined && message.error !== null,
           tools,
+          chars: message.role === "user" ? promptChars(texts) : undefined,
         })
       }
       const todos = attempt(() => api.state.session.todo?.(sessionID), undefined) ?? []
@@ -783,8 +804,8 @@ export function registerV1(api: V1Api): void {
 // `content[]` items named `subagent` (with `metadata.sessionID` set while the
 // call still runs, unlike 1.x), and a background child's end is a message of
 // type `synthetic` whose text is `<subagent sessionID="..." state="...">`.
-// It hands a TUI plugin no todo list (h #g246), so a 2.x progress line is
-// always the pulse.
+// It hands a TUI plugin no todo list (h #g246), so a 2.x bar is the history's
+// estimate or nothing (h #g247).
 interface V2Session {
   id: string
   parentID?: string
@@ -800,6 +821,7 @@ interface V2Message {
   content?: Array<{
     type?: string
     name?: string
+    text?: string
     time?: { created?: number; completed?: number }
     state?: { status?: string; input?: Record<string, unknown>; metadata?: Record<string, unknown> }
   }>
@@ -849,7 +871,6 @@ export function setupV2(context: V2Context): () => void {
         effortFaded: mix(theme.text.feedback.warning?.base ?? muted, muted, 0.45),
         hover: theme.background.raised.base,
         barDone: theme.text.feedback.success.base ?? accent,
-        barPulse: accent,
         barTrack: mix(muted, theme.background.base ?? theme.background.raised.base, 0.5),
         fraction: theme.text.base,
         tool: theme.text.feedback.info?.base ?? accent,
@@ -907,11 +928,13 @@ export function setupV2(context: V2Context): () => void {
       )
       for (const message of turn) {
         const tools: ProgressToolCall[] = []
-        if (message.type === "assistant") {
-          for (const item of message.content ?? []) {
-            if (item.type === "tool") tools.push({ name: item.name, status: item.state?.status })
-          }
+        const texts: string[] = []
+        for (const item of message.content ?? []) {
+          if (message.type === "assistant" && item.type === "tool") tools.push({ name: item.name, status: item.state?.status })
+          if (message.type === "user" && item.type === "text" && typeof item.text === "string") texts.push(item.text)
         }
+        if (message.type === "synthetic" && message.text) texts.push(message.text)
+        const starts = message.type === "user" || message.type === "synthetic"
         messages.push({
           // A synthetic message (a background child's end) prompts the parent
           // like a user message does: it starts a turn.
@@ -919,6 +942,7 @@ export function setupV2(context: V2Context): () => void {
           created: message.time?.created,
           error: message.error !== undefined && message.error !== null,
           tools,
+          chars: starts ? promptChars(texts) : undefined,
         })
       }
       return { messages, todos: [] }

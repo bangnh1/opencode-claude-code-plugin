@@ -6527,3 +6527,116 @@ for a heading string. The edge the name leaves open: viewing a child session
 itself, the line is that child's and the heading still says `Main`; the
 plugin does not read the viewed session's `parentID` for a heading, because
 a sidebar in a child session is a rare view and the word costs nothing there.
+
+## The progress bar estimates the turn from this install's own record (2026-10-17)
+
+h #g247. What the maintainer said, in their own pane with three background
+`explore` children running under the section: "⠦ ▱▱▱▰▰▰▱▱▱▱  these both dont
+make sense", "⠦  this is for progress", "▱▱▱▰▰▰▱▱▱▱  this is soposed to show
+estimation of progress time but it goes on and on.. not showing a begining
+or an end.. we need to show us the educated estimation based on the given
+prompt given amount of tokens needed/used based on the task etc something
+smart and acurate is this possible?". Asked which of three the bar should be
+without a todo list (a usual-duration bar from recorded turns; the same with
+a prompt-aware fit; no bar without a real end), they answered "1 and 2 but
+intelligently and simply genious and mathematic and as acurate as possible",
+then "go". That reverses the rule recorded earlier the same day (h #g246),
+that the prompt, the model, the effort and the token count were deliberately
+not inputs. It was reversed by the person who set it, and this entry records
+what replaced it and why the replacement is honest.
+
+### What is possible, and what is not
+
+A turn's length is not predictable from its prompt: an agentic turn is as
+long as what its tools return makes it, and that has not happened when the
+bar is first drawn. What is knowable is the record of turns like it, so the
+estimate is statistical and conditional, never a reading of the task:
+
+- One sample per served turn, keyed on the agent and the model the turn
+  really ran as (the spawn record's pair, which is why that record now
+  carries `agent`), with the prompt's length and the effort on it:
+  `src/turn-history.ts`, `turn-history.json` beside the other stores.
+- At elapsed `t`, the recorded turns that lasted longer than `t` are the
+  ones this turn can still be like. The estimate is the weighted median of
+  what remained of them at `t` (the median residual life, conditioned on
+  survival to `t`), the total is `t` plus that, and the bar is `t` over the
+  total. Weights: a Gaussian kernel on the log of the prompt's length (a
+  factor of four is one standard deviation, so a prompt four times longer
+  still weighs e^-1/2 and sixteen times e^-2; fifty characters are added to
+  both lengths first so a one-word prompt is not infinitely far from an
+  empty one), times 0.5 for a sample at another effort. Three samples
+  minimum.
+- Past the longest recorded turn nothing is left to condition on: the bar is
+  full in the warning colour and the total shown is the usual one (the
+  weighted median of every sample), so `3m20s/~2m18s` reads as "over the
+  usual by a minute".
+- The line says `elapsed/~total` in the slot the plan's fraction takes,
+  `1m02s/~2m30s`. The raw fill `t/T` can fall when a short sample drops out
+  of the survivors and `T` jumps (samples 20, 60, 100 s: at 19 s the total
+  is 60 s and the fill 0.32; at 21 s the total is 80 s and the fill 0.26),
+  so `createFillMemory` holds the bar at its maximum within a turn, keyed on
+  the turn's own start, and a cell never goes dark again while the total
+  shown still moves.
+- With no record, or fewer than three samples, there is no bar at all: the
+  spinner says the session works, and the pulse said nothing more than that,
+  which is what the maintainer objected to.
+
+The second of the offered options, a per-agent fit of duration against the
+prompt's length, is what the kernel does without a fitted parameter: a
+local estimate in prompt length rather than a regression, which is right
+for a dozen samples and cannot extrapolate wrongly. A token-count
+conditioning was considered and not built: on 1.x the finish of a mid-turn
+step reports zero output tokens on purpose (h #g169), so the TUI has no live
+token count to condition on, and `thinking_tokens` is approximate by the
+CLI's own description (h #g191). The call count is not the same unit on the
+two halves (the TUI counts tool parts, the CLI's `num_turns` counts API
+round trips), so it is not a survival condition either; both stay open to a
+later measurement.
+
+### Where the duration comes from
+
+The start is `Date.now()` at the top of `doStreamForHost`, before the
+prologue's first await, on the step whose prompt `startsTurn`: it ends in a
+user message that does not follow a tool result (a tool-result step
+continues the turn that made the call, and so does a user message the host
+promoted beside one, h #g204). It waits in `markTurnStart`, keyed on the
+session key, because a turn is a run of steps and only the last one sees the
+`result`. The end is `completeResult` after `runAutoContinue` returned
+false, on a result that is not an error and set no `resultFailure`, never on
+compaction or the `default` affinity; `takeTurnStart` is a take, so the
+second `result` a CLI-side background task can produce in one turn (h #g189)
+records nothing. The prologue's own waits (the version probe, the MCP
+connect wait, the spawn) are inside the sample on purpose: the TUI's elapsed
+starts at the user message, and the sample must be in the same clock.
+Measured on the fake CLI in `test/turn-history.test.ts`: a result delayed
+80 ms records a sample of at least 80 ms and no more than the turn's own
+wall time, under `build/claude-sonnet-5-5`, with the prompt's length (the
+`<system-reminder>` block taken off) and the effort.
+
+### What the TUI reads
+
+`createTurnHistoryReader` beside the spawn-record reader, re-read on a
+changed stat on the same tick, so the first estimate appears within a second
+of the result that completed the third sample. The key for a row and for the
+session on screen is the spawn record's `agent` and `model` (a child's title
+agent is the fallback for a record written before this change); the effort
+is the record's; the prompt length is the turn's own user message,
+`promptChars` over its text parts with opencode's `<system-reminder>`, dcp's
+reminder and its message id taken off, the same function the server counts
+with, so the kernel compares like with like. A message with no text at all is
+unknown (weight 1), never zero. On 2.x the user message's text items and a
+synthetic message's `text` are counted; 2.x still hands a TUI plugin no todo
+list, so there the bar is the estimate or nothing.
+
+The roles changed with the bar: `bar-pulse` is gone, `bar-over`, `estimate`
+and `estimate-over` are new, mapped onto the warning and text colours the
+theme already supplies, so neither adapter gained a colour. `estimateCells`
+is never full before `over`, for the reason `filledCells` is never full
+before the last item: a full bar must always mean one thing.
+
+### Not re-run on the rig
+
+The rig's fake `claude` answers in a fixed time, so a rig run would draw the
+bar the unit tests already lay out and prove nothing more; the live proof is
+the maintainer's own pane after a restart, once three turns of their build
+agent are on record. Recorded here rather than claimed.

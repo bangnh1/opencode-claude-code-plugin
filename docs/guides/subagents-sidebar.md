@@ -13,7 +13,7 @@ Main Progress
 Subagents
 ⠋ explore Survey docs for stale…  bg
  haiku-4.5 · alpha · $0.07
- ▰▰▰▱▱▱▱▱▱▱  45s · 12 calls · read
+ ▰▰▰▱▱▱▱▱▱▱  45s/~2m10s · read
 ⠋ implementor Fix the dispatch form…
  sonnet-5.5 · high · default · $0.42
  ▰▰▰▰▰▰▰▰▱▱  3/4 · 2m10s · edit
@@ -36,16 +36,22 @@ Above the subagents, under a **Main Progress** heading (main, as against the sub
 
 ```
 Main Progress
-⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash
+⠋ ▰▰▰▰▱▱▱▱▱▱  1m02s/~2m30s · bash
 ```
 
-There is no percentage, by design. Nothing in a model's task predicts how much of it is left, and a bar fed by the prompt, the model, the effort or the token count would be a guess drawn as a measurement. Everything on the line is measured:
+What the bar shows depends on what the session has, in this order:
 
-- **The bar.** When the session has a todo list (Claude Code's `TaskCreate` family reaches opencode as `todowrite`; a subagent needs `permission: { todowrite: "allow" }` to keep one), the bar is the share of items completed, in the theme's success colour, and the line says which in bold: `2/4`. It never fills before the last item is done and never empties once the first is. Without a list the bar is a pulse, three cells sweeping the track in the accent colour, which says only that the session is working. opencode 2 hands a TUI plugin no todo list, so there every bar is the pulse.
-- **Elapsed** since your last message (for a subagent, since its dispatch), the **tool calls** made since it (left out when a fraction is shown), and the **tool running now** in the theme's info colour. When the line is too wide the call count goes first, then the tool's name is cut.
-- **When the turn ends** the bar fills in the success colour behind a ✓, or in the error colour behind a ✗ when the last reply failed, stays fifteen seconds, and goes. A subagent's line goes with its spinner. With nothing running there is no Main Progress section at all.
+- **A todo list** (Claude Code's `TaskCreate` family reaches opencode as `todowrite`; a subagent needs `permission: { todowrite: "allow" }` to keep one): the bar is the share of items completed, in the theme's success colour, and the line says which in bold, `2/4 · 1m03s`. It never fills before the last item is done and never empties once the first is. opencode 2 hands a TUI plugin no todo list, so there the bar is always the next kind.
+- **An estimate from this install's own record.** The plugin records how long every served turn took, per agent and model, in `$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json` (a duration, the prompt's length, the effort and a time; no text). With three or more such turns on record the bar is this turn's elapsed over its expected total, and the line says both: `1m02s/~2m30s`. The total is the weighted median of what remained of the recorded turns that had lasted longer than this one has so far (the ones it can still turn out like), weighted toward turns whose prompt was about as long and that ran at the same effort. It rises as the turn outlasts more of them, and the bar only ever advances within a turn. Past the longest recorded turn the bar is full in the warning colour and the total shown is the usual one, `3m20s/~2m18s`: this turn is over the usual by that much. The first turns of a new agent or model have no estimate yet.
+- **Neither**: no bar. The spinner says the session is working, and a bar that could not fill would say nothing the spinner does not.
 
-The colours are the theme's own, so every theme supplies them. On opencode 1: done cells `success`, the pulse `accent`, the track `textMuted` pulled halfway toward `backgroundPanel`, the fraction `text` in bold, the running tool `info`, a subagent's spend `secondary`. On opencode 2: `text.feedback.success`, `hue.accent`, `text.muted` toward `background`, `text.base`, `text.feedback.info`, `hue.interactive`.
+Then **elapsed** since your last message (for a subagent, since its dispatch), the **tool calls** made since it (left out when a fraction or an estimate is shown), and the **tool running now** in the theme's info colour. When the line is too wide the call count goes first, then the tool's name is cut.
+
+**When the turn ends** the bar fills in the success colour behind a ✓, or in the error colour behind a ✗ when the last reply failed, stays fifteen seconds, and goes. A subagent's line goes with its spinner. With nothing running there is no Main Progress section at all.
+
+The estimate is honest about its basis and no more: it is this install's own past, not a reading of the task, because what a turn will do depends on what its tools return. Expect it to miss by a factor of two on some turns while the record is short (one agent's turns on one machine ranged from 18 s to 106 s in an afternoon); it tightens as the record fills. Nothing is read from the prompt beyond its length, and no model is asked.
+
+The colours are the theme's own, so every theme supplies them. On opencode 1: filled cells `success` (`warning` once over the usual), the track `textMuted` pulled halfway toward `backgroundPanel`, the fraction `text` in bold and the estimate `text`, the running tool `info`, a subagent's spend `secondary`. On opencode 2: `text.feedback.success` and `text.feedback.warning`, `text.muted` toward `background`, `text.base`, `text.feedback.info`, `hue.interactive`.
 
 ## Account usage
 

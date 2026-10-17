@@ -172,7 +172,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
   one cell in, and `2026-10-18 01:20` with the word and the year dropped in that order, the same way on every
   line; re-run on the rig, both majors. Then, with three background children running under it, "Progress should
   probably say Main Progress ?": the heading is `Main Progress` now, since right above `Subagents` a bare
-  `Progress` read as theirs. PR #121 is open against master after v0.56.0; left: its merge and the release.
+  `Progress` read as theirs. Then, with the three running, the pulse was called meaningless ("it goes on and on..
+  not showing a begining or an end") and an estimate asked for: the bar is now the turn's elapsed over the total
+  this agent and model's own recorded turns predict (`1m02s/~2m30s`, `turn-history.json`, h #g247), no bar until
+  three turns are on record, the pulse gone. The maintainer's pane shows it after a restart. PR #121 is open
+  against master after v0.56.0; left: its merge and the release.
 
 ## Done
 

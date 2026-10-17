@@ -191,6 +191,14 @@ import {
   recordResumePoint,
 } from "./session-resume-store.js"
 import { recordSessionSpawn } from "./spawn-record-store.js"
+import {
+  markTurnStart,
+  newestPromptChars,
+  recordTurnSample,
+  startsTurn,
+  takeTurnStart,
+  turnHistoryKey,
+} from "./turn-history.js"
 import { encodeCwd, resolveConfigDir } from "./claude-session-bun.js"
 import {
   carryTranscriptToAccount,
@@ -1245,6 +1253,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // nobody and the turn spawned, wrote and billed anyway.
     // src/turn-abort.ts, (h #g182).
     const turnAbort = watchTurnAbort(options.abortSignal)
+    // When this step began, before the prologue's own waits, so a fresh turn's
+    // duration (h #g247) counts them as the operator's clock does.
+    const turnStartedAt = Date.now()
     // How an abort observed before the CLI was ever asked for work ends the
     // turn: nothing spawned, nothing written, no `interrupt` for a turn this
     // doStream did not start, and proxy calls an earlier step left pending
@@ -1683,7 +1694,15 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           (this.config.failoverAccounts?.length ?? 0) > 1
             ? (failover.target ?? sourceAccount)
             : undefined,
+        agent: this.getOpencodeAgent(options),
       })
+      // A fresh user message starts the turn the sidebar's estimate is fed
+      // from (h #g247): its start and its prompt's length wait here, keyed
+      // like the process, for the step that sees the `result`. A tool-result
+      // step continues the turn and marks nothing.
+      if (startsTurn(options.prompt)) {
+        markTurnStart(sk, turnStartedAt, newestPromptChars(options.prompt))
+      }
     }
 
     const hasPriorConversation =
@@ -3892,6 +3911,24 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // in src/turn-controller.ts. True means the turn was put back to
           // work and must not finish here.
           if (runAutoContinue(state, msg)) return
+
+          // The turn is over and was served: how long it took, for the
+          // sidebar's estimate (h #g247). Keyed on the agent and the model
+          // it really ran as, the spawn record's pair, so the TUI finds it
+          // by the same key. A failed turn says nothing about a served one's
+          // length, and a compaction turn is not one the sidebar shows.
+          if (!compactionMode && affinity !== "default" && msg.is_error !== true && state.resultFailure === undefined) {
+            const start = takeTurnStart(sk)
+            if (start) {
+              const endedAt = Date.now()
+              recordTurnSample(turnHistoryKey(self.getOpencodeAgent(options), stripAccountSuffix(failover.modelId)), {
+                ms: endedAt - start.at,
+                chars: start.chars,
+                effort: reasoningEffort,
+                at: endedAt,
+              })
+            }
+          }
 
           for (const [idx, reasoningId] of state.reasoningIds) {
             if (state.reasoningStarted.get(idx)) {
