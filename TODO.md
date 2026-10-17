@@ -186,6 +186,16 @@ raised, so they survive context compaction; removed when answered, done or dropp
   `Subagent failed`, and that child STILL wrote a 6 s sample beside the two real ones (25.0 s, 26.5 s), because
   the CLI's own `result` was a success. So a child that failed on opencode's side skews its key's estimate low;
   candidate for the revisit: skip the sample when the turn's last tool result is an error, or weight it down.
+  Second observation (2026-10-18, 01:30): the maintainer's own `Main Progress` bar did not draw after the restart
+  because `build/claude-fable-5-1` stayed at two samples: the two main-session turns since wrote none. Read off
+  the stores: those turns ran as the `plan` agent on `appical` at `xhigh` (a resume record exists for that key),
+  the agent switch is why each turn here replays (h #g239, by design), and no `plan/claude-fable-5-1` key was
+  written either. The `go` turn followed an interrupted turn that ended on CLI-native tool calls, so its prompt
+  ended `tool`, `user` and `startsTurn` read it as a continuation (never marked); whether a plan turn's prompt
+  shape also defeats `startsTurn` is unverified, no plugin log file is in this machine's state dir. Candidate:
+  `startsTurn` should treat a trailing `tool` message that matches no pending proxy call as a turn start. A second
+  haiku batch, run once the key had three samples, drew the bar on every row (20.7 s, 23.9 s, 48.2 s against a
+  ~25 s estimate, the third over in the warning colour).
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
