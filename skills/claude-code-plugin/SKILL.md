@@ -425,11 +425,13 @@ at 2026-10-17 18:00.
   to pick a model from. No form after a served turn.
 - The CLI reports only when its view changes, so a reused process can be silent for
   several turns; the last reading stands until a newer one or its reset.
-- Where to look: the TUI sidebar's `Accounts` lines (`work · 5h 76% · resets 18:00`,
-  `work · 5h 76% · 2026-10-18 01:20` for a reset on another day, `ok` for a reading
-  without a number, `limited` for a refusal) and the doctor's
+- Where to look: the TUI sidebar's `Accounts` lines, one per configured account from
+  the first draw (`work · 5h 76% · resets 18:00`, `work · 5h 76% · 2026-10-18 01:20`
+  for a reset on another day, `ok` for a reading without a number, `limited` for a
+  refusal, `home · Max 20x · no reading yet` before an account's first turn reports,
+  the reset time in its own colour apart from the level) and the doctor's
   `Account usage` table, which also shows which thresholds were already noted. "No
-  reading yet" there with a recent turn usually means the interactive transport.
+  reading yet" with a recent turn usually means the interactive transport.
 
 ### When an account runs out of usage
 

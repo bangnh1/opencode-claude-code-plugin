@@ -16,11 +16,12 @@
  * and the running tool. `src/progress-line.ts` decides all of it.
  *
  * Below it, in the same slot, an `Accounts` section: one line per account
- * with a current usage reading (`appical · 5h 72% · resets 18:00`), from the
- * store the server half writes on every `rate_limit_event`
- * (`src/account-usage.ts`, laid out by `src/account-sidebar.ts`, h #g244). It
- * shares the slot rather than claiming a second one, so neither major has a
- * second registration to accept, and draws nothing until a reading exists.
+ * this install runs, from the first draw (h #g248): its current usage reading
+ * (`appical · 5h 72% · resets 18:00`) from the store the server half writes
+ * on every `rate_limit_event`, or its plan tier and `no reading yet` until
+ * one arrives (`src/account-usage.ts`, laid out by `src/account-sidebar.ts`,
+ * h #g244). It shares the slot rather than claiming a second one, so neither
+ * major has a second registration to accept.
  *
  * Always on: there is no option. One module serves both majors (h #g234):
  *
@@ -73,7 +74,7 @@ import {
 } from "./progress-line.js"
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
 import { createTurnHistoryReader, estimateTurn, promptChars, turnHistoryKey, type TurnHistory } from "./turn-history.js"
-import { createAccountUsageReader, type AccountUsage } from "./account-usage.js"
+import { createAccountUsageReader, type AccountUsage, type KnownAccounts } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
 
 export const SUBAGENTS_TUI_PLUGIN_ID = "opencode-claude-code-plugin.subagents"
@@ -114,6 +115,13 @@ export interface SidebarColors {
   tool: Color
   /** A subagent's spend so far: the theme's secondary colour. */
   cost: Color
+  /** An account's plan tier, on a line with no reading yet: the secondary colour, like the spend. */
+  tier: Color
+  /**
+   * When an account's window resets: the info colour, like the running tool,
+   * so the time reads apart from the level beside it (h #g248).
+   */
+  reset: Color
 }
 
 /**
@@ -139,6 +147,8 @@ const ROLE_COLOR: Record<Segment["role"], keyof SidebarColors> = {
   "estimate-over": "effort",
   tool: "tool",
   cost: "cost",
+  tier: "tier",
+  reset: "reset",
 }
 
 /** What one major has to supply; the renderer below does everything else. */
@@ -215,11 +225,13 @@ function createSidebar(host: SidebarHost) {
   // steps back while its total rises.
   const fills = createFillMemory()
   // The `Accounts` lines (h #g244): every account's last usage reading, from
-  // the store the server half writes on each `rate_limit_event`. Its own clock
-  // value, so a tick that only rechecks the readings does not re-derive the
-  // subagent rows, which walk the session's messages.
+  // the store the server half writes on each `rate_limit_event`, and the
+  // accounts it registered there at startup (h #g248). Their own clock value,
+  // so a tick that only rechecks the readings does not re-derive the subagent
+  // rows, which walk the session's messages.
   const usageReader = createAccountUsageReader()
   const [usage, setUsage] = createSignal<AccountUsage>(attempt(() => usageReader.read(), new Map()))
+  const [known, setKnown] = createSignal<KnownAccounts>(attempt(() => usageReader.known(), new Map()))
   const [usageNow, setUsageNow] = createSignal(Date.now())
 
   // One spinner clock and one refresh clock for every mounted section, each
@@ -249,6 +261,7 @@ function createSidebar(host: SidebarHost) {
     // the clock moves once a minute (a reset is shown to the minute), so
     // an idle tick re-lays nothing out.
     setUsage(attempt(() => usageReader.read(), usage()))
+    setKnown(attempt(() => usageReader.known(), known()))
     const minute = Math.floor(Date.now() / 60_000) * 60_000
     if (minute !== usageNow()) setUsageNow(minute)
   }
@@ -518,7 +531,7 @@ function createSidebar(host: SidebarHost) {
       return attempt(() => buildSection(current, expanded, setExpanded), null)
     })
     const accountLines = createMemo(() =>
-      attempt(() => accountUsageLines(usage(), usageNow()), [] as AccountUsageLine[]),
+      attempt(() => accountUsageLines(usage(), usageNow(), SIDEBAR_ROW_WIDTH, known()), [] as AccountUsageLine[]),
     )
     insert(accountsBox, () => {
       const lines = accountLines()
@@ -693,6 +706,8 @@ export function registerV1(api: V1Api): void {
         fraction: theme.text,
         tool: theme.info ?? theme.accent,
         cost: theme.secondary ?? theme.primary ?? muted,
+        tier: theme.secondary ?? theme.primary ?? muted,
+        reset: theme.info ?? theme.accent,
       }
     },
     gather(parentID) {
@@ -875,6 +890,8 @@ export function setupV2(context: V2Context): () => void {
         fraction: theme.text.base,
         tool: theme.text.feedback.info?.base ?? accent,
         cost: theme.hue.interactive?.[shade] ?? accent,
+        tier: theme.hue.interactive?.[shade] ?? accent,
+        reset: theme.text.feedback.info?.base ?? accent,
       }
     },
     gather(parentID) {

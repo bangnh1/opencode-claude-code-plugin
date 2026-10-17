@@ -55,19 +55,21 @@ The colours are the theme's own, so every theme supplies them. On opencode 1: fi
 
 ## Account usage
 
-Under the subagents, an **Accounts** section shows one line per account with a current [usage reading](../configuration/accounts.md#usage-before-the-limit):
+Under the subagents, an **Accounts** section lists every account the plugin is configured with (the one `default` account when none is), from the first draw, each with its current [usage reading](../configuration/accounts.md#usage-before-the-limit) once one has arrived:
 
 ```
 Accounts
 default · 5h ok · resets 18:00
-work · 5h 76% · resets 18:00
+home · Max 20x · no reading yet
+work · 7d extra 90% · 10-21 14:00
 ```
 
-- **The window** is the one that matters most for that account: a window that ran out first, otherwise the fullest one. `5h` and `7d` are the 5-hour and 7-day windows.
+- **The window** is the one that matters most for that account: a window that ran out first, otherwise the fullest one. `5h` and `7d` are the 5-hour and 7-day windows, `7d extra` the 7-day one Claude Code reports with extra usage included.
 - **The level** is the percent used, in the theme's warning colour from 75%. `ok` means Claude Code reported the window without a number, which is how it reports an account with headroom. `limited` means the account is out, in the theme's error colour; on the [interactive transport](./interactive-transport.md) this is the only state there is, because it gets no readings.
-- **The reset** is local time: `resets 18:00` today, and on another day the date in the notation the usage-limit note uses, `2026-10-18 01:20`. That date is too wide for the word `resets` beside a window and a level, so the word goes first and then the year (`10-18 01:20`), the same way on every line so the column reads alike. A line disappears once its window has reset.
+- **The reset** is local time, in the theme's info colour so it reads apart from the level beside it (the word `resets` stays muted): `resets 18:00` today, and on another day the date in the notation the usage-limit note uses, `2026-10-18 01:20`. That date is too wide for the word `resets` beside a window and a level, so the word goes first and then the year (`10-18 01:20`), the same way on every line so the column reads alike.
+- **No reading yet** is an account that has not reported in its current window. Claude Code reports usage on the first turn of a process and whenever its view changes, so until an account's first turn its line shows the plan tier read off its own `.claude.json` (`Max 20x`, `Pro`, in the theme's secondary colour) and `no reading yet`, and it reads so again once the last window it reported has reset. On a long account name the tier goes before the line is cut.
 
-With no reading at all, a single-account install included, there is no Accounts section. The readings come from `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json`, which the provider half writes and every opencode process shares. While a sidebar is on screen the TUI checks that file's size and time every 1.5 seconds and re-reads it only when it changed.
+The accounts come from the plugin's own startup: the provider half writes the configured list into `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json` beside the readings, replacing the previous list, so an account removed from the config leaves the sidebar at the next opencode start. While a sidebar is on screen the TUI checks that file's size and time every 1.5 seconds and re-reads it only when it changed.
 
 ## Enabling it
 

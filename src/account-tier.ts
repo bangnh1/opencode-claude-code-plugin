@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 
 import { DEFAULT_ACCOUNT, accountConfigDirPath, expandHome, normalizeAccountName } from "./accounts.js"
+import { registerKnownAccounts } from "./account-usage.js"
 import { log } from "./logger.js"
 
 /** The CLI's own `organization_type` -> plan map, read out of 2.1.288. */
@@ -151,4 +152,22 @@ export function tierLabel(oauthAccount: Record<string, unknown>): string | undef
   const multiple =
     typeof rateLimitTier === "string" ? RATE_LIMIT_TIER_LABELS[rateLimitTier] : undefined
   return multiple ? `${base} ${multiple}` : base
+}
+
+/**
+ * Hand the sidebar every account this install runs, with its tier, as the
+ * process starts (h #g248): the `Accounts` section then lists them all from
+ * its first draw instead of waiting for each account's first
+ * `rate_limit_event`, and says `no reading yet` beside the tier until one
+ * arrives. No `accounts` means the one `default` account. Never throws: the
+ * store is silent, and a tier that cannot be read is simply absent.
+ */
+export function registerSidebarAccounts(accounts: readonly string[] | null | undefined): void {
+  const list = accounts && accounts.length > 0 ? accounts : [DEFAULT_ACCOUNT]
+  registerKnownAccounts(
+    list.map((account) => ({
+      account: normalizeAccountName(account) || DEFAULT_ACCOUNT,
+      tier: readAccountTier(account),
+    })),
+  )
 }

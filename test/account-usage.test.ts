@@ -27,9 +27,11 @@ import {
   markUsageNoted,
   pendingCrossings,
   recordUsageReading,
+  registerKnownAccounts,
   resolveUsageSwitchAt,
   resolveUsageWarnThresholds,
   snapshotAccountUsage,
+  snapshotKnownAccounts,
   usageCrossings,
   usagePercent,
   type WindowUsage,
@@ -211,6 +213,59 @@ test("the file holds account names, window names, numbers and times, and nothing
     "utilization",
   ])
   assert.deepEqual(raw.accounts.appical.seven_day.noted, [50, 75, 90])
+})
+
+test("the accounts registered at startup sit beside the readings, are replaced on each registration, and ride a reading's write", () => {
+  recordUsageReading("appical", "five_hour", { utilization: 0.4, resetsAt: NOW + HOUR, status: "allowed" }, NOW)
+  assert.equal(registerKnownAccounts([{ account: "appical", tier: "Max 20x" }, { account: "default" }], NOW), true)
+  const reader = createAccountUsageReader(() => file)
+  assert.deepEqual([...reader.known()], [["appical", { tier: "Max 20x", at: NOW }], ["default", { at: NOW }]])
+  assert.equal(reader.read().get("appical")?.get("five_hour")?.utilization, 0.4, "the readings are untouched")
+  assert.equal(reader.known(), reader.known(), "an unchanged file hands back the same map")
+  // A reading or a mark written later carries the registration with it.
+  recordUsageReading("default", "five_hour", { utilization: null, resetsAt: NOW + HOUR, status: "allowed" }, NOW + 1)
+  markUsageNoted("appical", "five_hour", [50], NOW + 2)
+  assert.deepEqual([...snapshotKnownAccounts(NOW + 2).keys()], ["appical", "default"])
+  // The next registration is the configured set, not a merge: a removed account leaves, a tier can change.
+  registerKnownAccounts([{ account: "default", tier: "Pro" }], NOW + 3)
+  assert.deepEqual([...snapshotKnownAccounts(NOW + 3)], [["default", { tier: "Pro", at: NOW + 3 }]])
+  assert.equal(snapshotAccountUsage(NOW + 3).get("appical")?.get("five_hour")?.noted[0], 50, "the readings survive it")
+  // The file holds names, tier labels and times under `known`, and nothing else.
+  const raw = JSON.parse(readFileSync(file, "utf8"))
+  assert.deepEqual(Object.keys(raw).sort(), ["accounts", "known", "version"])
+  assert.deepEqual(Object.keys(raw.known.default).sort(), ["at", "tier"])
+})
+
+test("a registration that changes nothing is not rewritten, and junk names, tiers and shapes are dropped", () => {
+  registerKnownAccounts([{ account: "appical", tier: "Max 20x" }], NOW)
+  const ino = statSync(file).ino
+  assert.equal(registerKnownAccounts([{ account: "appical", tier: "Max 20x" }], NOW + 1), true)
+  assert.equal(statSync(file).ino, ino, "the same list is not written again")
+  registerKnownAccounts(
+    [
+      { account: "Appical Work", tier: "Max 20x" },
+      { account: "ok", tier: "sk-ant-secret!" },
+      { account: "fine", tier: "Pro" },
+    ],
+    NOW + 2,
+  )
+  assert.deepEqual(
+    [...snapshotKnownAccounts(NOW + 2)],
+    [["ok", { at: NOW + 2 }], ["fine", { tier: "Pro", at: NOW + 2 }]],
+  )
+  // A `known` another writer mangled reads as nothing registered; the readings beside it still read.
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      accounts: { fine: { five_hour: entry() } },
+      known: { fine: { at: "soon" }, 7: [] },
+    }),
+  )
+  assert.deepEqual([...snapshotKnownAccounts(NOW)], [])
+  assert.equal(snapshotAccountUsage(NOW).get("fine")?.get("five_hour")?.utilization, 0.5)
+  writeFileSync(file, JSON.stringify({ version: 1, accounts: {}, known: "nope" }))
+  assert.deepEqual([...snapshotKnownAccounts(NOW)], [])
 })
 
 test("two writers merge: neither erases the other's account or window", () => {

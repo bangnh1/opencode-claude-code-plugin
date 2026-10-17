@@ -175,8 +175,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
   `Progress` read as theirs. Then, with the three running, the pulse was called meaningless ("it goes on and on..
   not showing a begining or an end") and an estimate asked for: the bar is now the turn's elapsed over the total
   this agent and model's own recorded turns predict (`1m02s/~2m30s`, `turn-history.json`, h #g247), no bar until
-  three turns are on record, the pulse gone. The maintainer's pane shows it after a restart. PR #121 is open
-  against master after v0.56.0; left: its merge and the release.
+  three turns are on record, the pulse gone. The maintainer's pane shows it after a restart. Then "good now lets
+  keep this and go forward with it as is" with "just 2 things before that": every configured account listed in
+  `Accounts` from the first draw (its plan tier and `no reading yet` until its first turn reports, h #g248), and
+  the reset time in its own colour apart from the level. PR #121 is open against master after v0.56.0; left: its
+  merge and the release.
 
 ## Done
 

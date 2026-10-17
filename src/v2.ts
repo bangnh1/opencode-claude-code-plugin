@@ -7,7 +7,7 @@ import {
   ensureAccountRuntime,
   resolveAccounts,
 } from "./accounts.js"
-import { readAccountTier } from "./account-tier.js"
+import { readAccountTier, registerSidebarAccounts } from "./account-tier.js"
 import { log } from "./logger.js"
 import { defaultModels } from "./models.js"
 import type { OpenCodeModel } from "./opencode-types.js"
@@ -412,6 +412,9 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
           ),
         }
         const plans = planV2Providers(seedSettings, deps.defaultProxyTools)
+        // Every configured account into the usage store, so the sidebar's
+        // `Accounts` section lists them all from its first draw (h #g248).
+        registerSidebarAccounts(resolveAccounts(seedSettings.accounts))
         planned.clear()
 
         for (const plan of plans) {

@@ -6640,3 +6640,88 @@ The rig's fake `claude` answers in a fixed time, so a rig run would draw the
 bar the unit tests already lay out and prove nothing more; the live proof is
 the maintainer's own pane after a restart, once three turns of their build
 agent are on record. Recorded here rather than claimed.
+
+## Every account in the sidebar from the first draw, and the reset time in its own colour (2026-10-17)
+
+h #g248. The maintainer, after watching the estimate land in their pane:
+"good now lets keep this and go forward with it as is later go back and
+learn from how it behaved and improve then contribute. just 2 things before
+that. make sure all accounts and their info is loaded the first time in
+accounts. also make sure the time has diffrent colow from the middle status
+like limited or 7d extra 87%. the date and time is the exact same colow
+which maybe needs to diffrent colow".
+
+### What they had seen
+
+The live store at that moment, read before anything changed: `appical` with
+a `five_hour` reading of status `rejected` (utilization unknown, reset
+2026-10-18 01:20, `noted` 50/75/90) observed at 22:43, and `default` with a
+`five_hour` `allowed` reading observed at 23:17 plus a
+`seven_day_overage_included` one at 0.9 observed at 23:30. The restart was
+at about 23:15. So the sidebar's first draw after it listed `appical ·
+limited · 2026-10-18 01:20` alone, from the reading that had persisted, and
+`default` joined two minutes later when its first turn's `rate_limit_event`
+arrived, reading `default · 7d extra 90% · 10-21 14:00`. That is "all
+accounts ... loaded the first time": an account was listed only once it had
+reported, and (h #g244) made that worse by design, dropping a line once its
+window had reset. And on both lines the whole tail after the name took the
+level's colour, so `limited` and the time it lifts were one red run.
+
+### What is possible before a turn
+
+Nothing about usage: the CLI reports it on the stream, from API response
+headers, so there is no reading without an API call, and a startup call per
+account is a spend the plugin does not make (the title stub exists to avoid
+one). What the plugin does know at startup is which accounts it is
+configured with and, read-only off each account's own `.claude.json`, its
+plan tier (`src/account-tier.ts`, h #g221). So that is what the first draw
+shows.
+
+- `registerSidebarAccounts` (`src/account-tier.ts`) runs in the V1 config
+  hook before the account expansion deletes the seed entry, and in the V2
+  provider transform after `planV2Providers`, with the configured list or
+  `default` alone. It calls `registerKnownAccounts` (`src/account-usage.ts`),
+  which writes `known: { <account>: { tier?, at } }` into
+  `account-usage.json` beside the readings. The list REPLACES the one on
+  disk: it is the configured set, not an observation, and merging would have
+  kept a removed account on screen until it aged out. The readings are never
+  touched by it, and every reading writer carries `known` through
+  (`parseStore` returns both maps, `writeStore` takes both). Nothing is
+  written when the file already names the same accounts with the same tiers,
+  which is what a second V2 transform pass costs: one read. A `known` another
+  writer mangled reads as nothing registered and leaves the readings legible.
+- The TUI reader gained `known()`, the same map while the file is unchanged,
+  and `accountUsageLines` lays out the union of the readings' accounts and
+  the registered ones. An account with no current reading reads `default ·
+  Max 20x · no reading yet`; the tier is given up before such a line is cut,
+  and such a line never moves the reset column the other lines share.
+- A single-account install now draws `default · <tier> · no reading yet`
+  from its first start, which supersedes (h #g244)'s "no reading, no
+  section".
+- The tests that drive the config hook point the store at a scratch file
+  (`test/index-hooks.test.ts`), and the accounts path is tested through
+  `registerSidebarAccounts` with scratch config dirs rather than through the
+  hook, whose expansion builds a wrapper under the home directory.
+
+### The colours
+
+The tail is segments now, each with a role: the separators and the word
+`resets` muted, the level in its state's colour as before (`limited` error,
+75% and up warning, else muted), the reset TIME in a new `reset` role mapped
+to the theme's info colour on both majors (`theme.info` / `text.feedback.info`,
+what the running tool takes), the tier in a new `tier` role mapped to the
+secondary colour (`theme.secondary` / `hue.interactive`, what the spend
+takes). Info rather than secondary for the time because opencode 2's
+interactive hue read orange beside the warning colour on the rig, and the
+time must read apart from a warning-level level. `fitSegments` cuts a run
+with `…` and ends the line at a separator that does not fit.
+
+### Verified
+
+Unit tests on the line model, the store and the registration
+(`test/account-sidebar.test.ts`, `test/account-usage.test.ts`,
+`test/account-tier.test.ts`, `test/index-hooks.test.ts`); the full suite,
+typecheck and build; `dist/tui.js` with zero logger prefixes. Not re-run on
+the rig: the fake CLI emits no `rate_limit_event`, so a rig run would show
+the registered lines the unit tests already lay out. The live proof is the
+maintainer's pane after a restart.

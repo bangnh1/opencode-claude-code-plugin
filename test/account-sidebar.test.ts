@@ -1,7 +1,8 @@
 /**
- * The sidebar's `Accounts` lines (`src/account-sidebar.ts`, h #g244): which
- * window an account's line is about, how it reads, and that nothing is drawn
- * without a current reading.
+ * The sidebar's `Accounts` lines (`src/account-sidebar.ts`, h #g244, h #g248):
+ * which window an account's line is about, how it reads, which colour each
+ * piece takes, that every account registered at startup is listed from the
+ * first draw, and that an account the store knows nothing about is not.
  *
  * Usage: npx tsx --test test/account-sidebar.test.ts
  */
@@ -9,14 +10,17 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  NO_READING_TEXT,
   accountUsageLines,
   formatResetClock,
   lineText,
   pressingWindow,
   resetSpellings,
   shortWindowName,
+  type AccountUsageLine,
 } from "../src/account-sidebar.js"
-import type { AccountUsage, WindowUsage } from "../src/account-usage.js"
+import type { AccountUsage, KnownAccounts, WindowUsage } from "../src/account-usage.js"
+import { SIDEBAR_ROW_WIDTH } from "../src/subagent-sidebar.js"
 
 const NOW = new Date(2026, 9, 17, 15, 30).getTime()
 const AT_18 = new Date(2026, 9, 17, 18, 0).getTime()
@@ -30,6 +34,14 @@ function usage(entries: Record<string, Record<string, WindowUsage>>): AccountUsa
     Object.entries(entries).map(([account, windows]) => [account, new Map(Object.entries(windows))]),
   )
 }
+
+/** What the server half registered at startup. */
+function known(entries: Record<string, { tier?: string }>): KnownAccounts {
+  return new Map(Object.entries(entries).map(([account, record]) => [account, { ...record, at: NOW }]))
+}
+
+const roleOf = (line: AccountUsageLine, text: string) => line.segments.find((segment) => segment.text === text)?.role
+const painted = (line: AccountUsageLine) => line.segments.map((segment) => [segment.text, segment.role])
 
 test("one line per account: name, window, percent and the local reset", () => {
   const lines = accountUsageLines(usage({ appical: { five_hour: reading() } }), NOW)
@@ -107,7 +119,93 @@ test("a refusal reads `limited`, the interactive transport's included, with what
   )
   assert.deepEqual(lines.map(lineText), ["appical · limited · resets 18:00", "default · limited · resets 6pm"])
   assert.deepEqual(lines.map((line) => line.state), ["limited", "limited"])
-  assert.equal(lines[0].segments[1].role, "error")
+  assert.equal(roleOf(lines[0], "limited"), "error")
+})
+
+test("the level and the reset time are different roles, and the word `resets` stays muted", () => {
+  const [line] = accountUsageLines(usage({ appical: { five_hour: reading() } }), NOW)
+  assert.deepEqual(painted(line), [
+    ["appical", "agent"],
+    [" · ", "muted"],
+    ["5h 72%", "muted"],
+    [" · ", "muted"],
+    ["resets ", "muted"],
+    ["18:00", "reset"],
+  ])
+  // A refusal colours the level, never the time: the time is what the operator waits for.
+  const [limited] = accountUsageLines(
+    usage({ appical: { five_hour: reading({ utilization: null, status: "rejected" }) } }),
+    NOW,
+  )
+  assert.deepEqual(painted(limited).slice(2), [
+    ["limited", "error"],
+    [" · ", "muted"],
+    ["resets ", "muted"],
+    ["18:00", "reset"],
+  ])
+  // With the word dropped, the whole date and time is the reset's.
+  const tomorrow = new Date(2026, 9, 18, 1, 20).getTime()
+  const [dated] = accountUsageLines(usage({ appical: { five_hour: reading({ resetsAt: tomorrow }) } }), NOW)
+  assert.deepEqual(painted(dated).slice(3), [[" · ", "muted"], ["2026-10-18 01:20", "reset"]])
+  // The interactive transport's phrase splits the same way, given the room; at the row's width it is cut.
+  const phrase = usage({ appical: { five_hour: reading({ resetsAt: undefined, resetsText: "6pm (Europe/Amsterdam)" }) } })
+  const [phrased] = accountUsageLines(phrase, NOW, 60)
+  assert.deepEqual(painted(phrased).slice(4), [["resets ", "muted"], ["6pm (Europe/Amsterdam)", "reset"]])
+  assert.equal(lineText(accountUsageLines(phrase, NOW)[0]), "appical · 5h 72% · 6pm (Europe/Amst…")
+})
+
+test("every account registered at startup is listed from the first draw: its tier and `no reading yet` until one arrives", () => {
+  const lines = accountUsageLines(
+    usage({ appical: { five_hour: reading() } }),
+    NOW,
+    SIDEBAR_ROW_WIDTH,
+    known({ default: { tier: "Max 20x" }, appical: { tier: "Max 5x" } }),
+  )
+  assert.deepEqual(lines.map(lineText), ["appical · 5h 72% · resets 18:00", "default · Max 20x · no reading yet"])
+  assert.deepEqual(lines.map((line) => line.state), ["ok", "none"])
+  assert.equal(lines[1].window, "")
+  assert.deepEqual(painted(lines[1]), [
+    ["default", "agent"],
+    [" · ", "muted"],
+    ["Max 20x", "tier"],
+    [" · ", "muted"],
+    [NO_READING_TEXT, "muted"],
+  ])
+  // An account with a reading shows the reading, never its tier.
+  assert.equal(roleOf(lines[0], "Max 5x"), undefined)
+  // Without a tier the line says only that no reading has arrived.
+  assert.equal(
+    lineText(accountUsageLines(new Map(), NOW, SIDEBAR_ROW_WIDTH, known({ default: {} }))[0]),
+    "default · no reading yet",
+  )
+  // An account the store knows only from a reading (one from before this install registered any) is still listed.
+  assert.deepEqual(
+    accountUsageLines(usage({ old: { five_hour: reading() } }), NOW, SIDEBAR_ROW_WIDTH, known({ default: {} })).map(lineText),
+    ["default · no reading yet", "old · 5h 72% · resets 18:00"],
+  )
+})
+
+test("a registered account whose window has reset reads `no reading yet` again, and gives up its tier before it is cut", () => {
+  const over = accountUsageLines(
+    usage({ appical: { five_hour: reading({ resetsAt: NOW - 1 }) } }),
+    NOW,
+    SIDEBAR_ROW_WIDTH,
+    known({ appical: { tier: "Max 20x" } }),
+  )
+  assert.deepEqual(over.map(lineText), ["appical · Max 20x · no reading yet"])
+  assert.equal(over[0].state, "none")
+  // `appical-work · Max 20x · no reading yet` is 39 cells; at 30 the tier goes and the rest stays whole.
+  const tight = accountUsageLines(new Map(), NOW, 30, known({ "appical-work": { tier: "Max 20x" } }))
+  assert.equal(lineText(tight[0]), "appical-work · no reading yet")
+  // A line with no reading does not move the reset column of the lines that have one.
+  const tomorrow = new Date(2026, 9, 18, 1, 20).getTime()
+  const mixed = accountUsageLines(
+    usage({ appical: { five_hour: reading({ resetsAt: tomorrow }) } }),
+    NOW,
+    SIDEBAR_ROW_WIDTH,
+    known({ workstation: { tier: "Enterprise" } }),
+  )
+  assert.deepEqual(mixed.map(lineText), ["appical · 5h 72% · 2026-10-18 01:20", "workstation · no reading yet"])
 })
 
 test("unknown utilization is `ok`, never 0%, and 75% or more takes the warning colour", () => {
@@ -119,13 +217,13 @@ test("unknown utilization is `ok`, never 0%, and 75% or more takes the warning c
     NOW,
   )
   assert.equal(lineText(lines[0]), "a · 5h ok · resets 18:00")
-  assert.equal(lines[0].segments[1].role, "muted")
+  assert.equal(roleOf(lines[0], "5h ok"), "muted")
   assert.equal(lineText(lines[1]), "b · 5h 75% · resets 18:00")
   assert.equal(lines[1].state, "warning")
-  assert.equal(lines[1].segments[1].role, "effort")
+  assert.equal(roleOf(lines[1], "5h 75%"), "effort")
 })
 
-test("nothing is drawn without a current reading: an empty store, or a window whose reset passed", () => {
+test("nothing is drawn for an account the store knows nothing about: an empty store, or an unregistered account whose reset passed", () => {
   assert.deepEqual(accountUsageLines(new Map(), NOW), [])
   assert.deepEqual(
     accountUsageLines(usage({ appical: { five_hour: reading({ resetsAt: NOW - 1 }) } }), NOW),

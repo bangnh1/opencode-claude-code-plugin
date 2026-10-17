@@ -5,12 +5,16 @@
 // options bag under the provider id afterwards.
 
 import assert from "node:assert/strict"
+import { mkdtempSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
 
 // Set before anything calls `server()`: the factory runs the stale-install
 // cleanup, which deletes from the real opencode plugin cache.
 process.env.OPENCODE_CLAUDE_CODE_PLUGIN_NO_CLEANUP = "1"
 
+import { _setAccountUsageStorePathForTests } from "../src/account-usage.js"
 import { BtwHandledError } from "../src/btw-command.js"
 import plugin, {
   registerDoctorCommand,
@@ -24,6 +28,12 @@ import {
 import { SIDE_QUESTION_USAGE } from "../src/side-question.js"
 
 type Hooks = Awaited<ReturnType<typeof plugin.server>>
+
+// The config hook registers the configured accounts for the sidebar (h #g248);
+// that store is pointed at a scratch file so a run outside `npm test` cannot
+// touch the operator's.
+const USAGE_STORE = join(mkdtempSync(join(tmpdir(), "opencode-hooks-usage-")), "account-usage.json")
+_setAccountUsageStorePathForTests(USAGE_STORE)
 
 interface ToastRecord {
   title?: string
@@ -318,4 +328,22 @@ test("our own /btw is handled by the plugin, not sent on as a message", async ()
   assert.equal(toasts[0]?.title, "btw")
   assert.equal(toasts[0]?.message, SIDE_QUESTION_USAGE)
   assert.equal(toasts[0]?.variant, "warning")
+})
+
+// ---------------------------------------------------------------------------
+// The sidebar's account list (h #g248)
+// ---------------------------------------------------------------------------
+
+// Last in the file on purpose: every config-hook call sets the /btw ownership
+// flag, and the tests above depend on the order those calls happen in.
+test("the config hook registers the account the sidebar lists, `default` on a single-account install", async () => {
+  const hooks = await buildHooks()
+  await hooks.config!({})
+  const raw = JSON.parse(readFileSync(USAGE_STORE, "utf8"))
+  assert.deepEqual(Object.keys(raw.known), ["default"])
+  // The tier depends on the machine's own login; the time does not.
+  assert.deepEqual(
+    Object.keys(raw.known.default).filter((key) => key !== "tier"),
+    ["at"],
+  )
 })

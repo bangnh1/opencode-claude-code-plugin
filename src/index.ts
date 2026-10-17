@@ -18,7 +18,7 @@ import {
   ensureAccountRuntime,
   resolveAccounts,
 } from "./accounts.js"
-import { readAccountTier } from "./account-tier.js"
+import { readAccountTier, registerSidebarAccounts } from "./account-tier.js"
 import { resolveAccountGroups } from "./account-groups.js"
 import { resolveUsageSwitchAt, resolveUsageWarnThresholds } from "./account-usage.js"
 import {
@@ -775,6 +775,11 @@ const server: OpenCodePlugin = async (input) => {
       config.provider ??= {}
 
       await buildAgentRegistry(config)
+
+      // Every configured account into the usage store before any turn, so the
+      // sidebar's `Accounts` section lists them all from its first draw
+      // (h #g248). Read here, before the expansion deletes the seed entry.
+      registerSidebarAccounts(resolveAccounts(config.provider[PROVIDER_ID]?.options?.accounts))
 
       const expanded = await expandAccountProviders(config)
       if (expanded) {

@@ -38,6 +38,17 @@
  * differently. A reading with no reset time (the interactive transport's) is
  * current for `UNTIMED_READING_TTL_MS`.
  *
+ * ## Which accounts exist
+ *
+ * A reading arrives on an account's first turn, so until then the sidebar had
+ * nothing to list for it, and an account whose last window had reset vanished
+ * from it (h #g248). The server half now registers every configured account
+ * at startup (`registerKnownAccounts`, called by `registerSidebarAccounts` in
+ * `src/account-tier.ts`): the name and the plan tier read off its own
+ * `.claude.json`, under `known` beside the readings. That list is REPLACED on
+ * each startup, because it is the configured set and not an observation, and
+ * the readings are never touched by it.
+ *
  * ## File and failure
  *
  * `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json`, the fifth
@@ -45,7 +56,8 @@
  * spawn stores (h #g197, h #g234): merge-on-write so two opencode processes do
  * not erase each other, atomic rename, `0600` in a `0700` directory, bounded,
  * and an unreadable or half-written file is an empty store. It holds account
- * NAMES, window names, numbers and times, and nothing else.
+ * NAMES, window names, plan tier labels (`Max 20x`), numbers and times, and
+ * nothing else.
  *
  * Imports nothing that logs, because the TUI bundle reads it on the terminal's
  * own thread (h #g193): every function here is silent and never throws.
@@ -79,6 +91,17 @@ export interface WindowUsage extends UsageReading {
 /** account -> window (the CLI's `rateLimitType`) -> reading. */
 export type AccountUsage = Map<string, Map<string, WindowUsage>>
 
+/** What the startup registration knows about an account before any reading. */
+export interface KnownAccount {
+  /** `Max 20x`, `Pro`, ...: the plan tier off the account's own `.claude.json`, when readable. */
+  tier?: string
+  /** Epoch ms the registration that wrote this entry ran. */
+  at: number
+}
+
+/** account -> what the server half registered about it at startup. */
+export type KnownAccounts = Map<string, KnownAccount>
+
 export const DEFAULT_USAGE_WARN_THRESHOLDS: readonly number[] = [50, 75, 90, 95]
 export const DEFAULT_USAGE_SWITCH_AT = 90
 
@@ -98,6 +121,8 @@ export const MAX_USAGE_WINDOWS = 8
 
 const NAME = /^[a-z0-9_-]{1,64}$/
 const STATUS = /^[a-z_]{1,32}$/
+/** A plan tier label as `src/account-tier.ts` renders one: `Max 20x`, `Pro`. */
+const TIER = /^[A-Za-z0-9][A-Za-z0-9 ]{0,23}$/
 const MAX_RESETS_TEXT = 80
 
 let pathOverride: string | null = null
@@ -141,11 +166,36 @@ function validEntry(value: unknown): WindowUsage | null {
   }
 }
 
-function readStore(file: string, now: number): AccountUsage {
-  const out: AccountUsage = new Map()
+/** The file's two maps: the readings, and the accounts registered at startup. */
+interface StoreFile {
+  usage: AccountUsage
+  known: KnownAccounts
+}
+
+const emptyStore = (): StoreFile => ({ usage: new Map(), known: new Map() })
+
+function readKnown(parsed: Record<string, unknown>): KnownAccounts {
+  const out: KnownAccounts = new Map()
+  const known = parsed.known
+  if (!known || typeof known !== "object" || Array.isArray(known)) return out
+  for (const [account, raw] of Object.entries(known as Record<string, unknown>)) {
+    if (out.size >= MAX_USAGE_ACCOUNTS) break
+    if (!NAME.test(account) || !raw || typeof raw !== "object" || Array.isArray(raw)) continue
+    const record = raw as Record<string, unknown>
+    if (!finite(record.at)) continue
+    const tier = typeof record.tier === "string" && TIER.test(record.tier) ? record.tier : undefined
+    out.set(account, { ...(tier ? { tier } : {}), at: record.at })
+  }
+  return out
+}
+
+function parseStore(file: string, now: number): StoreFile {
+  const out = emptyStore()
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"))
-    const accounts = parsed && typeof parsed === "object" ? parsed.accounts : null
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out
+    out.known = readKnown(parsed as Record<string, unknown>)
+    const accounts = (parsed as Record<string, unknown>).accounts
     if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) return out
     const cutoff = now - USAGE_READING_MAX_AGE_MS
     for (const [account, windows] of Object.entries(accounts as Record<string, unknown>)) {
@@ -156,13 +206,17 @@ function readStore(file: string, now: number): AccountUsage {
         const entry = validEntry(raw)
         if (entry && entry.observedAt >= cutoff) kept.set(window, entry)
       }
-      if (kept.size > 0) out.set(account, kept)
+      if (kept.size > 0) out.usage.set(account, kept)
     }
   } catch {
     // ENOENT before the first event, or a file another process is renaming
     // into place: the empty store is the answer.
   }
   return out
+}
+
+function readStore(file: string, now: number): AccountUsage {
+  return parseStore(file, now).usage
 }
 
 function newestObserved(windows: Map<string, WindowUsage>): number {
@@ -187,13 +241,16 @@ function bounded(usage: AccountUsage, now: number): AccountUsage {
   return new Map(accounts)
 }
 
-function writeStore(file: string, usage: AccountUsage): boolean {
+function writeStore(file: string, usage: AccountUsage, known: KnownAccounts): boolean {
   const accounts: Record<string, Record<string, WindowUsage>> = {}
   for (const [account, windows] of usage) accounts[account] = Object.fromEntries(windows)
+  // `known` is written once something registered; a file no startup touched
+  // keeps its old shape.
+  const registered = known.size > 0 ? { known: Object.fromEntries(known) } : {}
   try {
     mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify({ version: 1, accounts }), { mode: 0o600 })
+    writeFileSync(tmp, JSON.stringify({ version: 1, accounts, ...registered }), { mode: 0o600 })
     renameSync(tmp, file)
     return true
   } catch {
@@ -304,7 +361,8 @@ export function recordUsageReading(
 ): WindowUsage | null {
   if (!NAME.test(account) || !NAME.test(window)) return null
   const file = accountUsageStorePath()
-  const merged = readStore(file, now)
+  const store = parseStore(file, now)
+  const merged = store.usage
   const previous = merged.get(account)?.get(window) ?? cached(now).get(account)?.get(window)
   const entry = applyReading(previous, reading, now)
   const windows = merged.get(account) ?? new Map<string, WindowUsage>()
@@ -312,7 +370,7 @@ export function recordUsageReading(
   merged.set(account, windows)
   const kept = bounded(merged, now)
   cache = { path: file, usage: kept }
-  return writeStore(file, kept) ? entry : null
+  return writeStore(file, kept, store.known) ? entry : null
 }
 
 /** Mark thresholds announced, on the window's newest reading. */
@@ -324,7 +382,8 @@ export function markUsageNoted(
 ): boolean {
   if (!NAME.test(account) || !NAME.test(window) || thresholds.length === 0) return false
   const file = accountUsageStorePath()
-  const merged = readStore(file, now)
+  const store = parseStore(file, now)
+  const merged = store.usage
   const entry = merged.get(account)?.get(window) ?? cached(now).get(account)?.get(window)
   if (!entry) return false
   const updated = {
@@ -336,7 +395,49 @@ export function markUsageNoted(
   merged.set(account, windows)
   const kept = bounded(merged, now)
   cache = { path: file, usage: kept }
-  return writeStore(file, kept)
+  return writeStore(file, kept, store.known)
+}
+
+/** Whether two registrations name the same accounts with the same tiers. */
+function sameKnown(a: KnownAccounts, b: KnownAccounts): boolean {
+  if (a.size !== b.size) return false
+  for (const [account, record] of a) {
+    const other = b.get(account)
+    if (!other || other.tier !== record.tier) return false
+  }
+  return true
+}
+
+/**
+ * Every account this install is configured with, from the process starting
+ * up, so the sidebar lists them all before any reading arrives (h #g248). The
+ * list REPLACES the one on disk rather than merging into it: it is the
+ * configured set, not an accumulated observation, and merging would keep an
+ * account the operator removed on screen until it aged out. The readings are
+ * untouched. Nothing is written while the file already says the same, so a
+ * second pass (opencode 2 runs its provider transform more than once) costs
+ * one read. Returns false only when a write was needed and failed.
+ */
+export function registerKnownAccounts(
+  accounts: ReadonlyArray<{ account: string; tier?: string }>,
+  now: number = Date.now(),
+): boolean {
+  const file = accountUsageStorePath()
+  const store = parseStore(file, now)
+  const known: KnownAccounts = new Map()
+  for (const entry of accounts) {
+    if (known.size >= MAX_USAGE_ACCOUNTS) break
+    if (!NAME.test(entry.account)) continue
+    const tier = entry.tier && TIER.test(entry.tier) ? entry.tier : undefined
+    known.set(entry.account, { ...(tier ? { tier } : {}), at: now })
+  }
+  if (sameKnown(store.known, known)) return true
+  return writeStore(file, bounded(store.usage, now), known)
+}
+
+/** The accounts registered at startup, read fresh off disk. For `/claude-code-doctor`. */
+export function snapshotKnownAccounts(now: number = Date.now()): KnownAccounts {
+  return parseStore(accountUsageStorePath(), now).known
 }
 
 export interface UsageCrossing {
@@ -399,22 +500,30 @@ export function snapshotAccountUsage(now: number = Date.now()): AccountUsage {
  */
 export function createAccountUsageReader(file: () => string = accountUsageStorePath) {
   let identity = ""
-  let usage: AccountUsage = new Map()
+  let store = emptyStore()
+  const refresh = () => {
+    const path = file()
+    let next = ""
+    try {
+      const stats = statSync(path)
+      next = `${stats.mtimeMs}:${stats.size}:${stats.ino}`
+    } catch {
+      next = "missing"
+    }
+    if (next !== identity) {
+      identity = next
+      store = next === "missing" ? emptyStore() : parseStore(path, Date.now())
+    }
+  }
   return {
     read(): AccountUsage {
-      const path = file()
-      let next = ""
-      try {
-        const stats = statSync(path)
-        next = `${stats.mtimeMs}:${stats.size}:${stats.ino}`
-      } catch {
-        next = "missing"
-      }
-      if (next !== identity) {
-        identity = next
-        usage = next === "missing" ? new Map() : readStore(path, Date.now())
-      }
-      return usage
+      refresh()
+      return store.usage
+    },
+    /** The accounts registered at startup, with their tiers: the same map while the file is unchanged. */
+    known(): KnownAccounts {
+      refresh()
+      return store.known
     },
   }
 }

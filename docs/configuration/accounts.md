@@ -83,7 +83,7 @@ which resets at 2026-10-17 18:00.
 - With `"ask"` or `"off"`, nothing moves and no form is raised (the form only ever answers a turn that failed): the note ends with `To keep working past the limit, pick a model from the "default" account.`
 - `"usageSwitchAt": false` turns the switch off. Like a limit's switch, it is held in memory and an opencode restart forgets it.
 
-**Where you see it.** The [sidebar](../guides/subagents-sidebar.md) shows one line per account with a current reading (`work · 5h 76% · resets 18:00`), and [`/claude-code-doctor`](../guides/doctor.md) lists every reading with the thresholds already announced.
+**Where you see it.** The [sidebar](../guides/subagents-sidebar.md) shows one line per configured account from its first draw: the current reading (`work · 5h 76% · resets 18:00`, the reset time in its own colour), or the account's plan tier and `no reading yet` until its first turn reports (`home · Max 20x · no reading yet`). [`/claude-code-doctor`](../guides/doctor.md) lists every reading with the thresholds already announced.
 
 **Limits.** Claude Code only reports a reading when its view changes, so a long-lived Claude process may say nothing for several turns; the last reading stands until a newer one or its reset. An account with plenty of headroom is reported without a number, which the sidebar shows as `ok` and which never counts as zero. The [interactive transport](./transports.md) gets no reading at all: the only thing it records is a limit reply, which the sidebar shows as `limited` with the reset Claude Code named.
 

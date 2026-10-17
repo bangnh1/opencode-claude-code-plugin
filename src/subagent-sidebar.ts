@@ -364,8 +364,10 @@ function rowFor(
 }
 
 /**
- * A run of text with the role the TUI maps onto a theme colour. The last six
- * are the progress line's and the spend (`src/progress-line.ts`, h #g246).
+ * A run of text with the role the TUI maps onto a theme colour. `bar-done`
+ * through `cost` are the progress line's and the spend (`src/progress-line.ts`,
+ * h #g246); `tier` and `reset` are the `Accounts` line's plan tier and reset
+ * time (`src/account-sidebar.ts`, h #g248).
  */
 export interface Segment {
   text: string
@@ -386,6 +388,8 @@ export interface Segment {
     | "estimate-over"
     | "tool"
     | "cost"
+    | "tier"
+    | "reset"
 }
 
 /**

@@ -19,8 +19,10 @@ import {
   _resetAccountTierCache,
   accountTierConfigDir,
   readAccountTier,
+  registerSidebarAccounts,
   tierLabel,
 } from "../src/account-tier.js"
+import { _setAccountUsageStorePathForTests, snapshotKnownAccounts } from "../src/account-usage.js"
 
 /** Everything an `oauthAccount` block carries that must never be displayed. */
 const SECRETS = {
@@ -69,6 +71,43 @@ function restore(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
 }
+
+// ---------------------------------------------------------------------------
+// The sidebar's account list (h #g248)
+// ---------------------------------------------------------------------------
+
+test("registerSidebarAccounts hands the sidebar every configured account with its tier, `default` alone when none is configured", async () => {
+  const store = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "acct-tier-store-")), "account-usage.json")
+  _setAccountUsageStorePathForTests(store)
+  try {
+    await withHome(async (home) => {
+      writeConfig(path.join(home, ".claude-appical"), {
+        ...SECRETS,
+        organizationType: "claude_max",
+        organizationRateLimitTier: "default_claude_max_20x",
+      })
+      writeConfig(path.join(home, ".claude"), { ...SECRETS, organizationType: "claude_pro" })
+      registerSidebarAccounts(["appical", "home", "default"])
+      assert.deepEqual(
+        [...snapshotKnownAccounts()].map(([account, record]) => [account, record.tier]),
+        [
+          ["appical", "Max 20x"],
+          ["home", undefined],
+          ["default", "Pro"],
+        ],
+      )
+      // Nothing configured is the one default account, and the previous list goes with it.
+      registerSidebarAccounts(null)
+      assert.deepEqual([...snapshotKnownAccounts().keys()], ["default"])
+      // Nothing of the login block but the tier reaches the file.
+      const raw = fs.readFileSync(store, "utf8")
+      for (const secret of Object.values(SECRETS)) assert.ok(!raw.includes(secret), secret)
+    })
+  } finally {
+    _setAccountUsageStorePathForTests(null)
+    fs.rmSync(path.dirname(store), { recursive: true, force: true })
+  }
+})
 
 // ---------------------------------------------------------------------------
 // The label, derived the way the CLI derives it
