@@ -32,6 +32,7 @@ import {
   formatTurnStatsBlock,
   turnStatsLogPayload,
 } from "./turn-stats.js"
+import { recordResultCost, takeBudgetNote, type TurnBudget } from "./budget-ledger.js"
 import { formatAskUserQuestion, isAskUserQuestionTool } from "./ask-user-question.js"
 import { createExitPlanModeQuestionCall } from "./plan-mode-question.js"
 import { PROXY_TOOL_PREFIX } from "./proxy-mcp.js"
@@ -112,6 +113,11 @@ export interface StreamParserContext {
   usageLimitNoteActive: boolean
   /** The other configured accounts, for a note that names where to move the work. */
   failoverAccounts: readonly string[]
+  /**
+   * The session budget this turn keeps (`maxBudgetUsd`, h #g245), or null when
+   * there is none, which is a default install.
+   */
+  budget: TurnBudget | null
   /** Whether a refusal on this turn may move to the next model in the chain. */
   modelFallbackArmed: boolean
   attempt?: ModelFallbackAttempt
@@ -1074,6 +1080,13 @@ export function createLineHandler(
           setClaudeSessionId(state.sessionKey, msg.session_id)
         }
 
+        // What this result cost, before anything can return: a late result
+        // for an abandoned turn was still billed. Every result counts, a
+        // failed or refused one included, because the money is spent either
+        // way. A headless total is the Claude session's running total, so the
+        // ledger takes the difference from the last one it saw (h #g245).
+        if (ctx.budget) recordResultCost(ctx.budget, msg.session_id, msg.total_cost_usd)
+
         if (deliverPendingCompletions(state)) {
           // Finish the abandoned turn before submitting its late result.
           // Otherwise this result could close the stream for the new turn.
@@ -1278,6 +1291,24 @@ export function createLineHandler(
               type: "text-delta",
               id: state.startTextBlock(),
               delta: footer,
+            })
+          }
+        }
+
+        // A budget threshold this result crossed (h #g245). Its own text part,
+        // led by `BUDGET_MARKER`. Not on an attempt that is about to be thrown
+        // away (a refused model, a turn moving to another account): its parts
+        // never reach the conversation, so the note would be spent on nothing.
+        if (ctx.budget && !autoFailoverResult && !state.modelRefusal) {
+          const note = takeBudgetNote(ctx.budget)
+          if (note) {
+            state.controller.enqueue({
+              type: "text-delta",
+              id: state.startTextBlock(),
+              delta: note,
+            })
+            log.notice("conversation budget threshold crossed", {
+              sessionId: msg.session_id,
             })
           }
         }

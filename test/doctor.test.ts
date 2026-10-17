@@ -98,6 +98,7 @@ const report: DoctorReport = {
   hookFailures: [],
   planUsage: { status: "not-requested" },
   backgroundSubagents: { gate: undefined, ledgers: [] },
+  budgets: { warnAt: [], subagentDefaults: {}, sessions: [] },
 }
 
 test("the report names every field a bug report needs, and nothing secret", () => {
@@ -830,4 +831,42 @@ test("a bundle withholds the operator's own patterns but keeps the counts", () =
   assert.match(text, /\[redacted, \d+ chars\]/)
   // The kebab reason is a fixed vocabulary and stays readable.
   assert.equal(withheld.readRules?.unmapped[0]?.reason, "contains-dotdot")
+})
+
+// --- budgets and caps (h #g245) -------------------------------------------
+
+test("budgets and caps read as off on a default install", () => {
+  const text = formatDoctorReport(report)
+  assert.match(text, /\*\*Budgets and caps\*\*/)
+  assert.match(text, /\| maxBudgetUsd \| off \(no cap\) \|/)
+  assert.match(text, /\| defaultSubagentMaxTurns \| unset \|/)
+  assert.match(text, /maxBackgroundSubagents: off \(no cap\)/)
+  assert.equal(text.includes("budgetWarnAt"), false)
+})
+
+test("a set budget prints the cap, the thresholds, each conversation's spend and what is not kept", () => {
+  const text = formatDoctorReport({
+    ...report,
+    backgroundSubagents: { ...report.backgroundSubagents, cap: 3 },
+    budgets: {
+      maxBudgetUsd: 2,
+      warnAt: [50, 80],
+      subagentDefaults: { maxTurns: 10, maxBudgetUsd: 0.5 },
+      sessions: [{ session: "ses_big", spentUsd: 1.5, children: 2 }],
+    },
+  })
+  assert.match(text, /\| maxBudgetUsd \| \$2\.00 \|/)
+  assert.match(text, /\| budgetWarnAt \| 50%, 80% \|/)
+  assert.match(text, /\| defaultSubagentMaxTurns \| 10 \|/)
+  assert.match(text, /\| defaultSubagentMaxBudgetUsd \| \$0\.5000 \|/)
+  assert.match(text, /\| ses_big \| \$1\.50 \| 75% \| 2 \|/)
+  assert.match(text, /In memory only/)
+  assert.match(text, /maxBackgroundSubagents: 3 at once/)
+  // The running count still leads the background section when there is one.
+  const withCount = formatDoctorReport({
+    ...report,
+    backgroundSubagents: { ...report.backgroundSubagents, cap: 3, running: { running: 1, started: 1, unreadable: 0 } },
+  })
+  const section = withCount.slice(withCount.indexOf("**Background subagents**"))
+  assert.ok(section.indexOf("running now: 1") < section.indexOf("maxBackgroundSubagents: 3"))
 })

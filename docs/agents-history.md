@@ -6001,3 +6001,157 @@ default); the doctor's section, its "no spawn yet" state and the bundle
 withholding in `test/doctor.test.ts`; the ready block's count in
 `test/startup-diagnostics.test.ts`; and a `Read(<glob>)` argument surviving
 cmd's two parses, parentheses and all, in `test/windows-spawn.test.ts`.
+
+<a id="g245"></a>
+
+## Session budgets, per-agent turn and spend caps, a background subagent cap
+
+2026-10-17, Claude Code 2.1.293, opencode 1.19.0. From research pass 2 (h #g240):
+nothing bounded what a conversation spends. Claude Code's own `--max-turns`
+and `--max-budget-usd` are per invocation and the plugin never set them,
+opencode's per-agent `steps` counts opencode steps (and a CLI-native tool never
+ends one), and background subagents fanned out with no ceiling, the running
+count (h #g231, h #g232) being information only. The plugin is the one layer
+that sees every `result` across accounts, respawns and subagents. Built in two
+sittings: the first implementor wrote `src/budget-ledger.ts`, the agent
+resolver and the option plumbing and stopped on the `default` account's usage
+limit; the second wired it, re-ran every measurement below and wrote the rest.
+
+**`total_cost_usd` is cumulative for the Claude session, not per turn.**
+Measured twice with `claude -p --input-format stream-json` on haiku: three
+messages to one process reported $0.0094, $0.0160, $0.0227 (first sitting) and
+$0.0331, $0.0400, $0.0470 (second), while each `usage` was its own message's.
+A `--resume` restores it: a session at $0.0309 resumed and answered one more
+message at $0.0359. So the ledger takes, per `result`, the difference from the
+last total it saw for that Claude session id (`costDelta`), takes a first
+sighting in full (which is what makes a resumed conversation pick its earlier
+spend back up after an opencode restart) and takes a total that went DOWN in
+full as a fresh count. The interactive transport's synthesized `result` is per
+turn (h #g208), so there the total is the turn's spend (`cumulative: false`).
+
+**What this means for `turnStats` (h #g109), deliberately not changed here.**
+The footer prints `msg.total_cost_usd`, so on a reused headless process every
+footer after the first shows the Claude session's running total, not what that
+turn cost, while its token counts are the turn's own. The (h #g109) rule that
+the line "matches `total_cost_usd`" is literally true and misleading: it matches
+a cumulative number. Follow-up: print the delta (the ledger's `costDelta`
+already computes it, but only with a budget set, so the footer would need its
+own tracker) and keep the cumulative figure as a second number if wanted.
+
+**`--max-turns` counts API round trips PER USER MESSAGE.** Same probe shape, a
+message asking for one Bash call (two API calls): with `--max-turns 3`, three
+such messages in a row on one process all ended `success`, `num_turns: 2`;
+with `--max-turns 1`, the tool message ended
+`{"subtype":"error_max_turns","is_error":true,"result":"","errors":["Reached
+maximum number of turns (1)"],"stop_reason":"tool_use",
+"terminal_reason":"max_turns"}` and the SAME process then answered a plain
+message with `success`. So it is safe on a reused main conversation and is
+honoured on any agent. `--help` on 2.1.293 does NOT list `--max-turns`, so the
+help probe would always say no: it is version-gated at 2.1.280
+(`cliSupportsMaxTurns`), the oldest binary it was read out of.
+
+**`--max-budget-usd` counts over the PROCESS's life and restarts on resume.**
+At $0.02: message 1 `success` at $0.0170; message 2 ran, billed and overshot
+($0.0250) and ended `{"subtype":"error_max_budget_usd","is_error":true,
+"result":"","errors":["Reached maximum budget ($0.02)"],
+"terminal_reason":"budget_exhausted"}`; messages 3 and 4 ended the same way at
+once with no assistant frame and the total unchanged, so no API call. At $0.03
+a resume of a session already at $0.0309 ran normally to $0.0359: the CLI's cap
+counted from zero while the restored total did not. On a reused main
+conversation that ends every message once spent and resets whenever the process
+does, so `resolveAgentCliCaps` honours an agent's `maxBudgetUsd` only on a
+discovered `mode: subagent` agent (a dispatch gets a process of its own) and
+refuses it on a main agent with one WARN per agent. `--max-budget-usd` IS in
+`--help` and takes the `detectCliSupportsFlag` probe, raced against the turn's
+abort like `--fork-session`'s and asked only when an agent declares a budget.
+Both flags say "only works with --print", so the interactive transport cannot
+carry them and WARNs once (`warnCliCapsOnInteractive`).
+
+**Both caps are session-key elements**, inside the context blob after the TTL,
+appended only when set and NAMED (`maxTurns=4`, `maxBudgetUsd=0.5`), for the
+reasons (h #g168) gives: a default install's key is byte-identical, and a key
+carrying one can never be read as carrying the other or a TTL. Compaction
+carries neither. A hit cap is a failing subtype, so it already finishes as an
+error with the `▌ **claude code error:**` note (h #g113); the two subtype
+sentences now name the flag and the agent option, and the budget one no longer
+says "for the turn", which the measurement contradicts.
+
+**The session budget.** `maxBudgetUsd` (dollars, unset = no ledger at all,
+`resolveTurnBudget` returns null) keys spend by the opencode session (the
+affinity, never `default`). A child's parent is `fetchSessionParentId`, asked
+once per session per process and only with a cap set, and its spend rolls up to
+the top of the chain (`budgetRoot`); a lookup that cannot answer makes the
+session its own conversation, still counted. Every `result` is recorded, a
+failed, refused or late one included, before the `deliverPendingCompletions`
+return, because the money is spent either way; compaction's spend counts too.
+`budgetWarnAt` (default `[50, 80]`, `[]` keeps the stop) writes one `▌
+**budget:**` note per threshold, only the highest when a result jumps several,
+and reaching the cap is its own threshold saying the next message will not
+start. A turn that may not write the note (compaction, `doGenerate`, a child)
+leaves the threshold untaken, so the conversation's next writable result writes
+it; nor is one written on an attempt about to be discarded (a refused model, an
+`"auto"` failover attempt). The hard stop runs in the prologue after the
+dispatch-form branches and before `invalidateOtherEffortSessions` and any
+spawn: one note naming the spend, the cap and the operator's move (raise
+`maxBudgetUsd` and relaunch, or a new session), and
+`{unified:"error", raw:"budget_exceeded"}` with no `error` part, the
+usage-limit shape (h #g214). A `doGenerate` turn gets the finish only; a CHILD
+gets an `error` part carrying the same sentence instead of the note, so the
+parent's `task` result says why without the note becoming the subagent's
+answer. Compaction is exempt so a summary is always possible.
+
+**One exemption the brief did not name: a turn answering a parked proxy call is
+never stopped** (`getPendingProxyCalls(sk).length === 0` is part of the
+condition). The CLI is inside that call, and a foreground subagent's own spend
+can push the root over the cap while it waits; ending the parent's tool-result
+turn there would orphan the call, which the model reports as a denied tool.
+The stop lands on the next fresh message.
+
+**The background cap.** `maxBackgroundSubagents` adds an `admit` option to
+`createProxyMcpServer`, registered by `ensureProxyServer` only when the cap is
+set and `task` / `task_batch` is proxied, and asked after `task_batch`
+validation and before interceptors and the broker, so a refused dispatch never
+reaches opencode and a default install's server is unchanged. The count is
+`countOtherRunningWithin` (h #g232's), process-wide and read-only, inside its own
+2-second budget (`BACKGROUND_CAP_BUDGET_MS`, longer than the courtesy line's
+500 ms because here a slow read refuses rather than omits a sentence). A count
+that did not arrive or a child that could not be read REFUSES, for the reason
+the line omits itself: too low is the harmful direction. A `task_batch` is
+refused whole, foreground items included. The refusal is an `isError` MCP
+result (h #g78) naming the cap, the running count and what to do (foreground,
+or later, never sleep or poll). A gate that throws admits, with a WARN.
+Foreground is never asked about.
+
+**Live, opencode 1.19.0 with the plugin loaded from the worktree, a scratch
+`serve`, haiku 4.5 on the `appical` account (`claude-haiku-4-5@appical`; the
+`default` account was at its session limit), `maxBudgetUsd: 0.01`.** Turn 1
+answered `one` and ended with the cap note ("spent $0.0756 of its $0.0100 ...
+the next message will not start a turn"); turn 2 came back `finish: error`,
+cost 0, carrying only the stop note, and the plugin log showed one spawn for
+the whole session. opencode's own `cost` for turn 1 was $0.0473 against the
+CLI's $0.0756: the CLI prices the 37,696 cache-write tokens at the 1-hour rate
+(2x input) and opencode at the 5-minute rate. The ledger uses the CLI's figure
+on purpose, which is the one Claude Code bills against the plan.
+
+**Not done, named.** `minQuotaRemainingPercent` (a gate on the account's
+remaining usage) needs the account-usage store lane C is building. The ledger
+is in memory; persisting it across restarts was not required. Whether a
+`--fork-session` child's first total includes its parent's (h #g187,
+`forkSessions` off by default) was not measured: if it does, a forked
+conversation would be charged its parent's spend once.
+
+**Tests.** `test/budget-ledger.test.ts` (the measured cumulative sequence, per
+session ids, a total going down, the per-turn convention, children and
+grandchildren, a cycle, thresholds once each and the highest of a jump, the cap
+as a threshold, a child leaving the threshold for its parent, the notes'
+wording, the resolvers); `test/budget.test.ts` through a fake CLI and a real
+`doStream` (50 then 80 then the cap then a stopped fourth turn with no message
+sent and one spawn, deltas not sums, no option no ledger, `doGenerate` finish
+only and no warn text, compaction over the cap, a child counted against its
+parent and stopped with an error part, both flags on the argv and in the key,
+a main agent's budget refused, no caps no flags and the old key); the flags and
+the gate in `test/cli-args.test.ts`; the resolver, the frontmatter and the
+defaults in `test/agent-models.test.ts`; the refusal, the batch, the unreadable
+count, a real proxy server and the option off in
+`test/background-subagents.test.ts`; the section and the cap line under the
+count in `test/doctor.test.ts`; the marker in `test/turn-stats.test.ts`.

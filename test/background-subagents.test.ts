@@ -43,8 +43,11 @@ import {
   backgroundSubagentHint,
 } from "../src/prompts.js"
 import {
+  admitBackgroundDispatch,
   backgroundTaskIdsIn,
   cancelBackgroundTask,
+  formatBackgroundCapRefusal,
+  requestedBackgroundChildren,
   clearBackgroundTasks,
   collectBackgroundTask,
   countRunningBackgroundTasks,
@@ -972,4 +975,137 @@ test("a V2 spawn is handed the V2 background hint, a V1 spawn the V1 one", { ski
   const v1 = await backgroundHintInSpawnedPrompt("v1")
   assert.equal(v1.includes(BACKGROUND_SUBAGENT_HINT_V2), false)
   assert.equal(v1.includes(BACKGROUND_SUBAGENT_HINT), false)
+})
+
+// --- maxBackgroundSubagents (h #g245) ---------------------------------------
+
+const TASK_ARGS = {
+  description: "Probe the cap",
+  prompt: "Report back.",
+  subagent_type: "general",
+}
+
+test("only a background dispatch asks for room, and a batch counts its background items", () => {
+  assert.equal(requestedBackgroundChildren("task", { prompt: "x" }), 0)
+  assert.equal(requestedBackgroundChildren("task", { background: false }), 0)
+  assert.equal(requestedBackgroundChildren("task", { background: true }), 1)
+  assert.equal(
+    requestedBackgroundChildren(TASK_BATCH_TOOL_NAME, {
+      tasks: [{ background: true }, { prompt: "fg" }, { background: true }],
+    }),
+    2,
+  )
+  assert.equal(requestedBackgroundChildren(TASK_BATCH_TOOL_NAME, { tasks: "nope" }), 0)
+  assert.equal(requestedBackgroundChildren("bash", { background: true }), 0)
+})
+
+test("a dispatch inside the cap is let through; one over it is refused with the numbers", async () => {
+  _resetBackgroundTasks()
+  setOpencodeClient(fakeClient({ status: { ses_busy: { type: "busy" } } }).client)
+  noteBackgroundDispatchResult("k", { kind: "text", text: '<task id="ses_busy" state="running">' })
+
+  assert.equal(await admitBackgroundDispatch("task", { background: true }, 2), null)
+  assert.equal(await admitBackgroundDispatch("task", { prompt: "foreground" }, 1), null)
+
+  const refused = await admitBackgroundDispatch("task", { background: true }, 1)
+  assert.equal(refused?.kind, "error")
+  const message = (refused as { message: string }).message
+  assert.match(message, /`maxBackgroundSubagents` allows 1 background subagent at once/)
+  assert.match(message, /1 is running now, and this dispatch would start 1 more/)
+  assert.match(message, /Run this work in the foreground instead/)
+  assert.match(message, /Do not sleep or poll/)
+  assert.equal(message.includes("\u2014"), false)
+})
+
+test("a batch that would go over is refused whole, foreground items included", async () => {
+  _resetBackgroundTasks()
+  setOpencodeClient(fakeClient({ status: {} }).client)
+  const refused = await admitBackgroundDispatch(
+    TASK_BATCH_TOOL_NAME,
+    { tasks: [{ background: true }, { background: true }, { prompt: "fg" }] },
+    1,
+  )
+  const message = (refused as { message: string }).message
+  assert.match(message, /0 are running now, and this batch would start 2 more/)
+  assert.match(message, /none of its tasks: a batch is refused whole/)
+})
+
+test("a count that cannot be read refuses rather than guesses", async () => {
+  _resetBackgroundTasks()
+  // Neither route answers for the started child: unreadable.
+  setOpencodeClient({ session: { get: async () => ({ data: {} }) } })
+  noteBackgroundDispatchResult("k", { kind: "text", text: '<task id="ses_lost" state="running">' })
+  const refused = await admitBackgroundDispatch("task", { background: true }, 5)
+  assert.match((refused as { message: string }).message, /could not be read within 2 s/)
+  assert.match(
+    formatBackgroundCapRefusal({ toolName: "task", cap: 3, running: undefined, requested: 1, budgetMs: 500 }),
+    /within 1 s/,
+  )
+})
+
+test("over a real proxy server the refusal is an MCP result and nothing reaches opencode", async () => {
+  _resetBackgroundTasks()
+  setOpencodeClient(fakeClient({ status: { ses_busy: { type: "busy" } } }).client)
+  noteBackgroundDispatchResult("k", { kind: "text", text: '<task id="ses_busy" state="running">' })
+
+  const tools = applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, true)
+  const srv = await ensureProxyServer(
+    { maxBackgroundSubagents: 1 } as never,
+    tools,
+    "k",
+    false,
+    PARENT,
+  )
+  const queued: string[] = []
+  srv.calls.on("call", (call: ProxyToolCall) => {
+    queued.push(`${call.toolName}:${call.input.background === true ? "bg" : "fg"}`)
+    call.resolve({ kind: "text", text: "foreground answer" })
+  })
+  try {
+    const refused = await post(srv, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "task", arguments: { ...TASK_ARGS, background: true } },
+    })
+    assert.equal(refused.json.error, undefined, "MCP results only, never JSON-RPC errors")
+    assert.equal(refused.json.result.isError, true)
+    assert.match(refused.json.result.content[0].text, /Background dispatch refused/)
+
+    const foreground = await post(srv, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "task", arguments: TASK_ARGS },
+    })
+    assert.equal(foreground.json.result.isError, false)
+    assert.deepEqual(queued, ["task:fg"], "only the foreground dispatch reached opencode")
+  } finally {
+    await srv.close()
+  }
+})
+
+test("no maxBackgroundSubagents leaves a background dispatch alone", async () => {
+  _resetBackgroundTasks()
+  setOpencodeClient(fakeClient({ status: { ses_busy: { type: "busy" } } }).client)
+  noteBackgroundDispatchResult("k", { kind: "text", text: '<task id="ses_busy" state="running">' })
+  const tools = applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, true)
+  const srv = await ensureProxyServer({} as never, tools, "k", false, PARENT)
+  const queued: string[] = []
+  srv.calls.on("call", (call: ProxyToolCall) => {
+    queued.push(call.toolName)
+    call.resolve({ kind: "text", text: '<task id="ses_new" state="running">' })
+  })
+  try {
+    const res = await post(srv, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "task", arguments: { ...TASK_ARGS, background: true } },
+    })
+    assert.equal(res.json.result.isError, false)
+    assert.deepEqual(queued, ["task"])
+  } finally {
+    await srv.close()
+  }
 })

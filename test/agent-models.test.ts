@@ -11,6 +11,9 @@ import {
   parseAgentFrontmatter,
   readAgentMarkdownRecords,
   resolveAgentCacheTtl,
+  resolveAgentCliCaps,
+  setDefaultSubagentCliCaps,
+  getDefaultSubagentCliCaps,
   resolveAgentEffort,
   resolveAgentModel,
   setAgentRegistry,
@@ -333,4 +336,62 @@ test("agentDirectories covers both names, project before global", () => {
     join("/home/k", ".config", "opencode", "agents"),
     join("/home/k", ".config", "opencode", "agent"),
   ])
+})
+
+// --- per-agent CLI caps (h #g245) -----------------------------------------
+
+test("an agent's own caps win, and a discovered subagent falls back to the defaults", () => {
+  const records = {
+    scout: { mode: "subagent", maxTurns: "5", maxBudgetUsd: "0.4" },
+    helper: { mode: "subagent" },
+    build: { mode: "primary" },
+  }
+  const defaults = { maxTurns: 12, maxBudgetUsd: 1 }
+  assert.deepEqual(resolveAgentCliCaps("scout", { records, defaults }), {
+    maxTurns: 5,
+    maxBudgetUsd: 0.4,
+  })
+  assert.deepEqual(resolveAgentCliCaps("helper", { records, defaults }), {
+    maxTurns: 12,
+    maxBudgetUsd: 1,
+  })
+  // The defaults are for subagents only: a main agent declaring nothing gets nothing.
+  assert.deepEqual(resolveAgentCliCaps("build", { records, defaults }), {})
+  assert.deepEqual(resolveAgentCliCaps(undefined, { records, defaults }), {})
+  assert.deepEqual(resolveAgentCliCaps("unknown", { records, defaults }), {})
+})
+
+test("a main agent keeps maxTurns but its maxBudgetUsd is refused", () => {
+  // --max-turns is counted per user message, --max-budget-usd over the whole
+  // reused process (measured on 2.1.293).
+  const records = { build: { mode: "primary", maxTurns: 20, maxBudgetUsd: 5 } }
+  assert.deepEqual(resolveAgentCliCaps("build", { records }), { maxTurns: 20 })
+})
+
+test("a cap that is not a positive number is refused rather than forwarded", () => {
+  const records = {
+    bad: { mode: "subagent", maxTurns: "2.5", maxBudgetUsd: "free" },
+    zero: { mode: "subagent", maxTurns: 0, maxBudgetUsd: -1 },
+  }
+  const defaults = { maxTurns: 3 }
+  // A refused own value falls back to the default, like an unknown cacheTtl.
+  assert.deepEqual(resolveAgentCliCaps("bad", { records, defaults }), { maxTurns: 3 })
+  assert.deepEqual(resolveAgentCliCaps("zero", { records, defaults: {} }), {})
+})
+
+test("frontmatter carries maxTurns and maxBudgetUsd", () => {
+  const record = parseAgentFrontmatter(
+    ["---", "mode: subagent", "maxTurns: 7", "maxBudgetUsd: 0.75", "---", "body"].join("\n"),
+  )
+  assert.equal(record.maxTurns, "7")
+  assert.equal(record.maxBudgetUsd, "0.75")
+})
+
+test("the subagent defaults are kept only when set", () => {
+  _resetAgentRegistryForTests()
+  assert.deepEqual(getDefaultSubagentCliCaps(), {})
+  setDefaultSubagentCliCaps({ maxTurns: 9, maxBudgetUsd: undefined })
+  assert.deepEqual(getDefaultSubagentCliCaps(), { maxTurns: 9 })
+  _resetAgentRegistryForTests()
+  assert.deepEqual(getDefaultSubagentCliCaps(), {})
 })

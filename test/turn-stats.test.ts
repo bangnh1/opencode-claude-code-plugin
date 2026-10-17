@@ -20,6 +20,7 @@ import {
   STREAM_TIMEOUT_MARKER,
   UNATTENDED_REPLAY_MARKER,
 } from "../src/cli-events.js"
+import { BUDGET_MARKER } from "../src/budget-ledger.js"
 import { createClaudeCode } from "../src/index.js"
 import { filterSideQuestionHistory } from "../src/message-builder.js"
 import { CONVERSATION_REWOUND_MARKER } from "../src/conversation-gap.js"
@@ -170,6 +171,7 @@ test("every ▌ marker the plugin writes is stripped from a rebuilt transcript",
     `${MODEL_FALLBACK_MARKER} falling back.`,
     `${CONVERSATION_REWOUND_MARKER} the thread was edited or undone.`,
     `${TURN_STATS_MARKER} $0.0001`,
+    `${BUDGET_MARKER} this conversation has spent $0.50, 50% of its $1.00 \`maxBudgetUsd\`.`,
   ]
   for (const note of notes) {
     const prompt = [

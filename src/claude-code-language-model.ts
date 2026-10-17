@@ -30,6 +30,7 @@ import {
   getAgentRegistry,
   qualifyModelName,
   resolveAgentCacheTtl,
+  resolveAgentCliCaps,
   resolveAgentEffort,
   resolveAgentModel,
 } from "./agent-models.js"
@@ -153,6 +154,15 @@ import {
 } from "./compression-store.js"
 import { log } from "./logger.js"
 import {
+  budgetRoot,
+  formatBudgetStopNote,
+  isChildSession,
+  noteSessionParent,
+  sessionParentKnown,
+  sessionSpend,
+  type TurnBudget,
+} from "./budget-ledger.js"
+import {
   cliSupportsDontAsk,
   cliSupportsInteractiveBypass,
   cliSupportsRestricted,
@@ -248,7 +258,9 @@ import {
   resolvedProxyMcpTools,
   resolvedProxyTools,
   resolvePlanModeQuestion,
+  resolveSpawnCliCaps,
   skillBridgeSpawn,
+  warnCliCapsOnInteractive,
   stripContextRemindersEnabled,
   type LiveToolInfo,
   type McpServerRouting,
@@ -529,6 +541,79 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     loadLiveToolInfo = () => this.fetchLiveToolInfo(),
   ): Promise<boolean> {
     return resolvePlanModeQuestion(this.config, compactionMode, loadLiveToolInfo)
+  }
+
+  /**
+   * The ledger this turn keeps under `maxBudgetUsd` (h #g245), or null for
+   * none. The parent lookup runs once per session per process and only with a
+   * cap set, so a default install never pays for it. A lookup that cannot
+   * answer reads as "no parent", which makes the session its own conversation:
+   * its spend is still counted, against its own budget.
+   */
+  private async resolveTurnBudget(
+    affinity: string,
+    compactionMode: boolean,
+    mode: TurnMode,
+    interactive: boolean,
+  ): Promise<TurnBudget | null> {
+    const capUsd = this.config.maxBudgetUsd
+    if (capUsd === undefined || !affinity || affinity === "default") return null
+    if (!sessionParentKnown(affinity)) {
+      noteSessionParent(affinity, (await fetchSessionParentId(affinity)) ?? null)
+    }
+    return {
+      session: affinity,
+      capUsd,
+      warnAt: this.config.budgetWarnAt ?? [],
+      notes: !compactionMode && mode !== "generate" && !isChildSession(affinity),
+      // The interactive transport synthesizes a per-turn `result` (h #g208);
+      // headless reports the Claude session's running total.
+      cumulative: !interactive,
+    }
+  }
+
+  /**
+   * A turn the session budget stopped before anything was spawned: one
+   * `▌ **budget:**` note (when the turn may write one) and an error finish,
+   * the shape a usage limit has had since h #g214. A child session gets an
+   * `error` part instead of the note, so the parent's `task` result says why
+   * without the note becoming the subagent's answer.
+   */
+  private budgetStopStream(opts: {
+    spentUsd: number
+    capUsd: number
+    note: boolean
+    child: boolean
+    warnings: SharedV3Warning[]
+  }): Awaited<ReturnType<LanguageModelV3["doStream"]>> {
+    log.notice("conversation budget reached; turn not started", {
+      child: opts.child,
+    })
+    const toUsage = this.toUsage.bind(this)
+    const text = formatBudgetStopNote(opts.spentUsd, opts.capUsd)
+    const stream = new ReadableStream<LanguageModelV3StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: opts.warnings })
+        if (opts.note) {
+          const id = generateId()
+          controller.enqueue({ type: "text-start", id } as any)
+          controller.enqueue({ type: "text-delta", id, delta: text })
+          controller.enqueue({ type: "text-end", id })
+        } else if (opts.child) {
+          controller.enqueue({ type: "error", error: new Error(text) })
+        }
+        controller.enqueue({
+          type: "finish",
+          finishReason: { unified: "error" as const, raw: "budget_exceeded" },
+          usage: toUsage({ input_tokens: 0, output_tokens: 0 }),
+          providerMetadata: {
+            "claude-code": { path: "budget-stop", synthetic: true, usageUnavailable: true },
+          },
+        })
+        controller.close()
+      },
+    })
+    return { stream, request: { body: { text: "" } } }
   }
 
   /**
@@ -1238,6 +1323,17 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       this.getOpencodeAgent(options) ?? null,
     ]
     if (promptCacheTtl) context.push(promptCacheTtl)
+    // An agent's `--max-turns` / `--max-budget-usd` (h #g245) are spawn flags
+    // too, so they join the blob on the same terms as the TTL: only when set,
+    // and named, so a key carrying one can never be read as carrying the other
+    // or a TTL. Compaction spawns a lean process of its own and carries none.
+    const agentCliCaps = compactionMode
+      ? {}
+      : resolveAgentCliCaps(this.getOpencodeAgent(options))
+    if (agentCliCaps.maxTurns !== undefined) context.push(`maxTurns=${agentCliCaps.maxTurns}`)
+    if (agentCliCaps.maxBudgetUsd !== undefined) {
+      context.push(`maxBudgetUsd=${agentCliCaps.maxBudgetUsd}`)
+    }
     const baseKey = sessionKey(
       cwd,
       `${effectiveModelId}::${scope}::${affinity}::context=${JSON.stringify(context)}`,
@@ -1367,6 +1463,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         // `/claude-code-doctor usage` opts into the CLI's own plan-usage
         // report; anything else here is ignored, as it always has been.
         argument: doctor.rest,
+        maxBudgetUsd: this.config.maxBudgetUsd,
+        budgetWarnAt: this.config.budgetWarnAt,
+        maxBackgroundSubagents: this.config.maxBackgroundSubagents,
       }
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
         async start(controller) {
@@ -1529,6 +1628,32 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     }
     if (dispatchStep?.kind === "release") {
       return this.subagentDispatchReleaseStream(dispatchStep, sk, warnings)
+    }
+
+    // The session budget (h #g245). Null unless `maxBudgetUsd` is set and this
+    // turn has a real opencode session, so a default install does no lookup
+    // and keeps no ledger. A child's spend counts toward the conversation that
+    // started it, so its parent is learned once, here, before its first result.
+    const budget = await this.resolveTurnBudget(affinity, compactionMode, mode, useInteractive)
+    if (budget && !compactionMode) {
+      const root = budgetRoot(budget.session)
+      const spentUsd = sessionSpend(root)
+      // Never on a turn that answers a parked proxy call: the CLI is inside
+      // that call (a foreground subagent's spend can cross the cap while it
+      // waits), and ending the turn here would orphan it, which the model
+      // reports as a denied tool. The stop lands on the next fresh message.
+      if (spentUsd >= budget.capUsd && getPendingProxyCalls(sk).length === 0) {
+        turnAbort.dispose()
+        return this.budgetStopStream({
+          spentUsd,
+          capUsd: budget.capUsd,
+          // The note is the operator's; a `doGenerate` turn's text is a return
+          // value and a child's can become its parent's `task` result.
+          note: mode !== "generate" && !isChildSession(budget.session),
+          child: isChildSession(budget.session),
+          warnings,
+        })
+      }
     }
 
     if (!compactionMode) invalidateOtherEffortSessions(baseKey, reasoningEffort)
@@ -3178,6 +3303,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               // Unreachable past the prologue's refusal; kept so a posture
               // the TUI cannot hold can never spawn one.
               if (!posture) throw new Error("the interactive transport cannot hold this permission posture")
+              warnCliCapsOnInteractive(agentCliCaps)
               const ap = spawnInteractiveProcess({
                 cwd,
                 cliPath,
@@ -3322,6 +3448,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               ...self.thinkingCliOptions(),
               fastMode,
               cliVersion,
+              ...(await resolveSpawnCliCaps(agentCliCaps, cliPath, cliVersion, turnAbort.whenAborted)),
             })
             spawnSystemPromptFile = systemPromptFile
             spawnProxyServer = state.proxyServer
@@ -3796,6 +3923,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           // Read only when no switch takes the turn, which under `"auto"`
           // means no account is left to offer.
           failoverAccounts: accountRun ? [] : failoverAccounts,
+          budget,
           modelFallbackArmed,
           attempt,
           handleControlRequest,

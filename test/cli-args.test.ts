@@ -6,6 +6,7 @@ import {
   isClaudeThinkingDisabled,
 } from "../src/session-manager.js"
 import {
+  cliSupportsMaxTurns,
   cliSupportsFastMode,
   cliSupportsThinking,
   cliSupportsThinkingDisplay,
@@ -708,4 +709,38 @@ test("no plan-mode warning on the interactive transport, which offers ExitPlanMo
     warnIfPlanModeCannotExit("plan", { transport: "auto", interactive: true })
   })
   assert.equal(kept.length, 1)
+})
+
+// --- per-agent CLI caps (h #g245) -----------------------------------------
+
+test("--max-turns and --max-budget-usd are passed only when set", () => {
+  const plain = buildCliArgs({ sessionKey: "caps-none", skipPermissions: true })
+  assert.equal(plain.includes("--max-turns"), false)
+  assert.equal(plain.includes("--max-budget-usd"), false)
+
+  const capped = buildCliArgs({
+    sessionKey: "caps-both",
+    skipPermissions: true,
+    maxTurns: 6,
+    maxBudgetUsd: 0.25,
+  })
+  assert.deepEqual(capped.slice(capped.indexOf("--max-turns"), capped.indexOf("--max-turns") + 2), [
+    "--max-turns",
+    "6",
+  ])
+  assert.deepEqual(
+    capped.slice(capped.indexOf("--max-budget-usd"), capped.indexOf("--max-budget-usd") + 2),
+    ["--max-budget-usd", "0.25"],
+  )
+})
+
+test("--max-turns is version-gated, because --help does not list it", () => {
+  const v = (raw: string) => {
+    const [major, minor, patch] = raw.split(".").map(Number)
+    return { major: major!, minor: minor!, patch: patch!, raw }
+  }
+  assert.equal(cliSupportsMaxTurns(null), false)
+  assert.equal(cliSupportsMaxTurns(v("2.1.279")), false)
+  assert.equal(cliSupportsMaxTurns(v("2.1.280")), true)
+  assert.equal(cliSupportsMaxTurns(v("2.1.293")), true)
 })

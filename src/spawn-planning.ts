@@ -21,6 +21,7 @@ import {
 } from "./runtime-status.js"
 import { storeCompressionSummary } from "./compression-store.js"
 import {
+  admitBackgroundDispatch,
   cancelBackgroundTask,
   collectBackgroundTask,
   TASK_CANCEL_TOOL_NAME,
@@ -40,6 +41,12 @@ import {
 } from "./proxy-mcp.js"
 import { queuePendingProxyCall } from "./proxy-broker.js"
 import { log } from "./logger.js"
+import type { AgentCliCaps } from "./agent-models.js"
+import {
+  cliSupportsMaxTurns,
+  detectCliSupportsFlag,
+  type CliVersion,
+} from "./cli-version.js"
 
 /** One per-turn snapshot of opencode's live tool registry. */
 export interface LiveToolInfo {
@@ -479,9 +486,80 @@ export async function ensureProxyServer(
       }
     })
   }
-  const srv = await createProxyMcpServer(tools, timeoutOverrides, interceptors)
+  // `maxBackgroundSubagents` (h #g245): checked before a background `task` or
+  // `task_batch` reaches opencode, so a refused dispatch starts nothing. Off
+  // unless set, and only where `task` is proxied at all, so a default install's
+  // server is the one it always was.
+  const cap = config.maxBackgroundSubagents
+  const admit =
+    cap !== undefined && tools.some((t) => t.name === "task" || t.name === TASK_BATCH_TOOL_NAME)
+      ? (toolName: string, input: Record<string, unknown>) =>
+          admitBackgroundDispatch(toolName, input, cap)
+      : undefined
+  const srv = await createProxyMcpServer(tools, timeoutOverrides, interceptors, { admit })
   srv.calls.on("call", (call: ProxyToolCall) => {
     queuePendingProxyCall(sessionKeyForCalls, call, timeoutOverrides)
   })
   return srv
+}
+
+/**
+ * The `--max-turns` / `--max-budget-usd` a headless spawn may carry, from what
+ * `resolveAgentCliCaps` allowed (h #g245). Each one is gated on its own CLI
+ * check and dropped with one WARN per flag when the CLI cannot take it, so an
+ * old `claude` still starts. `--max-turns` is version-gated because `--help`
+ * does not list it; `--max-budget-usd` is listed and takes the help probe, which
+ * is cached per binary and only asked when an agent actually declares a budget.
+ * The probe is raced against the turn's abort, like `--fork-session`'s.
+ */
+export async function resolveSpawnCliCaps(
+  caps: AgentCliCaps,
+  cliPath: string,
+  cliVersion: CliVersion | null,
+  whenAborted?: Promise<unknown>,
+): Promise<AgentCliCaps> {
+  const result: AgentCliCaps = {}
+  if (caps.maxTurns !== undefined) {
+    if (cliSupportsMaxTurns(cliVersion)) result.maxTurns = caps.maxTurns
+    else warnCapDropped("max-turns")
+  }
+  if (caps.maxBudgetUsd !== undefined) {
+    const probe = detectCliSupportsFlag(cliPath, "--max-budget-usd")
+    const supported = whenAborted
+      ? await Promise.race([probe, whenAborted.then(() => false)])
+      : await probe
+    if (supported) result.maxBudgetUsd = caps.maxBudgetUsd
+    else warnCapDropped("max-budget-usd")
+  }
+  return result
+}
+
+const droppedCapWarnings = new Set<string>()
+
+/** `cliFlag` is the flag's name without its dashes, so a bundle keeps it. */
+function warnCapDropped(cliFlag: string): void {
+  if (droppedCapWarnings.has(cliFlag)) return
+  droppedCapWarnings.add(cliFlag)
+  log.warn("agent cap not applied: this claude CLI does not take the flag", { cliFlag })
+}
+
+let interactiveCapsWarned = false
+
+/**
+ * Both caps are `--print` flags (Claude Code's own `--help` says so), so the
+ * interactive transport cannot carry them. Said once per process rather than
+ * silently dropped, because a cap that is not there is the thing to know.
+ */
+export function warnCliCapsOnInteractive(caps: AgentCliCaps): void {
+  if (interactiveCapsWarned) return
+  if (caps.maxTurns === undefined && caps.maxBudgetUsd === undefined) return
+  interactiveCapsWarned = true
+  log.warn(
+    "agent maxTurns / maxBudgetUsd not applied: the interactive transport cannot pass print-only flags",
+  )
+}
+
+export function _resetSpawnCliCapWarningsForTests(): void {
+  droppedCapWarnings.clear()
+  interactiveCapsWarned = false
 }

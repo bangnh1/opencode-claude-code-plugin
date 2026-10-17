@@ -27,6 +27,8 @@ A **Hooks Claude Code ran that failed** section covers your own Claude Code hook
 
 A **Background subagents** section opens with `running now: N (of M started by this process)`, the number of background subagents Claude dispatched through this opencode process that are still working, read with the same test `task_status` uses and without collecting anything. The rest of it is the gate and the collect/cancel ledger; see [Background subagents](background-subagents.md).
 
+A **Budgets and caps** section prints `maxBudgetUsd` (or `off`), the `budgetWarnAt` thresholds, `defaultSubagentMaxTurns` and `defaultSubagentMaxBudgetUsd`, and, with a budget set, every conversation this process recorded spend for: what it spent, the share of the cap, and how many subagents are counted in it. The ledger is in memory, which the section says, because a number that resets on restart would otherwise read as wrong. The background section prints `maxBackgroundSubagents` under its running count. See [Budgets and caps](../configuration/budgets.md).
+
 ```text
 /claude-code-doctor usage
 ```

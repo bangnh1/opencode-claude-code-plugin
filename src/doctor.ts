@@ -1,3 +1,5 @@
+import { getDefaultSubagentCliCaps, type AgentCliCaps } from "./agent-models.js"
+import { formatUsd, snapshotBudgets, type BudgetSessionSnapshot } from "./budget-ledger.js"
 import {
   countRunningBackgroundTasks,
   snapshotBackgroundSubagentGate,
@@ -205,7 +207,21 @@ export interface DoctorReport {
     ledgers: BackgroundTaskLedger[]
     /** How many this process started are still running; absent when not counted. */
     running?: BackgroundRunningCount
+    /** `maxBackgroundSubagents`, or undefined for no cap. */
+    cap?: number
   }
+  /** `maxBudgetUsd` and the per-agent CLI caps (h #g245). */
+  budgets: DoctorBudgets
+}
+
+export interface DoctorBudgets {
+  /** This provider's `maxBudgetUsd`, undefined when off. */
+  maxBudgetUsd?: number
+  warnAt: number[]
+  /** `defaultSubagentMaxTurns` / `defaultSubagentMaxBudgetUsd`. */
+  subagentDefaults: AgentCliCaps
+  /** Conversations with recorded spend this process, largest first. */
+  sessions: BudgetSessionSnapshot[]
 }
 
 function formatAge(ms: number | undefined): string {
@@ -443,6 +459,11 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push(...formatBackgroundSubagents(report.backgroundSubagents))
 
   lines.push("")
+  lines.push("**Budgets and caps**")
+  lines.push("")
+  lines.push(...formatBudgets(report.budgets))
+
+  lines.push("")
   lines.push("**Plan usage**")
   lines.push("")
   switch (report.planUsage.status) {
@@ -572,12 +593,20 @@ function formatBackgroundSubagents(state: {
   gate: BackgroundSubagentGate | undefined
   ledgers: BackgroundTaskLedger[]
   running?: BackgroundRunningCount
+  cap?: number
 }): string[] {
   const lines: string[] = []
+  // The count stays first (h #g231); the cap is the line that gives it meaning.
   if (state.running) {
     lines.push(...formatRunningCount(state.running))
     lines.push("")
   }
+  lines.push(
+    state.cap === undefined
+      ? "maxBackgroundSubagents: off (no cap)"
+      : `maxBackgroundSubagents: ${state.cap} at once; a background dispatch over it is refused whole`,
+  )
+  lines.push("")
   const gate = state.gate
   if (!gate) {
     lines.push(
@@ -653,6 +682,53 @@ function formatRunningCount(count: BackgroundRunningCount): string[] {
   return lines
 }
 
+/**
+ * The session budget and the per-agent CLI caps (h #g245). Spend is what this
+ * process recorded from `result` frames; a restart starts it again, which the
+ * section says, because a number that silently resets reads as wrong.
+ */
+function formatBudgets(budgets: DoctorBudgets): string[] {
+  const lines: string[] = []
+  lines.push("| Field | Value |")
+  lines.push("|---|---|")
+  lines.push(
+    `| maxBudgetUsd | ${
+      budgets.maxBudgetUsd === undefined ? "off (no cap)" : formatUsd(budgets.maxBudgetUsd)
+    } |`,
+  )
+  if (budgets.maxBudgetUsd !== undefined) {
+    const warnAt = budgets.warnAt.map((percent) => `${percent}%`).join(", ")
+    lines.push(`| budgetWarnAt | ${warnAt || "none"} |`)
+  }
+  lines.push(`| defaultSubagentMaxTurns | ${budgets.subagentDefaults.maxTurns ?? "unset"} |`)
+  lines.push(
+    `| defaultSubagentMaxBudgetUsd | ${
+      budgets.subagentDefaults.maxBudgetUsd === undefined
+        ? "unset"
+        : formatUsd(budgets.subagentDefaults.maxBudgetUsd)
+    } |`,
+  )
+  if (budgets.maxBudgetUsd === undefined) return lines
+  lines.push("")
+  if (budgets.sessions.length === 0) {
+    lines.push("No spend recorded by this process yet.")
+  } else {
+    lines.push("| session | spent | of cap | subagents counted |")
+    lines.push("|---|---|---|---|")
+    for (const row of budgets.sessions) {
+      const percent = Math.round((row.spentUsd / budgets.maxBudgetUsd) * 100)
+      lines.push(`| ${row.session} | ${formatUsd(row.spentUsd)} | ${percent}% | ${row.children} |`)
+    }
+  }
+  lines.push("")
+  lines.push(
+    "In memory only: an opencode restart starts every conversation's ledger again (a resumed " +
+      "Claude session's first result restores its own earlier total). A conversation at its " +
+      "cap ends each new turn before anything is spawned.",
+  )
+  return lines
+}
+
 /** The one sentence that explains the gate's answer on this major. */
 function describeBackgroundGateSource(gate: BackgroundSubagentGate): string {
   if (gate.hostApi === "v2") {
@@ -725,6 +801,11 @@ export interface GatherDoctorOptions {
   readLogTailImpl?: (path: string, maxBytes: number) => string
   /** Seam for tests: fixes the per-bundle id salt and the home directory. */
   redactionContextImpl?: RedactionContext
+  /** This provider's resolved `maxBudgetUsd` and `budgetWarnAt`. */
+  maxBudgetUsd?: number
+  budgetWarnAt?: number[]
+  /** This provider's resolved `maxBackgroundSubagents`. */
+  maxBackgroundSubagents?: number
 }
 
 /** Assemble the live report. Never throws: a broken field reads as unknown. */
@@ -799,6 +880,13 @@ export async function gatherDoctorReport(
       gate: snapshotBackgroundSubagentGate(),
       ledgers: snapshotBackgroundTasks(),
       running: await countRunningBackgroundTasks().catch(() => undefined),
+      cap: options.maxBackgroundSubagents,
+    },
+    budgets: {
+      maxBudgetUsd: options.maxBudgetUsd,
+      warnAt: options.budgetWarnAt ?? [],
+      subagentDefaults: getDefaultSubagentCliCaps(),
+      sessions: snapshotBudgets(),
     },
   }
 }

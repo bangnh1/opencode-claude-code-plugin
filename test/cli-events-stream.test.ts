@@ -344,7 +344,7 @@ test("a failing result subtype ends the turn as an error, naming the subtype", a
     .map((part) => part.delta)
     .join("")
   assert.match(body, /error_max_turns/)
-  assert.match(body, /internal turn limit/)
+  assert.match(body, /`--max-turns` cap/)
 })
 
 test("a successful turn still finishes as a clean stop", async () => {

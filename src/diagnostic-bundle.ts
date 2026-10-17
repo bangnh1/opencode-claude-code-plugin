@@ -153,6 +153,15 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   // the operator's config text and are never logged (h #g243).
   mapReadRules: "flag",
   readRuleDenies: "count",
+  // Budgets and caps (h #g245): numbers and option names only, never spend
+  // per conversation beyond what the doctor table already prints.
+  child: "flag",
+  countUnreadable: "flag",
+  cap: "count",
+  requested: "count",
+  running: "count",
+  option: "name",
+  cliFlag: "name",
   kept: "flag",
   listsAgentTypes: "flag",
   opencodeHasQuestion: "flag",
