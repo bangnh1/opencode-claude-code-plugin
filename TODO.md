@@ -114,12 +114,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it.
 
-- 2026-10-17: merge PR #121 (the sidebar's `Progress` line and per-subagent spend, branch `progress-line`,
-  CI green, `MERGEABLE CLEAN`), then the usual `[skip-ci]` record commit on master and the release
-  (`npm version minor`, since it is a new user-visible feature, then `git push origin master --follow-tags`).
-  Live-tested in the maintainer's own pane on 2026-10-17 after `tui.json` gained the plugin line. Waiting on:
-  now / later / drop.
-
 - 2026-10-17: `/tmp/pl-rig`, the scratch PTY rig (fake `claude`, `@xterm/headless` in its own
   `node_modules`, the captured sidebar logs). Nothing in the repo refers to it. Waiting on: delete now /
   later / keep.
@@ -158,7 +152,10 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## In progress
 
-- 2026-10-17: the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, PR #121, history g246).
+## Done
+
+- 2026-10-17: **done** (v0.57.0): the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, PR #121,
+  history g246, g247, g248).
   Asked as "a visual line that represents a status bar/loading bar with an estimation of how much percent the
   task is completed". Maintainer chose, in order: an honest measured line over an estimated percentage
   ("Honest line, sidebar first"), the `▰▱` glyphs over box drawing ("this is nicer: ▰▱ i want this instead"),
@@ -178,10 +175,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   three turns are on record, the pulse gone. The maintainer's pane shows it after a restart. Then "good now lets
   keep this and go forward with it as is" with "just 2 things before that": every configured account listed in
   `Accounts` from the first draw (its plan tier and `no reading yet` until its first turn reports, h #g248), and
-  the reset time in its own colour apart from the level. PR #121 is open against master after v0.56.0; left: its
-  merge and the release.
-
-## Done
+  the reset time in its own colour apart from the level. **Done**: PR #121 merged as `a7f3fb5` and released as
+  **v0.57.0** on 2026-10-17 (the Publish step's own tail `+ @khalilgharbaoui/opencode-claude-code-plugin@0.57.0`,
+  shasum `ada756b1…` matching the registry's version document). The maintainer's call on the estimate was "lets
+  keep this and go forward with it as is later go back and learn from how it behaved and improve then
+  contribute": the revisit is in the Future Features note, to be read off real `turn-history.json` samples and
+  the pane's bars, not re-derived.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
