@@ -196,6 +196,7 @@ import {
   markTurnStart,
   newestPromptChars,
   recordTurnSample,
+  sessionTag,
   startsTurn,
   takeTurnStart,
   turnHistoryKey,
@@ -3940,6 +3941,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 failed:
                   state.lastCliToolResultError ??
                   lastToolResultFailed(options.prompt, start.promptLength ?? 0),
+                // The conversation, as a hash of its id: the estimate's
+                // session level (h #g251).
+                session: sessionTag(affinity),
                 at: endedAt,
               })
             }

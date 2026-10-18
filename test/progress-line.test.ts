@@ -1,11 +1,13 @@
 /**
- * The model behind the sidebar's progress lines (h #g246, h #g247): what a
- * line measures, when the session's own line shows and lingers, a plan's and
- * an estimate's cells, the fill memory that keeps a bar from stepping back,
- * the width fit, and what the TUI remembers about a session's status.
+ * The model behind the sidebar's progress lines (h #g246, h #g247, h #g251):
+ * what a line measures, when the session's own line shows and lingers, a
+ * plan's and an estimate's cells, the band an estimate draws, the fill memory
+ * that keeps a bar from stepping back, the width fit, and what the TUI
+ * remembers about a session's status.
  *
- * The estimate itself is `src/turn-history.ts`' and is tested there; here a
- * view carries one and the line is laid out from it.
+ * The estimate itself is `src/turn-model.ts`' and is tested in
+ * `test/turn-model.test.ts`; here a view carries one and the line is laid out
+ * from it.
  */
 import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -16,6 +18,7 @@ import {
   STATUS_WATCH_CAP,
   createFillMemory,
   createStatusWatch,
+  estimateBandCells,
   estimateCells,
   filledCells,
   formatElapsed,
@@ -226,6 +229,43 @@ test("createFillMemory only ever advances a bar within a turn, and starts over w
   assert.equal(capped.hold("ses_0", 1, 0.1), 0.1, "the first was forgotten for the newcomer")
 })
 
+test("holdEstimate holds an estimate's fill and both edges of its band within a turn, and lets the total say what the model says now", () => {
+  const fills = createFillMemory()
+  const first = fills.holdEstimate("ses_a", 100, {
+    totalMs: 100_000,
+    fill: 0.3,
+    over: false,
+    band: { lowMs: 60_000, highMs: 150_000, sure: 0.2, maybe: 0.5 },
+  })
+  assert.deepEqual(first.band, { lowMs: 60_000, highMs: 150_000, sure: 0.2, maybe: 0.5 })
+  // The total rose, so every share fell: the bar holds each at its highest,
+  // and the text, which is the total and the band's times, is the model's now.
+  const later = fills.holdEstimate("ses_a", 100, {
+    totalMs: 200_000,
+    fill: 0.25,
+    over: false,
+    band: { lowMs: 120_000, highMs: 300_000, sure: 0.15, maybe: 0.4 },
+  })
+  assert.equal(later.totalMs, 200_000)
+  assert.deepEqual([later.fill, later.band?.sure, later.band?.maybe], [0.3, 0.2, 0.5])
+  assert.deepEqual([later.band?.lowMs, later.band?.highMs], [120_000, 300_000])
+  // A new turn starts over.
+  const next = fills.holdEstimate("ses_a", 200, {
+    totalMs: 50_000,
+    fill: 0.1,
+    over: false,
+    band: { lowMs: 40_000, highMs: 80_000, sure: 0.06, maybe: 0.12 },
+  })
+  assert.deepEqual([next.fill, next.band?.sure, next.band?.maybe], [0.1, 0.06, 0.12])
+  // An estimate with no band holds its fill alone, in the same memory as the plain hold.
+  assert.deepEqual(fills.holdEstimate("ses_a", 200, { totalMs: 50_000, fill: 1, over: true }), {
+    totalMs: 50_000,
+    fill: 1,
+    over: true,
+  })
+  assert.equal(fills.hold("ses_a", 200, 0.5), 1)
+})
+
 test("filledCells rounds, but is never full before the last item nor empty after the first", () => {
   assert.equal(filledCells({ done: 0, total: 4 }), 0)
   assert.equal(filledCells({ done: 4, total: 4 }), BAR_WIDTH)
@@ -246,6 +286,28 @@ test("estimateCells rounds the fill, is never full until the turn is over every 
   assert.equal(estimateCells({ totalMs: 1, fill: 0.97, over: false }), BAR_WIDTH - 1)
   assert.equal(estimateCells({ totalMs: 1, fill: 1, over: false }), BAR_WIDTH - 1)
   assert.equal(estimateCells({ totalMs: 1, fill: 1, over: true }), BAR_WIDTH)
+})
+
+test("estimateBandCells splits the lit cells at the band's far end and lights the track to its near end, and only the track may reach the last cell", () => {
+  const banded = (fill: number, sure: number, maybe: number) => ({
+    totalMs: 1,
+    fill,
+    over: false,
+    band: { lowMs: 1, highMs: 1, sure, maybe },
+  })
+  assert.deepEqual(estimateBandCells(banded(0.42, 0.25, 0.71)), { sure: 3, likely: 4, band: 7 })
+  // The lit count is estimateCells' exactly, so never full before over.
+  assert.deepEqual(estimateBandCells(banded(0.97, 0.9, 1)), { sure: 9, likely: BAR_WIDTH - 1, band: BAR_WIDTH })
+  // An edge on the wrong side of the fill is clamped to it.
+  assert.deepEqual(estimateBandCells(banded(0.42, 0.6, 0.3)), { sure: 4, likely: 4, band: 4 })
+  assert.deepEqual(estimateBandCells(banded(0, 0, 0)), { sure: 0, likely: 0, band: 0 })
+  // No band, and over: the lit cells alone.
+  assert.deepEqual(estimateBandCells({ totalMs: 1, fill: 0.42, over: false }), { sure: 4, likely: 4, band: 4 })
+  assert.deepEqual(estimateBandCells({ ...banded(1, 0.9, 1), over: true }), {
+    sure: BAR_WIDTH,
+    likely: BAR_WIDTH,
+    band: BAR_WIDTH,
+  })
 })
 
 test("formatElapsed reads as seconds, then minutes and seconds, then hours and minutes", () => {
@@ -299,6 +361,25 @@ test("layoutProgressLine draws an estimate as elapsed over the total, in the est
   // A plan outranks an estimate.
   const both = layoutProgressLine(view({ plan: { done: 2, total: 4 }, estimate: { totalMs: 150_000, fill: 0.42, over: false } }), "glyph")
   assert.equal(progressLineText(both), "⠋ ▰▰▰▰▰▱▱▱▱▱  2/4 · 1m03s · bash")
+})
+
+test("layoutProgressLine draws an estimate's band as colours on the same glyphs: sure, likely, the band's track, the rest", () => {
+  const band = { lowMs: 90_000, highMs: 250_000, sure: 0.25, maybe: 0.7 }
+  const laid = layoutProgressLine(view({ estimate: { totalMs: 150_000, fill: 0.42, over: false, band } }), "indent")
+  assert.equal(progressLineText(laid), " ▰▰▰▰▱▱▱▱▱▱  1m03s/~2m30s · bash", "a band only recolours: the text is a plain estimate's")
+  assert.deepEqual(roles(laid.bar), [
+    ...Array(3).fill("bar-done"),
+    "bar-likely",
+    ...Array(3).fill("bar-band"),
+    ...Array(3).fill("bar-track"),
+  ])
+  // Over, a plan and an ended line draw no band, whatever the estimate carried.
+  const over = layoutProgressLine(view({ estimate: { totalMs: 40_000, fill: 1, over: true, band } }), "glyph")
+  assert.ok(over.bar.every((segment) => segment.role === "bar-over"))
+  const planned = layoutProgressLine(view({ plan: { done: 2, total: 4 }, estimate: { totalMs: 150_000, fill: 0.42, over: false, band } }), "glyph")
+  assert.deepEqual(roles(planned.bar), [...Array(5).fill("bar-done"), ...Array(5).fill("bar-track")])
+  const ended = layoutProgressLine(view({ state: "done", estimate: { totalMs: 150_000, fill: 0.42, over: false, band } }), "glyph")
+  assert.ok(ended.bar.every((segment) => segment.role === "done"))
 })
 
 test("layoutProgressLine draws no bar with neither a plan nor an estimate, with the call count, and under a row as an indent", () => {

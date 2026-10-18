@@ -32,6 +32,7 @@ import {
   setActiveProcess,
   snapshotActiveProcesses,
 } from "../src/session-manager.js"
+import { buildTurnModel, CALIBRATION_PRIOR_RESIDUALS, MIN_TURN_SAMPLES } from "../src/turn-model.js"
 
 /** 2026-09-22 20:56 local, the shape of the stale process that started #g192. */
 const LOADED_AT = new Date(2026, 8, 22, 20, 56).getTime()
@@ -904,6 +905,59 @@ test("with no reading the account usage section says why, and a bundle withholds
   const text = formatDoctorReport(withheld)
   assert.ok(!text.includes("Europe/Amsterdam"))
   assert.match(text, /\| default \| five_hour \| out \| rejected \| \[redacted, \d+ chars\]/)
+})
+
+// ---------------------------------------------------------------------------
+// Progress estimate (h #g251)
+// ---------------------------------------------------------------------------
+
+test("the progress estimate section reports each key's leave-one-out errors and what the calibration is fitted on", () => {
+  assert.equal(formatDoctorReport(report).includes("**Progress estimate**"), false, "no assessment, no section")
+  const now = Date.now()
+  const turns = (key: string, durations: number[], over: Record<string, unknown> = {}) =>
+    [key, durations.map((ms, index) => ({ ms, at: now - index * 60_000, ...over }))] as const
+  const assessment = buildTurnModel(
+    new Map([
+      turns("explore/claude-haiku-5-5", [24_000, 25_000, 21_000, 48_000, 23_000, 26_000]),
+      turns("build/claude-fable-5-1", [300_000, 900_000]),
+      ["plan/claude-opus-5-5", [{ ms: 6_000, at: now, failed: true }]],
+    ]),
+    now,
+  ).assess()
+  const text = formatDoctorReport({ ...report, turnEstimate: assessment })
+  assert.match(text, /\*\*Progress estimate\*\*/)
+  assert.match(text, /\| agent\/model \| turns \| failed \| typical \| assessed \| off by \| outran \| in band \|/)
+  // Six turns, each estimated from the other five.
+  assert.match(text, /\| explore\/claude-haiku-5-5 \| 6 \| 0 \| \S+ \| 6 \| ×\d+\.\d \| \d+% \| \d+% \|/)
+  // Two turns leave one to estimate each from, under the minimum: none assessed.
+  assert.match(text, /\| build\/claude-fable-5-1 \| 2 \| 0 \| \S+ \| 0 \| n\/a \| n\/a \| n\/a \|/)
+  // A failed turn is counted and never read.
+  assert.match(text, /\| plan\/claude-opus-5-5 \| 0 \| 1 \| n\/a \| 0 \| n\/a \| n\/a \| n\/a \|/)
+  assert.match(text, new RegExp(`The band is calibrated on 6 leave-one-out errors, which weigh \\d+% against the normal curve: the curve counts as ${CALIBRATION_PRIOR_RESIDUALS}`))
+})
+
+test("with no turns recorded the progress estimate section says when a bar appears, and with no error yet the band is the normal curve's", () => {
+  const empty = formatDoctorReport({ ...report, turnEstimate: { keys: [], residuals: 0, calibrationWeight: 0 } })
+  assert.match(empty, new RegExp(`\\*\\*Progress estimate\\*\\*\\n\\nNo turns recorded yet\\..*${MIN_TURN_SAMPLES} under one model`))
+  const uncalibrated = formatDoctorReport({
+    ...report,
+    turnEstimate: {
+      keys: [{ key: "build/claude-opus-5-5", turns: 2, failed: 0, typicalMs: 60_000, assessed: 0 }],
+      residuals: 0,
+      calibrationWeight: 0,
+    },
+  })
+  assert.match(uncalibrated, /No leave-one-out error to calibrate on yet, so the band is the normal curve's\./)
+  // Nothing in the section is free text (keys are agent and model names, like
+  // the account names the usage section keeps), so a bundle keeps it whole.
+  const now = Date.now()
+  const turnEstimate = buildTurnModel(
+    new Map([["explore/claude-haiku-5-5", [24_000, 25_000, 21_000, 48_000].map((ms) => ({ ms, at: now }))]]),
+    now,
+  ).assess()
+  const bundled = formatDoctorReport(withholdFreeText({ ...report, turnEstimate }))
+  assert.match(bundled, /\| explore\/claude-haiku-5-5 \| 4 \| 0 \|/)
+  assert.equal(bundled.includes("[redacted"), false)
 })
 
 // --- budgets and caps (h #g245) -------------------------------------------

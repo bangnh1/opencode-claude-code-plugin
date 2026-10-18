@@ -1,10 +1,11 @@
 /**
- * The turn-history store and the estimate drawn from it (h #g247): the
- * store's round trip, bounds and discipline; the prompt-length count both
- * halves share; the turn-start registry; the estimator's survival
- * conditioning, kernel weights and `over` state; and a real `doStream`
- * through a fake CLI writing one sample keyed on the agent and model it
- * spawned, with the prompt's length and the effort on it.
+ * The turn-history store the progress estimate is drawn from (h #g247,
+ * h #g251): the store's round trip, bounds and discipline; the counts both
+ * halves share (the prompt's length, the turn's tool calls, where a turn
+ * starts, whether it ended on a failed tool, the session tag); the
+ * turn-start registry; and a real `doStream` through a fake CLI writing one
+ * sample keyed on the agent and model it spawned. The estimate itself is
+ * `test/turn-model.test.ts`.
  */
 import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -15,17 +16,15 @@ import { test } from "node:test"
 import {
   MAX_TURN_KEYS,
   MAX_TURN_SAMPLES,
-  MIN_EFFORT_RATIO_SAMPLES,
-  MIN_TURN_SAMPLES,
   TURN_SAMPLE_MAX_AGE_MS,
   _setTurnHistoryStorePathForTests,
   createTurnHistoryReader,
-  estimateTurn,
   lastToolResultFailed,
   markTurnStart,
   newestPromptChars,
   promptChars,
   recordTurnSample,
+  sessionTag,
   startsTurn,
   takeTurnStart,
   turnHistoryKey,
@@ -43,13 +42,26 @@ function scratch(): string {
 const onDisk = () => JSON.parse(readFileSync(turnHistoryStorePath(), "utf8"))
 const NOW = 1_800_000_000_000
 const sample = (ms: number, over: Partial<TurnSample> = {}): TurnSample => ({ ms, at: NOW, ...over })
-const seconds = (value: number) => value * 1000
 
 test("turnHistoryKey is the agent and the model, `main` when the turn has no agent", () => {
   assert.equal(turnHistoryKey("build", "claude-opus-5-5"), "build/claude-opus-5-5")
   assert.equal(turnHistoryKey("explore", "claude-haiku-5-5"), "explore/claude-haiku-5-5")
   assert.equal(turnHistoryKey(undefined, "claude-opus-5-5"), "main/claude-opus-5-5")
   assert.equal(turnHistoryKey("", "claude-opus-5-5"), "main/claude-opus-5-5")
+})
+
+test("sessionTag is a stable eight-hex-digit hash of the session id, never the id, and nothing for no session", () => {
+  const tag = sessionTag("ses_0123456789abcdefABCDEF")
+  assert.match(tag ?? "", /^[0-9a-f]{8}$/)
+  assert.equal(sessionTag("ses_0123456789abcdefABCDEF"), tag, "the same id is the same tag on both halves")
+  assert.notEqual(sessionTag("ses_0123456789abcdefABCDEG"), tag, "a different id is a different tag")
+  assert.ok(!"ses_0123456789abcdefABCDEF".includes(tag!), "the tag is not a piece of the id")
+  // FNV-1a's published test vectors: the empty input's offset basis is never
+  // reached (no id is no tag), and "a" hashes to 0xe40c292c.
+  assert.equal(sessionTag("a"), "e40c292c")
+  assert.equal(sessionTag(undefined), undefined)
+  assert.equal(sessionTag(""), undefined)
+  assert.equal(sessionTag("default"), undefined, "the affinity of a turn opencode did not tag")
 })
 
 test("promptChars counts the text with the host's injected blocks taken off, and no text at all is unknown", () => {
@@ -120,9 +132,10 @@ test("a turn's start is taken once, the newest mark on a key wins, and it carrie
   assert.deepEqual(takeTurnStart("key-b"), { at: 3_000, chars: 7, promptLength: 5 })
 })
 
-test("a sample round-trips with nothing but its six fields, and `failed` is written only when true", () => {
+test("a sample round-trips with nothing but its seven fields, `failed` is written only when true, and a session is only ever a tag", () => {
   const dir = scratch()
   try {
+    const tag = sessionTag("ses_round_trip")!
     assert.equal(
       recordTurnSample("build/claude-opus-5-5", {
         ms: 61_230.4,
@@ -130,20 +143,23 @@ test("a sample round-trips with nothing but its six fields, and `failed` is writ
         effort: "high",
         calls: 3.2,
         failed: false,
+        session: tag,
         at: NOW,
         ...({ prompt: "secret", sessionKey: "/x" } as object),
       } as TurnSample),
       true,
     )
     const [entry] = onDisk().turns["build/claude-opus-5-5"]
-    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, at: NOW })
-    assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms"])
+    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, session: tag, at: NOW })
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms", "session"])
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 6_077, calls: 1, failed: true, at: NOW + 1 }), true)
     assert.deepEqual(onDisk().turns["build/claude-opus-5-5"][1], { ms: 6_077, calls: 1, failed: true, at: NOW + 1 })
     // An unusable sample is not written, and says so.
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: -1, at: NOW }), false)
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, calls: -1, at: NOW }), false)
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, at: NOW, ...({ failed: "yes" } as object) } as TurnSample), false)
+    // A raw session id is refused: the store holds a tag of it or nothing.
+    assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, session: "ses_round_trip", at: NOW }), false)
     assert.equal(recordTurnSample("", { ms: 1, at: NOW }), false)
     assert.equal(onDisk().turns["build/claude-opus-5-5"].length, 2)
   } finally {
@@ -217,108 +233,6 @@ test("the reader re-parses only a changed file and treats a broken one as empty"
   }
 })
 
-test("estimateTurn needs MIN_TURN_SAMPLES, conditions on the turns that outlasted this one, and says over past the longest", () => {
-  const samples = [sample(seconds(20)), sample(seconds(60)), sample(seconds(100))]
-  assert.equal(MIN_TURN_SAMPLES, 3)
-  assert.equal(estimateTurn(samples.slice(0, 2), { elapsedMs: 0 }), undefined)
-  // Ten seconds in, every turn is still a candidate: the median of what
-  // remained of them is 50 s, so the total is 60 s.
-  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(10) }), {
-    totalMs: seconds(60),
-    fill: 1 / 6,
-    over: false,
-  })
-  // Seventy seconds in, only the 100 s turn is left to be like: 30 s remain.
-  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(70) }), {
-    totalMs: seconds(100),
-    fill: 0.7,
-    over: false,
-  })
-  // Past every recorded turn: full, over, the usual duration shown.
-  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(120) }), {
-    totalMs: seconds(60),
-    fill: 1,
-    over: true,
-  })
-  // A negative elapsed is zero; an unusable sample does not count toward the minimum.
-  assert.equal(estimateTurn(samples, { elapsedMs: -5 })?.fill, 0)
-  assert.equal(estimateTurn([...samples.slice(0, 2), sample(Number.NaN)], { elapsedMs: 0 }), undefined)
-  // A turn that ended on a failed tool result neither counts toward the
-  // minimum nor moves the estimate (h #g251).
-  assert.equal(estimateTurn([...samples.slice(0, 2), sample(seconds(6), { failed: true })], { elapsedMs: 0 }), undefined)
-  assert.deepEqual(
-    estimateTurn([sample(seconds(6), { failed: true }), ...samples], { elapsedMs: seconds(10) }),
-    estimateTurn(samples, { elapsedMs: seconds(10) }),
-  )
-})
-
-test("the estimate weighs toward turns whose prompt was about this long", () => {
-  const samples = [
-    sample(seconds(10), { chars: 10 }),
-    sample(seconds(10), { chars: 10 }),
-    sample(seconds(100), { chars: 10_000 }),
-    sample(seconds(100), { chars: 10_000 }),
-  ]
-  assert.equal(estimateTurn(samples, { elapsedMs: 0, chars: 10 })?.totalMs, seconds(10))
-  assert.equal(estimateTurn(samples, { elapsedMs: 0, chars: 10_000 })?.totalMs, seconds(100))
-  // A prompt of unknown length weighs every sample alike; with an even count the lower middle is the median.
-  assert.equal(estimateTurn(samples, { elapsedMs: 0 })?.totalMs, seconds(10))
-  // A sample of unknown length weighs like a match.
-  const unknown = [sample(seconds(10)), sample(seconds(10)), sample(seconds(100), { chars: 10 })]
-  assert.equal(estimateTurn(unknown, { elapsedMs: 0, chars: 10 })?.totalMs, seconds(10))
-})
-
-test("a turn at another effort weighs half, and once two turns at each effort are on record its duration is scaled by their measured ratio", () => {
-  assert.equal(MIN_EFFORT_RATIO_SAMPLES, 2)
-  // One `low` turn is no ratio: the `high` turns count at half weight, as recorded.
-  const samples = [sample(seconds(10), { effort: "low" }), sample(seconds(100), { effort: "high" }), sample(seconds(100), { effort: "high" })]
-  assert.equal(estimateTurn(samples, { elapsedMs: 0, effort: "low" })?.totalMs, seconds(10))
-  assert.equal(estimateTurn(samples, { elapsedMs: 0, effort: "high" })?.totalMs, seconds(100))
-  assert.equal(estimateTurn(samples, { elapsedMs: 0 })?.totalMs, seconds(100))
-  // A key full of `low` turns and two `high` ones: the `low` durations are
-  // stretched by the measured ratio (100 s over 10 s), so a `high` turn is
-  // expected to take 100 s, where the half weight alone still said 10 s.
-  const mostlyLow = [
-    ...Array.from({ length: 6 }, () => sample(seconds(10), { effort: "low" })),
-    sample(seconds(100), { effort: "high" }),
-    sample(seconds(100), { effort: "high" }),
-  ]
-  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0, effort: "high" })?.totalMs, seconds(100))
-  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0, effort: "low" })?.totalMs, seconds(10))
-  // The scaled duration is what the turn is conditioned on: fifty seconds
-  // into a `high` turn, every stretched `low` sample is still a candidate.
-  assert.deepEqual(estimateTurn(mostlyLow, { elapsedMs: seconds(50), effort: "high" }), {
-    totalMs: seconds(100),
-    fill: 0.5,
-    over: false,
-  })
-  // An unknown effort scales nothing and weighs every sample alike.
-  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0 })?.totalMs, seconds(10))
-})
-
-test("the estimate conditions on the turn's tool calls too: a recorded turn with fewer calls than this one has made is not how it ends", () => {
-  const samples = [sample(seconds(20), { calls: 1 }), sample(seconds(60), { calls: 3 }), sample(seconds(100), { calls: 8 })]
-  // Ten seconds in with no call yet, every turn is a candidate, as without the count.
-  assert.equal(estimateTurn(samples, { elapsedMs: seconds(10), calls: 0 })?.totalMs, seconds(60))
-  // On its fourth call, only the eight-call turn is left to be like.
-  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(10), calls: 4 }), {
-    totalMs: seconds(100),
-    fill: 0.1,
-    over: false,
-  })
-  // Beyond every recorded turn's calls is over, as beyond its time is.
-  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(10), calls: 9 }), {
-    totalMs: seconds(60),
-    fill: 1,
-    over: true,
-  })
-  // A sample recorded before the count existed survives on time alone.
-  const older = [sample(seconds(20)), ...samples.slice(1)]
-  assert.equal(estimateTurn(older, { elapsedMs: seconds(10), calls: 4 })?.totalMs, seconds(20))
-  // A turn whose count is unknown is conditioned on time alone.
-  assert.equal(estimateTurn(samples, { elapsedMs: seconds(10) })?.totalMs, seconds(60))
-})
-
 test("turnToolCalls counts the turn's tool calls since the message that started it, a steered message included", () => {
   const call = { type: "tool-call", toolCallId: "t", toolName: "bash", input: {} }
   const prompt = [
@@ -355,7 +269,7 @@ test("turnToolCalls counts the turn's tool calls since the message that started 
 
 // The fake CLI is a shebang script made executable with chmod, which means
 // nothing on Windows (see .github/windows-skipped-tests.txt).
-test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort, its tool calls, and that it ended on a failed one", { skip: process.platform === "win32" }, async () => {
+test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort, its tool calls, that it ended on a failed one, and its session's tag", { skip: process.platform === "win32" }, async () => {
   const dir = scratch()
   const savedHome = process.env.HOME
   const savedState = process.env.XDG_STATE_HOME
@@ -418,6 +332,8 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
     assert.equal(entry.effort, "high")
     assert.equal(entry.calls, 1, "the step's own CLI-executed call is counted")
     assert.equal(entry.failed, true, "the CLI's own refusal of the call is the turn's last tool result")
+    assert.equal(entry.session, sessionTag(affinity), "the conversation, as the tag the TUI computes from the same id")
+    assert.ok(!JSON.stringify(entry).includes(affinity), "never the session id itself")
     assert.ok(entry.at >= started)
   } finally {
     for (const active of snapshotActiveProcesses()) {

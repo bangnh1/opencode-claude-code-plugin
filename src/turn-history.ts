@@ -1,58 +1,31 @@
 /**
- * How long a turn usually takes, for the sidebar's progress bar (h #g247):
- * one sample per finished turn, keyed by the agent and the model it ran as,
- * written by the server half at the CLI's `result` and read by the TUI half
- * (`src/tui.ts`), plus the estimate the bar is drawn from.
- *
- * ## What is estimated, and how
- *
- * A turn's length is not knowable up front: it depends on what the tools
- * return, which has not happened yet. What IS known is how long turns like
- * it took before, so the bar is drawn from this install's own record. The
- * key is the agent and the model, the two inputs that move a duration most;
- * the prompt's length and the effort ride on the sample and weight it.
- *
- * At elapsed `t` the estimate is the weighted median residual life: over the
- * recorded turns that lasted LONGER than `t` and made at least as many tool
- * calls as this turn has so far (the ones this turn can still be like), the
- * weighted median of what remained of them at `t`. The total is `t` plus
- * that, and the bar is `t` over the total. Conditioning on survival is what
- * keeps the bar honest once a turn runs long: the total rises with `t`
- * instead of the bar sitting full, and a turn on its twelfth call is not
- * expected to end like the two-call ones (h #g250). The weights prefer turns
- * that started like this one: a Gaussian kernel on the log of the prompt's
- * length (`CHARS_BANDWIDTH`, so a prompt four times longer or shorter still
- * weighs e^-1/2, sixteen times e^-2), and `OTHER_EFFORT_WEIGHT` for a turn
- * at another effort. Effort multiplies the thinking a turn does rather than
- * labelling it, so once a key holds `MIN_EFFORT_RATIO_SAMPLES` turns at this
- * effort and as many at another, the other effort's durations are scaled by
- * the ratio of the two groups' weighted medians before they are conditioned
- * on (h #g250): a key full of `low` turns then still says something about a
- * `high` one. Past every recorded turn, in time or in calls, there is
- * nothing left to condition on, and the estimate says so (`over`): the bar
- * is full, drawn in the warning colour, and the total shown is the usual
- * one, the weighted median of every sample.
- *
- * Fewer than `MIN_TURN_SAMPLES` samples is no estimate at all, and the line
- * then draws no bar rather than a guess. The first turns of a new agent or
- * model show the spinner, the elapsed, the calls and the tool.
+ * How long a turn took, for the sidebar's progress bar (h #g247): one sample
+ * per finished turn, keyed by the agent and the model it ran as, written by
+ * the server half at the CLI's `result` and read by the TUI half
+ * (`src/tui.ts`). What the bar is drawn from that record is
+ * `src/turn-model.ts`; this module is the record itself, and the counts both
+ * halves must agree on (the prompt's length, the turn's tool calls, where a
+ * turn starts).
  *
  * ## The store
  *
  * ```json
  * { "version": 1, "turns": { "build/claude-opus-5-5": [
- *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "at": 1760000000000 },
+ *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "session": "5c1d0f3a", "at": 1760000000000 },
  *     { "ms": 6077, "chars": 279, "effort": "low", "calls": 1, "failed": true, "at": 1760000100000 } ] } }
  * ```
  *
  * A duration, a character count, an effort level, a tool-call count, whether
- * the turn ended on a failed tool result, and a time: no prompt text, no
- * path, no session id, nothing secret. Same discipline as the spawn
- * record store (h #g234): merge-on-write so two opencode processes do not
- * erase each other, atomic rename, `0600` in the `0700` directory, bounded
- * at `MAX_TURN_SAMPLES` newest samples per key, `MAX_TURN_KEYS` keys and
- * `TURN_SAMPLE_MAX_AGE_MS`. A missing, unreadable or half-written file is
- * an empty store, which costs a bar and nothing else.
+ * the turn ended on a failed tool result, a short tag of the conversation it
+ * ran in, and a time: no prompt text, no path, no session id, nothing
+ * secret. The tag is a 32-bit hash of the opencode session id (`sessionTag`),
+ * enough for the estimate to tell this conversation's turns from another's
+ * and not the id. Same discipline as the spawn record store (h #g234):
+ * merge-on-write so two opencode processes do not erase each other, atomic
+ * rename, `0600` in the `0700` directory, bounded at `MAX_TURN_SAMPLES`
+ * newest samples per key, `MAX_TURN_KEYS` keys and `TURN_SAMPLE_MAX_AGE_MS`.
+ * A missing, unreadable or half-written file is an empty store, which costs
+ * a bar and nothing else.
  *
  * Imports nothing that logs, because the TUI bundle reads it on the
  * terminal's own thread (h #g193): every function here is silent and never
@@ -78,6 +51,12 @@ export interface TurnSample {
    * Written only when true.
    */
   failed?: boolean
+  /**
+   * The conversation the turn ran in, as `sessionTag` hashes its opencode
+   * session id: the estimate's session level reads it (`src/turn-model.ts`).
+   * Absent on a sample from before 0.58.0.
+   */
+  session?: string
   at: number
 }
 
@@ -90,16 +69,8 @@ export const MAX_TURN_SAMPLES = 48
 export const MAX_TURN_KEYS = 64
 /** A turn older than this says little about how the agent runs now. */
 export const TURN_SAMPLE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
-/** Fewer samples than this is no estimate. */
-export const MIN_TURN_SAMPLES = 3
-/** The prompt-length kernel's bandwidth, in log-length: a factor of four is one standard deviation. */
-export const CHARS_BANDWIDTH = Math.log(4)
-/** What a sample at another effort weighs against one at the same. */
-export const OTHER_EFFORT_WEIGHT = 0.5
-/** Turns at each of two efforts before the ratio of their durations is measured and the other effort's scaled by it. */
-export const MIN_EFFORT_RATIO_SAMPLES = 2
-/** Added to both lengths before the log, so a one-word prompt is not infinitely far from an empty one. */
-const CHARS_FLOOR = 50
+
+const SESSION_TAG = /^[0-9a-f]{8}$/
 
 let pathOverride: string | null = null
 
@@ -112,6 +83,24 @@ export function turnHistoryStorePath(): string {
 /** The key a turn's samples live under: the agent it ran as and the model, `build/claude-opus-5-5`. */
 export function turnHistoryKey(agent: string | undefined, model: string): string {
   return `${agent || "main"}/${model}`
+}
+
+/**
+ * A short tag for an opencode session id, the same on both halves: FNV-1a
+ * over its characters, 32 bits as eight hex digits. Enough for the estimate
+ * to tell one conversation's turns from another's (h #g251), and not the id:
+ * a hash of it, which the store's "no session id" means to keep true.
+ * Undefined for no id, and for `default`, the affinity of a turn opencode
+ * did not tag with a session.
+ */
+export function sessionTag(sessionID: string | undefined): string | undefined {
+  if (!sessionID || sessionID === "default") return undefined
+  let hash = 0x811c9dc5
+  for (let index = 0; index < sessionID.length; index += 1) {
+    hash ^= sessionID.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, "0")
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +307,9 @@ function isSample(value: unknown): value is TurnSample {
     return false
   }
   if (sample.failed !== undefined && typeof sample.failed !== "boolean") return false
+  if (sample.session !== undefined && (typeof sample.session !== "string" || !SESSION_TAG.test(sample.session))) {
+    return false
+  }
   return true
 }
 
@@ -328,6 +320,7 @@ function cleanSample(sample: TurnSample): TurnSample {
     ...(sample.effort ? { effort: sample.effort } : {}),
     ...(sample.calls !== undefined ? { calls: Math.round(sample.calls) } : {}),
     ...(sample.failed ? { failed: true } : {}),
+    ...(sample.session ? { session: sample.session } : {}),
     at: sample.at,
   }
 }
@@ -410,122 +403,6 @@ export function createTurnHistoryReader(file: () => string = turnHistoryStorePat
       return cached
     },
   }
-}
-
-// ---------------------------------------------------------------------------
-// The estimate
-// ---------------------------------------------------------------------------
-
-export interface TurnEstimate {
-  /** What the whole turn is expected to take, elapsed included; once `over`, the usual duration. */
-  totalMs: number
-  /** Elapsed over that total, 0 to 1; 1 once past every recorded turn. */
-  fill: number
-  /** The turn has outlasted every recorded one: nothing is left to condition on. */
-  over: boolean
-}
-
-/** The value at which the cumulative weight first reaches half the total. */
-function weightedMedian(values: readonly number[], weights: readonly number[]): number {
-  const order = values.map((_, index) => index).sort((a, b) => values[a] - values[b])
-  const total = order.reduce((sum, index) => sum + weights[index], 0)
-  let cumulative = 0
-  for (const index of order) {
-    cumulative += weights[index]
-    if (cumulative >= total / 2) return values[index]
-  }
-  return values[order[order.length - 1]]
-}
-
-function charsWeight(a: number | undefined, b: number | undefined): number {
-  if (a === undefined || b === undefined) return 1
-  const distance = Math.log((a + CHARS_FLOOR) / (b + CHARS_FLOOR)) / CHARS_BANDWIDTH
-  return Math.exp(-0.5 * distance * distance)
-}
-
-function effortWeight(a: string | undefined, b: string | undefined): number {
-  return a === undefined || b === undefined || a === b ? 1 : OTHER_EFFORT_WEIGHT
-}
-
-/**
- * The factor each other effort's durations are scaled by before the estimate
- * conditions on them: the weighted median of this effort's turns over the
- * weighted median of that effort's. Measured only once both groups hold
- * `MIN_EFFORT_RATIO_SAMPLES` (a ratio of one turn to one turn is noise),
- * with the prompt-length kernel on both medians so a group of long prompts
- * is not read as a slow effort. An effort with no measurable ratio is left
- * as recorded, at `OTHER_EFFORT_WEIGHT`; a sample with no effort is never
- * scaled.
- */
-function effortScales(
-  samples: readonly TurnSample[],
-  charsWeights: readonly number[],
-  effort: string | undefined,
-): Map<string, number> {
-  const scales = new Map<string, number>()
-  if (effort === undefined) return scales
-  const groups = new Map<string, number[]>()
-  samples.forEach((sample, index) => {
-    if (sample.effort === undefined) return
-    const group = groups.get(sample.effort) ?? []
-    group.push(index)
-    groups.set(sample.effort, group)
-  })
-  const own = groups.get(effort)
-  if (!own || own.length < MIN_EFFORT_RATIO_SAMPLES) return scales
-  const medianOf = (indices: readonly number[]) =>
-    weightedMedian(
-      indices.map((index) => samples[index].ms),
-      indices.map((index) => charsWeights[index]),
-    )
-  const ownMedian = medianOf(own)
-  for (const [other, indices] of groups) {
-    if (other === effort || indices.length < MIN_EFFORT_RATIO_SAMPLES) continue
-    const otherMedian = medianOf(indices)
-    if (ownMedian > 0 && otherMedian > 0) scales.set(other, ownMedian / otherMedian)
-  }
-  return scales
-}
-
-/**
- * What a turn that has run `elapsedMs` and made `calls` tool calls is
- * expected to take in all, given the recorded turns of its agent and model:
- * the weighted median residual life described at the top. `undefined` with
- * fewer than `MIN_TURN_SAMPLES` samples. A sample recorded without a call
- * count, or a turn whose count is unknown, is conditioned on time alone.
- */
-export function estimateTurn(
-  samples: readonly TurnSample[],
-  input: { elapsedMs: number; chars?: number; effort?: string; calls?: number },
-): TurnEstimate | undefined {
-  const usable = samples.filter((sample) => Number.isFinite(sample.ms) && sample.ms >= 0 && !sample.failed)
-  if (usable.length < MIN_TURN_SAMPLES) return undefined
-  const elapsed = Math.max(0, input.elapsedMs)
-  const charsWeights = usable.map((sample) => charsWeight(input.chars, sample.chars))
-  const scales = effortScales(usable, charsWeights, input.effort)
-  const scaled = usable.map((sample, index) => ({
-    ms: sample.ms * (sample.effort !== undefined ? (scales.get(sample.effort) ?? 1) : 1),
-    calls: sample.calls,
-    weight: charsWeights[index] * effortWeight(input.effort, sample.effort),
-  }))
-  const survivors = scaled.filter(
-    (sample) =>
-      sample.ms > elapsed &&
-      (sample.calls === undefined || input.calls === undefined || sample.calls >= input.calls),
-  )
-  if (survivors.length === 0) {
-    const usual = weightedMedian(
-      scaled.map((sample) => sample.ms),
-      scaled.map((sample) => sample.weight),
-    )
-    return { totalMs: usual, fill: 1, over: true }
-  }
-  const residual = weightedMedian(
-    survivors.map((sample) => sample.ms - elapsed),
-    survivors.map((sample) => sample.weight),
-  )
-  const totalMs = elapsed + residual
-  return { totalMs, fill: totalMs > 0 ? elapsed / totalMs : 0, over: false }
 }
 
 export function _setTurnHistoryStorePathForTests(path: string | null): void {

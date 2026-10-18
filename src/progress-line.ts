@@ -19,13 +19,21 @@
  *     is never full before the last item is done and never empty once the
  *     first is.
  *   - Else, with history for this agent and model, it is the turn's elapsed
- *     over its estimated total (`src/turn-history.ts`: the weighted median
- *     residual life of the recorded turns that have outlasted this one so
- *     far, weighted toward turns with a prompt of about this length and at
- *     this effort), and the line says both, `1m02s/~2m30s`. The bar only
- *     ever advances within a turn (`createFillMemory`), though the total it
- *     is drawn against can rise. Past every recorded turn it is full in the
- *     warning colour and the total shown is the usual one.
+ *     over its estimated total (`src/turn-model.ts`: a log-normal fitted to
+ *     the recorded turns, conditioned on this one having run this long, read
+ *     through the calibration of the model's own past errors), and the line
+ *     says both, `1m02s/~2m30s`. The bar draws the estimate's band as well:
+ *     the cells covered even if the turn runs to the band's far end in the
+ *     full colour, the rest of the cells covered at the estimate in a softer
+ *     one, and the track the turn has covered if it ends at the band's near
+ *     end a little brighter than the rest of the track:
+ *
+ *         ▰▰▰▰▰▰▱▱▱▱      sure ▰▰▰▰ · likely ▰▰ · band ▱▱ · track ▱▱
+ *
+ *     Nothing on the bar ever steps back within a turn (`createFillMemory`),
+ *     though the total it is drawn against can rise. Past every recorded
+ *     turn it is full in the warning colour and the total shown is the
+ *     usual one.
  *   - Else there is no bar: the spinner says the session works, and a bar
  *     that could not fill would say nothing the spinner does not.
  *   - The rest is the turn's own record: elapsed since the last user message
@@ -48,7 +56,7 @@ import {
   type ChildRunState,
   type Segment,
 } from "./subagent-sidebar.js"
-import type { TurnEstimate } from "./turn-history.js"
+import type { TurnEstimate } from "./turn-model.js"
 
 /** The bar's width in cells. */
 export const BAR_WIDTH = 10
@@ -277,19 +285,39 @@ export function createStatusWatch() {
  */
 export function createFillMemory() {
   const held = new Map<string, { turn: number; fill: number }>()
+  const hold = (key: string, turn: number, fill: number): number => {
+    const entry = held.get(key)
+    if (entry && entry.turn === turn) {
+      entry.fill = Math.max(entry.fill, fill)
+      return entry.fill
+    }
+    if (!entry && held.size >= STATUS_WATCH_CAP) {
+      const oldest = held.keys().next().value
+      if (oldest !== undefined) held.delete(oldest)
+    }
+    held.set(key, { turn, fill })
+    return fill
+  }
   return {
-    hold(sessionID: string, turn: number, fill: number): number {
-      const entry = held.get(sessionID)
-      if (entry && entry.turn === turn) {
-        entry.fill = Math.max(entry.fill, fill)
-        return entry.fill
+    hold,
+    /**
+     * The same hold for a whole estimate: its fill and both edges of its band,
+     * each at its highest this turn, so neither the lit cells nor the band's
+     * reach ever step back while the total rises. The total is not held: it
+     * is the text, and the text says what the model says now. Each edge at
+     * its highest stays on its side of the fill, because it is on that side
+     * at every moment (elapsed over a longer total, and over a shorter one).
+     */
+    holdEstimate(sessionID: string, turn: number, estimate: TurnEstimate): TurnEstimate {
+      const fill = hold(sessionID, turn, estimate.fill)
+      if (!estimate.band) return { ...estimate, fill }
+      const sure = hold(`${sessionID}\u0000sure`, turn, estimate.band.sure)
+      const maybe = hold(`${sessionID}\u0000maybe`, turn, estimate.band.maybe)
+      return {
+        ...estimate,
+        fill,
+        band: { ...estimate.band, sure: Math.min(sure, fill), maybe: Math.max(maybe, fill) },
       }
-      if (!entry && held.size >= STATUS_WATCH_CAP) {
-        const oldest = held.keys().next().value
-        if (oldest !== undefined) held.delete(oldest)
-      }
-      held.set(sessionID, { turn, fill })
-      return fill
     },
   }
 }
@@ -313,6 +341,32 @@ export function filledCells(plan: ProgressPlan, width: number = BAR_WIDTH): numb
 export function estimateCells(estimate: TurnEstimate, width: number = BAR_WIDTH): number {
   if (estimate.over) return width
   return Math.min(width - 1, Math.max(0, Math.round(estimate.fill * width)))
+}
+
+/** Where an estimate's band falls on the bar, as cell counts from the left. */
+export interface EstimateCells {
+  /** Lit in the full colour: covered even if the turn runs to the band's far end. */
+  sure: number
+  /** Lit, past `sure` in a softer colour: covered at the estimate itself (`estimateCells`). */
+  likely: number
+  /** Track past `likely` drawn brighter: covered if the turn ends at the band's near end. */
+  band: number
+}
+
+/**
+ * An estimate's cells, band included. The lit count is `estimateCells`
+ * exactly, so the band only recolours cells and the bar still reads as it
+ * did: never full before `over`, which is the warning colour's alone. Only
+ * the band's track may reach the last cell, because a brighter `▱` is not a
+ * full bar: it says the turn may end any moment now. An estimate without a
+ * band (none to draw, or `over`) is its lit cells alone.
+ */
+export function estimateBandCells(estimate: TurnEstimate, width: number = BAR_WIDTH): EstimateCells {
+  const likely = estimateCells(estimate, width)
+  if (estimate.over || !estimate.band) return { sure: likely, likely, band: likely }
+  const sure = Math.min(likely, Math.max(0, Math.round(estimate.band.sure * width)))
+  const band = Math.max(likely, Math.min(width, Math.round(estimate.band.maybe * width)))
+  return { sure, likely, band }
 }
 
 /** `12s`, `1m03s`, `1h02m`. */
@@ -366,13 +420,28 @@ export function layoutProgressLine(
         ]
   // A plan outranks an estimate, and an ended line is its final state.
   const estimate = !ended && !view.plan ? view.estimate : undefined
-  const filled = ended ? BAR_WIDTH : view.plan ? filledCells(view.plan) : estimate ? estimateCells(estimate) : undefined
-  const litRole: Segment["role"] = ended ? endedRole : estimate?.over ? "bar-over" : "bar-done"
   const bar: Segment[] = []
-  if (filled !== undefined) {
-    for (let cell = 0; cell < BAR_WIDTH; cell += 1) {
-      bar.push(cell < filled ? { text: BAR_DONE, role: litRole } : { text: BAR_TODO, role: "bar-track" })
-    }
+  const cellsOf = (segment: (cell: number) => Segment) => {
+    for (let cell = 0; cell < BAR_WIDTH; cell += 1) bar.push(segment(cell))
+  }
+  if (ended) {
+    cellsOf(() => ({ text: BAR_DONE, role: endedRole }))
+  } else if (view.plan) {
+    const filled = filledCells(view.plan)
+    cellsOf((cell) => (cell < filled ? { text: BAR_DONE, role: "bar-done" } : { text: BAR_TODO, role: "bar-track" }))
+  } else if (estimate) {
+    const cells = estimateBandCells(estimate)
+    cellsOf((cell) =>
+      estimate.over
+        ? { text: BAR_DONE, role: "bar-over" }
+        : cell < cells.sure
+          ? { text: BAR_DONE, role: "bar-done" }
+          : cell < cells.likely
+            ? { text: BAR_DONE, role: "bar-likely" }
+            : cell < cells.band
+              ? { text: BAR_TODO, role: "bar-band" }
+              : { text: BAR_TODO, role: "bar-track" },
+    )
   }
 
   const required: Segment[] = []

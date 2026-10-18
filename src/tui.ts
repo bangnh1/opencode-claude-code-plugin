@@ -11,9 +11,11 @@
  * Above it, under a `Main Progress` heading, the same line for the session on
  * screen while its turn runs and for a moment after it ends (h #g246). The
  * bar is a todo list's fraction when the session has one, else the turn's
- * elapsed over the total its agent and model's own recorded turns predict
- * (`src/turn-history.ts`, h #g247), else nothing; the rest is elapsed, calls
- * and the running tool. `src/progress-line.ts` decides all of it.
+ * elapsed over the total its agent and model's own recorded turns predict,
+ * with the band that prediction carries (`src/turn-model.ts` over
+ * `src/turn-history.ts`, h #g247, h #g251), else nothing; the rest is
+ * elapsed, calls and the running tool. `src/progress-line.ts` decides all of
+ * it.
  *
  * Below it, in the same slot, an `Accounts` section: one line per account
  * this install runs, from the first draw (h #g248): its current usage reading
@@ -73,7 +75,8 @@ import {
   type ProgressView,
 } from "./progress-line.js"
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
-import { createTurnHistoryReader, estimateTurn, promptChars, turnHistoryKey, type TurnHistory } from "./turn-history.js"
+import { createTurnHistoryReader, promptChars, sessionTag, turnHistoryKey, type TurnHistory } from "./turn-history.js"
+import { buildTurnModel, type TurnModel } from "./turn-model.js"
 import { createAccountUsageReader, type AccountUsage, type KnownAccounts } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
 
@@ -109,6 +112,16 @@ export interface SidebarColors {
   hover: Color
   /** A bar's filled cells: the theme's success colour. */
   barDone: Color
+  /**
+   * An estimate's cells covered at the estimate but not past the band's far
+   * end: the success colour faded toward muted, like a finished row's ✓.
+   */
+  barLikely: Color
+  /**
+   * The track an estimate covers if the turn ends at the band's near end:
+   * muted with a little of the success colour, brighter than the rest.
+   */
+  barBand: Color
   /** The track still to go: the muted colour pulled toward the background. */
   barTrack: Color
   /** `2/4`: the text colour, drawn bold; an estimate's `1m02s/~2m30s` takes it unbolded. */
@@ -142,6 +155,8 @@ const ROLE_COLOR: Record<Segment["role"], keyof SidebarColors> = {
   effort: "effort",
   "effort-faded": "effortFaded",
   "bar-done": "barDone",
+  "bar-likely": "barLikely",
+  "bar-band": "barBand",
   // Past every recorded turn: the warning colour, which the effort already takes.
   "bar-over": "effort",
   "bar-track": "barTrack",
@@ -219,6 +234,10 @@ function createSidebar(host: SidebarHost) {
   // writes it at every served `result`.
   const history = createTurnHistoryReader()
   let historyMap: TurnHistory = attempt(() => history.read(), new Map())
+  // The model over the whole store (src/turn-model.ts, h #g251), built once
+  // per change to it because that is when its calibration is fitted, then
+  // read once per line per tick.
+  let turnModel: TurnModel | undefined = attempt(() => buildTurnModel(historyMap), undefined)
   const [recordVersion, setRecordVersion] = createSignal(0)
   // What the TUI itself remembers about each session's status (h #g246): when
   // it first saw a run and when it saw the stop, for the one line whose turn
@@ -254,6 +273,7 @@ function createSidebar(host: SidebarHost) {
       const next = attempt(() => records.read(), recordMap)
       const nextHistory = attempt(() => history.read(), historyMap)
       if (next !== recordMap || nextHistory !== historyMap) {
+        if (nextHistory !== historyMap) turnModel = attempt(() => buildTurnModel(nextHistory), turnModel)
         recordMap = next
         historyMap = nextHistory
         setRecordVersion((value) => value + 1)
@@ -294,12 +314,13 @@ function createSidebar(host: SidebarHost) {
     attempt(() => host.progress(sessionID), EMPTY_SOURCE)
 
   /**
-   * A running line's estimate (h #g247, h #g250): the session's recorded
-   * agent and model name the history, the turn's prompt length and the
-   * effort weight it, its tool calls so far condition it beside the elapsed,
-   * and the fill is held so the bar only advances within the turn. No spawn
-   * record, no history or too little of it is no estimate, and the line then
-   * draws no bar.
+   * A running line's estimate (h #g247, h #g250, h #g251): the session's
+   * recorded agent and model name the key, the turn's prompt length and the
+   * effort weight its record, the session's own earlier turns are its
+   * session level, its tool calls so far condition it beside the elapsed,
+   * and the fill and the band are held so nothing on the bar steps back
+   * within the turn. No spawn record, or too little record for the key and
+   * its agent's other models, is no estimate, and the line then draws no bar.
    */
   const estimateFor = (
     sessionID: string,
@@ -307,20 +328,20 @@ function createSidebar(host: SidebarHost) {
     view: ProgressView,
     agentFallback?: string,
   ): ProgressView => {
-    if (view.state !== "running") return view
+    if (view.state !== "running" || !turnModel) return view
     const record = recordMap.get(sessionID)
     if (!record?.model) return view
-    const samples = historyMap.get(turnHistoryKey(record.agent ?? agentFallback, record.model))
-    if (!samples) return view
-    const estimate = estimateTurn(samples, {
+    const estimate = turnModel.estimate(turnHistoryKey(record.agent ?? agentFallback, record.model), {
       elapsedMs: view.elapsedMs,
       chars: measure.chars,
       effort: record.effort,
       calls: measure.calls,
+      session: sessionTag(sessionID),
+      now: Date.now(),
     })
     if (!estimate) return view
     const turn = measure.startedAt ?? 0
-    return { ...view, estimate: { ...estimate, fill: fills.hold(sessionID, turn, estimate.fill) } }
+    return { ...view, estimate: fills.holdEstimate(sessionID, turn, estimate) }
   }
 
   const deriveView = (sessionID: string): SidebarView => {
@@ -712,6 +733,8 @@ export function registerV1(api: V1Api): void {
         effortFaded: mix(theme.warning ?? muted, muted, 0.45),
         hover: theme.backgroundElement,
         barDone: theme.success ?? theme.accent,
+        barLikely: mix(theme.success ?? theme.accent, muted, 0.45),
+        barBand: mix(muted, theme.success ?? theme.accent, 0.3),
         barTrack: mix(muted, theme.backgroundPanel ?? theme.backgroundElement, 0.5),
         fraction: theme.text,
         tool: theme.info ?? theme.accent,
@@ -897,6 +920,8 @@ export function setupV2(context: V2Context): () => void {
         effortFaded: mix(theme.text.feedback.warning?.base ?? muted, muted, 0.45),
         hover: theme.background.raised.base,
         barDone: theme.text.feedback.success.base ?? accent,
+        barLikely: mix(theme.text.feedback.success.base ?? accent, muted, 0.45),
+        barBand: mix(muted, theme.text.feedback.success.base ?? accent, 0.3),
         barTrack: mix(muted, theme.background.base ?? theme.background.raised.base, 0.5),
         fraction: theme.text.base,
         tool: theme.text.feedback.info?.base ?? accent,
