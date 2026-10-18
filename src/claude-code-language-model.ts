@@ -11,7 +11,6 @@ import { join } from "node:path"
 import { generateId } from "./ids.js"
 import type {
   ClaudeCodeConfig,
-  ControlRequestBehavior,
   ClaudeStreamMessage,
   ReasoningEffort,
 } from "./types.js"
@@ -251,7 +250,6 @@ import {
   userAuthoredInstructions,
   QUESTION_PROXY_HINT,
   SUBAGENT_DISPATCH_HINT,
-  BACKGROUND_SUBAGENT_HINT,
   backgroundSubagentHint,
   codeModeProxyHint,
 } from "./prompts.js"
@@ -267,11 +265,7 @@ import {
   resolveSessionAffinity,
 } from "./call-options.js"
 import { extractPendingProxyResultForCall } from "./proxy-results.js"
-import {
-  controlRequestBehaviorForTool,
-  handleControlRequest,
-  writeControlResponse,
-} from "./control-request.js"
+import { handleControlRequest } from "./control-request.js"
 import {
   createLiveToolInfoLoader,
   effectiveMcpConfig,
@@ -294,7 +288,6 @@ import {
 } from "./mcp-hot-reload.js"
 import {
   isTitleRequest,
-  latestUserText,
   requestScope,
   synthesizeTitle,
 } from "./title.js"
@@ -791,18 +784,6 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     )
   }
 
-  private controlRequestBehaviorForTool(toolName: string): ControlRequestBehavior {
-    return controlRequestBehaviorForTool(this.config, toolName)
-  }
-
-  private writeControlResponse(
-    proc: import("child_process").ChildProcess,
-    requestId: string,
-    response?: Record<string, unknown>,
-  ): void {
-    writeControlResponse(proc, requestId, response)
-  }
-
   /**
    * Handle Claude stream-json control requests (`can_use_tool`, etc.) and
    * respond via stdin with a matching `control_response`.
@@ -871,12 +852,6 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
           ? "summarized"
           : undefined,
     }
-  }
-
-  private latestUserText(
-    prompt: LanguageModelV3CallOptions["prompt"],
-  ): string {
-    return latestUserText(prompt)
   }
 
   private synthesizeTitle(

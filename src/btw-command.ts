@@ -1,6 +1,5 @@
 import { detectCliVersion } from "./cli-version.js"
 import { log } from "./logger.js"
-import { getOpencodeClient } from "./runtime-status.js"
 import { findActiveProcessBySessionId, type ActiveProcess } from "./session-manager.js"
 import {
   collectSideQuestionHistory,
