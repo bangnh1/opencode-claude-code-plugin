@@ -7051,3 +7051,136 @@ Also found: two local tags, `v0.36.4-internetisalie.2` and `.3`, annotated
 tags fetched with the `fork-internetisalie` remote during a fork sweep.
 Neither is on origin or reachable from master, so the release flow's
 `--follow-tags` cannot push them; `git push --tags` would.
+
+## opencode 2 parity: run state from the event stream, the stop release, `/btw` inside the turn, and warnings as toasts (2026-10-18)
+
+h #g253. After the cleanup the maintainer asked "are all functionalities now
+for opencode v1 and v2 on par?". Read off the two entrypoints, the V2 client
+shim, the two sidebar adapters and the published plugin API declarations, the
+answer was not quite. Five differences on opencode 2: `/btw` answered after the
+running turn, no todo panel, `bridgeMcpOauthTokens` finding nothing, the proxy
+deadline guard (h #g27) never keeping a call because its busy read had no route
+there, and the plugin's warnings never reaching the screen. The last three were
+in no doc, and neither was a sixth, smaller one: Claude's `EnterPlanMode`,
+`ExitPlanMode` and `NotebookEdit` calls get no tool row (`src/host-tools.ts`
+drops them, because V2 rejects an unknown tool name). Asked which follow-ups to
+start now, the maintainer picked all three offered: "Busy/idle from V2 events",
+"Warnings on V2 screen" and "Document the gaps". The first probe found one more
+gap, which is in the list below because the same events close it.
+
+### The API, read before anything was built
+
+- opencode 1.19.3's `@opencode-ai/plugin` declarations are identical to
+  1.19.0's.
+- opencode 2.0.32 is on npm, and Aikido's device protection blocked its tarball
+  on this Mac ("published too recently to be vetted"), so 2.0.31 is the newest V2
+  API read. It is the org's security control and was not routed around.
+- 2.0.31's server-side `SessionDomain` still has no run-state route,
+  `credential` is `Pick<CredentialApi, "activate">` (no way to read a stored MCP
+  token, so `bridgeMcpOauthTokens` stays opencode 1 only), and there is no todo
+  concept anywhere in the plugin or TUI API.
+- What it does have: `SessionStatus` in `@opencode/client` is V1's
+  idle/busy/retry shape, and `session.status`, `session.idle` and
+  `session.execution.*` are declared event types; the TUI context has the full
+  client, `data.listen` over every bus event and `ui.toast.show({title, message,
+  variant, duration, sessionID})`; and `ctx.rpc.register(definition, handlers)`
+  takes an `Rpc.PortableDefinition`, which accepts plain JSON Schema, and returns
+  a registration with `events.emit`, whose events travel as `rpc.<id>.<event>`.
+
+### Measured on 2.0.31, repeated on 2.0.22
+
+A private `serve` under scratch XDG dirs, a throwaway observer plugin that wrote
+every event its `ctx.event.subscribe()` received and emitted an RPC ping every
+4 s, the plugin from a worktree `dist`, and the real `claude` on haiku, driven
+over the HTTP API through four turns: plain text, an 8 s proxied `sleep`, a
+proxied call held 15 s at a permission prompt, and an interrupt during a parked
+`sleep 40` with a command fired while busy.
+
+- `session.execution.started` opened every turn and `succeeded` or
+  `interrupted` (`reason: "user"`) closed it, to the millisecond against `GET
+  /api/session/active`, with nothing in between during the permission hold or
+  the tool run. `session.status` and `session.idle` were emitted zero times.
+- Not one abort reached the plugin, including the interrupt: the provider
+  stream had ended at the tool boundary, and the parked call stayed pending until
+  the server shut down ("proxy MCP server closed"). So opencode 1.18's
+  abort-every-tool-step (h #g26) does not exist on V2, and a stop never reached
+  the plugin at all.
+- A command's `execute` ran the moment the command was posted, busy or not, with
+  `delivery: "steer"` either way. An `execute` that returns nothing is a 500: it
+  must return a promise.
+- All 15 RPC pings appeared on the bus as `rpc.status-probe.ping`. In a TUI run
+  the observer's sidebar half received each through `data.listen` and its
+  `ui.toast.show` rendered every one on screen.
+- In the TUI, `setup` ran twice in one process, for the project directory and the
+  home directory, so each registration emitted its own ping and the sidebar saw
+  every ping twice.
+- **Probe trap**: that TUI run did not pass `--standalone`, and opencode 2's TUI
+  then starts the background service (`serve --service`), which was reparented to
+  init and outlived the TUI, under the scratch dirs. No login item was
+  registered; `opencode service stop` with the same environment ended it. Every
+  later TUI run passed `--standalone`.
+
+### What changed
+
+1. **Run state from the events** (`src/runtime-status.ts`): `noteSessionRunEvent`
+   folds `session.execution.*` (and, unused but harmless, `session.status` /
+   `session.idle`) into a bounded map, and `fetchSessionRunState` answers from it
+   when the client has no status route. Unknown until a session is seen; closing
+   any feed forgets everything, because a feed that ended can have missed the
+   event that would have ended a busy session. Every existing caller gets it with
+   no change: the deadline guard, the tool-boundary check, the background-task
+   checks. opencode 1 never feeds it.
+2. **The stop release** (`releaseParkedProxyCallsForSession`,
+   `src/session-manager.ts`): on `session.execution.interrupted` with reason
+   `user`, interrupt the CLI's turn and reject the calls parked in it, for a
+   process with no stream attached, exactly as V1's abort branch does. Other
+   reasons only update the run state.
+3. **`/btw` inside the turn** (`src/btw-command.ts`): `handleBtwCommand`'s body is
+   now `runBtwCommand`, returning how the aside ended; V1's wrapper keeps its
+   toasts and `BtwHandledError`s line for line. V2's `execute` runs
+   `askBtwThenRelease` in the background and creates the queued message itself
+   unless the answer landed inline, so the command route is never held.
+4. **Warnings on the V2 screen**: the logger's toast policy gained a second
+   consumer, `setToastNotifier`, fed only off a TUI host; the V2 entry registers
+   the RPC notice channel first thing in `setup` (`src/plugin-notice.ts`) and
+   points the notifier at every live registration; the sidebar half listens and
+   toasts each notice id once.
+5. **No empty "between turns" block**: the first live `/btw` put one in the reply.
+   A `/btw` asked during a parked proxied call makes the CLI print a frame with no
+   reply text while no turn is attached, and the replay (h #g189) wrote its marker
+   over nothing. It now writes the block only when something renders. The same
+   happens on V1 in the same situation, so this is a fix for both.
+
+### Live, new build against v0.58.0, same config (2.0.31)
+
+| Scenario | New build | v0.58.0 |
+|---|---|---|
+| Proxied `write`, 5 s deadline, 15 s permission hold | `proxy call past its deadline, but opencode is still serving it; waiting`, then resolved; the file written, Claude said `done` | `timed out after 5000ms` twice; Claude told the operator the tool kept timing out, though the approved write landed |
+| Stop during a parked `sleep 30` | `releasing pending calls`, `interrupt sent for aborted turn {idle: true}` | nothing until the server exited |
+| `/btw` during a parked `sleep 12` | receipt and answer inside the running turn, no `/btw` message | a queued `/btw` message, answered after the turn |
+| A plugin WARN (a deliberately fake `ANTHROPIC_API_KEY`, stripped from spawns) | three notice events on the bus; in a `--standalone` TUI, a `claude-code` toast with the warning text | no notice, no toast |
+
+On 2.0.22 the stop release fired the same way and the notice events reached the
+bus; its TUI was not run.
+
+### What stays different, and why
+
+- No todo panel: opencode 2 has no todo tool and no todo list in its plugin API.
+- `bridgeMcpOauthTokens`: the API can activate a stored credential, not read one.
+- No tool row for `EnterPlanMode`, `ExitPlanMode`, `NotebookEdit`: V2 has no
+  tools of those names and rejects an unknown one.
+
+### Tests
+
+`test/v2-session-events.test.ts` (the map and every mapping, a closed feed, the
+V1 route winning, the real deadline guard kept by a busy event and ended by an
+idle one, the release and its refusals, `stoppedSessionIdV2`,
+`followSessionEvents` end to end), `test/plugin-notice.test.ts` (the definition,
+reading a notice back, the sidebar's dedup and bound, the notifier under the
+toast policy and its buffer, never inside a V1 TUI, setup emitting once per
+location under one id and surviving a host without `rpc`),
+`test/btw-command.test.ts` (`runBtwCommand`'s outcomes, `askBtwThenRelease`
+releasing for every outcome but an inline answer, never rejecting, and the inline
+path through the fake aside CLI), `test/v2-entrypoint.test.ts` (`execute`
+returning before the queued message) and `test/unattended-replay.test.ts` (no
+marker over frames that render nothing).

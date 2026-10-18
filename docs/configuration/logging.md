@@ -47,9 +47,14 @@ limits govern the screen only.
 
 The log file, when you turn it on, is identical in every mode.
 
-opencode 2 is unaffected and unchanged: it runs plugins in a separate
-`serve --stdio` process whose stderr is a pipe rather than the terminal, so
-there was never anything to paint over.
+opencode 2 runs plugins in a separate process whose stderr is a pipe rather
+than the terminal, so there was never anything to paint over, and for the same
+reason nothing reached the screen either. There the plugin's sidebar half shows
+WARN and ERROR as the same `claude-code` toast, under the same two limits: the
+plugin sends each warning over the channel opencode 2 gives a plugin between its
+two halves, and the sidebar half raises it once, in the window it came from.
+Nothing to configure, since opencode 2 loads the sidebar half by itself; stderr
+and the log file are unchanged. Measured on opencode 2.0.31.
 
 `logging` is an ordinary provider option, so it goes under `provider.claude-code.options` like every other one. Keying it on the package name instead is the common mistake: opencode accepts that config without complaint and the plugin never reads it, so you get no log and no error.
 

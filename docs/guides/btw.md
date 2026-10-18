@@ -38,5 +38,6 @@ Notes:
 - An aside written into a turn is marked, and the plugin strips it again if the conversation ever has to be replayed into a fresh Claude Code process. It was never Claude's own output.
 - A request times out after two minutes. Abort and timeout cancel that side request without killing the main session. If the running turn is still not over after 30 minutes, the plugin gives up on that `/btw`; ask again once the turn ends.
 - The answer is never delivered as a notification: it always lands in the conversation, where it stays. The only two toasts left are the cases where nothing reaches the conversation at all, a bare `/btw` (which shows the usage text) and a turn that ran past the 30 minute wait.
+- On opencode 2 all of the above holds, because opencode 2 runs the command the moment you type it, busy or not. Two things differ, both in favour of the conversation: a bare `/btw` is answered with the usage text as its own message instead of a toast, and a turn still running after 30 minutes gets its `/btw` answered once it ends instead of dropping it.
 
 Fully restart opencode after upgrading to load the command and runtime changes. Other providers do not gain Claude's native side-question behavior from this command.

@@ -150,6 +150,20 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-18: **done** (branch `v2-parity`, h #g253): opencode 1/2 parity, after "are all functionalities now for
+  opencode v1 and v2 on par?". The answer was not quite: five differences on opencode 2 (`/btw` after the turn, no
+  todo panel, `bridgeMcpOauthTokens` finds nothing, the proxy deadline guard never keeps a call, warnings never
+  reach the screen), the last three undocumented, plus no tool row for Claude's `EnterPlanMode`, `ExitPlanMode` and
+  `NotebookEdit`. The maintainer picked all three follow-ups:
+  1. "Busy/idle from V2 events": measured on 2.0.31 and 2.0.22, the stream carries `session.execution.*` (never
+     `session.status`). The deadline guard, `/btw` inside the running turn, and a stop releasing its parked proxied
+     calls (a sixth gap the probe found) now work on opencode 2.
+  2. "Warnings on V2 screen": the plugin's RPC channel to its sidebar half; the toast rendered live on 2.0.31.
+  3. "Document the gaps": `docs/opencode-2.md`, the `/btw`, logging and background-subagent pages, SKILL.md,
+     AGENTS.md and V2.md. What stays different (todo panel, MCP token read, the three tool rows) is opencode 2's API.
+  Also fixed on the way: an empty "between turns" block the replay wrote over frames with no reply text. Probe
+  trap recorded: the V2 TUI without `--standalone` starts the background service (stopped; no login item).
+
 - 2026-10-17: **done** (v0.57.0): the sidebar's `Progress` line and per-subagent spend (branch `progress-line`, PR #121,
   history g246, g247, g248).
   Asked as "a visual line that represents a status bar/loading bar with an estimation of how much percent the

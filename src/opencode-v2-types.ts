@@ -122,10 +122,24 @@ export interface V2CommandDefinition {
   readonly execute: (input: V2CommandInvocation) => Promise<void>
 }
 
-/** `session.deleted` is the one event this plugin acts on. */
+/**
+ * A bus event. Acted on: `session.deleted`, `session.execution.started` /
+ * `succeeded` / `failed` / `interrupted` (with `reason`, measured on 2.0.31,
+ * h #g253), and the never-emitted-there `session.status` / `session.idle`.
+ */
 export interface V2Event {
   readonly type?: string
   readonly data?: { readonly sessionID?: string } & Record<string, unknown>
+}
+
+/**
+ * `ctx.rpc.register`'s result (`@opencode/plugin` 2.0.31 `RpcRegistration`):
+ * a registration whose events travel on the bus as `rpc.<id>.<event>`.
+ */
+export interface V2RpcRegistration extends V2Registration {
+  readonly events: {
+    emit(name: string, data: Record<string, unknown>): Promise<void>
+  }
 }
 
 export interface V2Context {
@@ -162,6 +176,14 @@ export interface V2Context {
   }
   readonly event?: {
     subscribe(options?: { signal?: AbortSignal }): AsyncIterable<V2Event>
+  }
+  /**
+   * Absent before 2.0.31's measured shape: the definition is plain JSON
+   * Schema, which `Rpc.PortableDefinition` accepts, and the handlers object is
+   * empty because the definition declares no methods.
+   */
+  readonly rpc?: {
+    register(definition: unknown, handlers: Record<string, never>): Promise<V2RpcRegistration>
   }
   readonly skill?: {
     transform(

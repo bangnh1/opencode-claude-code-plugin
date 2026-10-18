@@ -1,4 +1,9 @@
 import { type LogLevel, type LogSink, type LogSinkEntry, setLogSink } from "./logger.js"
+import { TOAST_DURATION_MS, TOAST_TITLE, toastMessage } from "./plugin-notice.js"
+
+// One toast policy for both majors: opencode 2's sidebar half shows the same
+// title, length and duration from `src/plugin-notice.ts`.
+export { MAX_TOAST_CHARS, TOAST_DURATION_MS, TOAST_TITLE, toastMessage } from "./plugin-notice.js"
 
 /**
  * The `LogSink` that keeps plugin WARN/ERROR lines off a full-screen TUI's
@@ -55,19 +60,6 @@ export interface LogSinkClient {
 /** The `service` every line is filed under in opencode's log. */
 export const LOG_SERVICE_NAME = "opencode-claude-code"
 
-/** What a toast is titled, so the operator knows who is talking. */
-export const TOAST_TITLE = "claude-code"
-
-/** How long a warn/error toast stays up. Long enough to read a sentence. */
-export const TOAST_DURATION_MS = 10_000
-
-/**
- * A toast is one line in a corner, not a log viewer. The full text (and its
- * `data`) is in opencode's log and in the plugin log file; this is the part
- * that has to fit on screen.
- */
-export const MAX_TOAST_CHARS = 240
-
 /**
  * opencode's `/log` level enum has no `notice`, so that is the one level that
  * has to be mapped rather than passed through. It sits below `warn` and above
@@ -80,12 +72,6 @@ const APP_LOG_LEVEL: Record<LogLevel, AppLogBody["level"]> = {
   notice: "info",
   warn: "warn",
   error: "error",
-}
-
-export function toastMessage(message: string): string {
-  const flat = message.replace(/\s+/g, " ").trim()
-  if (flat.length <= MAX_TOAST_CHARS) return flat
-  return `${flat.slice(0, MAX_TOAST_CHARS - 1)}…`
 }
 
 export function appLogBody(entry: LogSinkEntry): AppLogBody {

@@ -7,9 +7,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import {
+  askBtwThenRelease,
   BTW_NO_SESSION_MESSAGE,
   BTW_TURN_TOO_LONG_MESSAGE,
   BtwHandledError,
+  runBtwCommand,
   clearAsideSinks,
   clearPendingSideQuestionAnswers,
   emitAsideInline,
@@ -669,6 +671,71 @@ test("an answer that arrives while a turn is streaming is written into that turn
   } finally {
     fakeSdk.status.ses_inline = { type: "idle" }
     await fake.cleanup(["ses_inline"])
+    clearAsideSinks()
+    clearPendingSideQuestionAnswers()
+  }
+})
+
+test("runBtwCommand reports how the aside ended and leaves the message to its caller", async () => {
+  clearPendingSideQuestionAnswers()
+  const fake = fakeClient()
+  assert.equal(await runBtwCommand(fake.client, input("   ")), "bare")
+  assert.equal(await runBtwCommand(fake.client, input("why?", "ses_nobody_run"), { pollMs: 5, settleMs: 10 }), "release")
+  assert.deepEqual(fake.toasts(), [], "the toasts are opencode 1's wrapper's, not the aside's")
+})
+
+test("on opencode 2 every outcome but an answer already in the turn sends the queued /btw message", async () => {
+  clearPendingSideQuestionAnswers()
+  const fake = fakeClient()
+  const sent: string[] = []
+  const release = async () => void sent.push("sent")
+  assert.equal(await askBtwThenRelease(fake.client, input("   "), release), "bare")
+  assert.equal(
+    await askBtwThenRelease(fake.client, input("why?", "ses_nobody_v2"), release, { pollMs: 5, settleMs: 10 }),
+    "release",
+  )
+  assert.deepEqual(sent, ["sent", "sent"])
+  assert.deepEqual(fake.toasts(), [], "a bare /btw is answered with the usage text in the conversation, not toasted")
+})
+
+test("on opencode 2 a release that fails is logged and swallowed, never thrown", async () => {
+  clearPendingSideQuestionAnswers()
+  const fake = fakeClient()
+  const outcome = await askBtwThenRelease(fake.client, input("   "), async () => {
+    throw new Error("session gone")
+  })
+  assert.equal(outcome, "bare")
+})
+
+test("on opencode 2 an answer written into the running turn sends no /btw message at all", {
+  timeout: 60_000,
+}, async () => {
+  clearPendingSideQuestionAnswers()
+  clearAsideSinks()
+  const fake = createAsideCli()
+  const fakeSdk = fakeClient()
+  const sent: string[] = []
+  try {
+    assert.equal((await fake.warmCliVersion()).raw, "2.1.258")
+    assert.equal((await fake.turn("ses_inline_v2", [user("Start.")])).answer, "Main answer")
+    fakeSdk.status.ses_inline_v2 = { type: "busy" }
+
+    const streaming = fake.turn("ses_inline_v2", [user("Start."), assistant("Main answer"), user("SLOW next.")])
+    const outcome = await askBtwThenRelease(
+      fakeSdk.client,
+      input("What did i say?", "ses_inline_v2"),
+      async () => void sent.push("sent"),
+      { pollMs: 5, inlinePollMs: 5, inlineWaitMs: 3_000, timeoutMs: 3_000 },
+    )
+    assert.equal(outcome, "inline")
+    assert.deepEqual(sent, [], "the answer is already in the conversation")
+    const turn = await streaming
+    assert.match(turn.answer, /▌ \*\*btw:\*\* What did i say\?\n▌ \*sent to Claude on the side\*/)
+    assert.match(turn.answer, /Aside 1: What did i say\?/)
+    assert.match(turn.answer, /Main answer/, "the turn still delivers its own reply")
+  } finally {
+    fakeSdk.status.ses_inline_v2 = { type: "idle" }
+    await fake.cleanup(["ses_inline_v2"])
     clearAsideSinks()
     clearPendingSideQuestionAnswers()
   }

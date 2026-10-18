@@ -353,7 +353,15 @@ test("a V2 session.deleted event names its session in data.sessionID", () => {
   assert.equal(deletedSessionIdV2(undefined), undefined)
 })
 
-test("setup registers /btw and the doctor, and /btw is always queued", async () => {
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const started = Date.now()
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) throw new Error("timed out waiting for the condition")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+test("setup registers /btw and the doctor; /btw returns at once and queues its message once the aside settles", async () => {
   const { ctx } = fakeContext()
   const added: any[] = []
   const prompts: any[] = []
@@ -371,6 +379,7 @@ test("setup registers /btw and the doctor, and /btw is always queued", async () 
     createProvider: () => ({ languageModel: () => ({}) as any }),
     defaultProxyTools: PROXY_TOOLS,
     loadConfig: () => ({}),
+    btwWaitOptions: { pollMs: 5, settleMs: 30 },
   })
   await setup(ctx)
 
@@ -378,11 +387,21 @@ test("setup registers /btw and the doctor, and /btw is always queued", async () 
   const btw = added.find((definition) => definition.name === "btw")
   const doctor = added.find((definition) => definition.name === "claude-code-doctor")
 
+  // The command runs the moment it is issued (measured on 2.0.31), so it asks
+  // the aside early and never holds opencode's command route for it.
   await btw.execute({ sessionID: "ses_1", prompt: { text: "why?", files: [] }, delivery: "steer" })
+  assert.equal(prompts.length, 0, "execute returned before the aside settled")
+  // No live process for this conversation: the message goes through, queued,
+  // so the aside branch can answer it once the turn is over.
+  await waitFor(() => prompts.length === 1)
   assert.deepEqual(prompts[0], { text: "/btw why?", files: [], sessionID: "ses_1", delivery: "queue" })
 
+  await btw.execute({ sessionID: "ses_1", prompt: { text: "  " }, delivery: "steer" })
+  await waitFor(() => prompts.length === 2)
+  assert.deepEqual(prompts[1], { text: "/btw", sessionID: "ses_1", delivery: "queue" }, "a bare /btw is answered with the usage text")
+
   await doctor.execute({ sessionID: "ses_1", prompt: { text: "" }, delivery: "steer" })
-  assert.deepEqual(prompts[1], { text: "/claude-code-doctor", sessionID: "ses_1", delivery: "steer" })
+  assert.deepEqual(prompts[2], { text: "/claude-code-doctor", sessionID: "ses_1", delivery: "steer" })
 })
 
 test("setup subscribes to events and stops listening on cleanup", async () => {

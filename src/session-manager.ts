@@ -690,6 +690,54 @@ export function deleteActiveProcessesForSession(sessionID: string): string[] {
   return released
 }
 
+/** What a proxied call is rejected with when opencode 2 reports its turn stopped. */
+export const STOPPED_TURN_MESSAGE =
+  "opencode stopped the turn while it was running its proxy tool calls"
+
+/**
+ * What opencode 1's abort branch does when the operator stops a turn that is
+ * parked in proxied calls, for the host where no abort ever arrives.
+ *
+ * On opencode 1 the stop reaches the finished stream's abort signal, the
+ * session then reads idle, and the plugin interrupts the CLI's turn and
+ * rejects the calls parked in it (h #g26). opencode 2 never aborts a provider
+ * stream that already ended at a tool boundary (measured on 2.0.31: no abort
+ * at all across three parked calls and an interrupt), so a stopped turn left
+ * its calls pending until the next message's orphan sweep, with the `claude`
+ * turn still blocked inside them. Its event stream does say it, as
+ * `session.execution.interrupted` with reason `user` (h #g253), and that is
+ * what calls this.
+ *
+ * Only a process with no stream attached is touched: a turn that is streaming
+ * owns its calls and has its own abort. Returns the released keys, and is a
+ * no-op the second time (opencode 2 can deliver the same event once per
+ * location the plugin was set up for).
+ */
+export function releaseParkedProxyCallsForSession(
+  sessionID: string,
+  reason = STOPPED_TURN_MESSAGE,
+): string[] {
+  if (!sessionID || sessionID === "default") return []
+  const released: string[] = []
+  for (const [key, ap] of [...activeProcesses]) {
+    const owned =
+      ap.opencodeSessionID === sessionID || describeSessionKey(key).session === sessionID
+    if (!owned) continue
+    if (ap.lineEmitter.listenerCount("line") > 0) continue
+    if (getPendingProxyCalls(key).length === 0) continue
+    log.info("opencode stopped the turn at a proxy tool boundary; releasing pending calls", {
+      sessionKey: key,
+      sessionID,
+    })
+    void interruptTurn(ap).then((idle) => {
+      log.info("interrupt sent for aborted turn", { sk: key, idle })
+    })
+    rejectAllPendingProxyCallsForSession(key, new Error(reason))
+    released.push(key)
+  }
+  return released
+}
+
 /**
  * Synchronous best-effort sweep for host process exit. Node does not kill
  * children on exit, so without this a hard opencode shutdown reparents every

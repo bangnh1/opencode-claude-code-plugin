@@ -239,10 +239,117 @@ export function watchChildSession(sessionID: string): () => boolean | undefined 
 export type SessionRunState = "busy" | "idle" | "unknown"
 
 /**
+ * opencode 2 gives a plugin no run-state route (`session.active` is not in the
+ * `SessionDomain` `Pick` it hands over, h #g176), but the event stream every
+ * plugin can subscribe to brackets each execution: `session.execution.started`,
+ * then `succeeded`, `failed` or `interrupted`. Measured on 2.0.31 (h #g253)
+ * against `GET /api/session/active`: the two agree through a 15-second
+ * permission hold and an 8-second tool run, which is exactly the window the
+ * proxy deadline guard has to see as busy. `session.status` and `session.idle`
+ * are in its generated types but were never emitted there; they are read too,
+ * and nothing depends on them.
+ *
+ * Fed only by the V2 entry's subscription, so on opencode 1 this is never
+ * consulted (its client has the status route) and never filled.
+ */
+const eventRunStates = new Map<string, "busy" | "idle">()
+const MAX_EVENT_RUN_STATES = 512
+let openEventFeeds = 0
+
+/**
+ * Declare an event subscription that will call `noteSessionRunEvent`. The
+ * returned function closes it, and closing ANY feed forgets everything: a
+ * subscription that ended can have missed the event that would have ended a
+ * busy session, and a stale `busy` would keep a dead proxy call alive past its
+ * deadline. `unknown` is what every caller already treats as "do not act".
+ */
+export function openSessionRunEventFeed(): () => void {
+  openEventFeeds += 1
+  let closed = false
+  return () => {
+    if (closed) return
+    closed = true
+    openEventFeeds = Math.max(0, openEventFeeds - 1)
+    eventRunStates.clear()
+  }
+}
+
+/** Fold one opencode 2 bus event into the run-state map. Ignores everything else. */
+export function noteSessionRunEvent(event: unknown): void {
+  if (openEventFeeds === 0 || !event || typeof event !== "object") return
+  const { type, data } = event as { type?: unknown; data?: unknown }
+  if (typeof type !== "string" || !data || typeof data !== "object") return
+  const sessionID = (data as { sessionID?: unknown }).sessionID
+  if (typeof sessionID !== "string" || !sessionID || sessionID === "default") return
+  if (type === "session.deleted") {
+    eventRunStates.delete(sessionID)
+    return
+  }
+  let next: "busy" | "idle" | undefined
+  switch (type) {
+    case "session.execution.started":
+      next = "busy"
+      break
+    case "session.execution.succeeded":
+    case "session.execution.failed":
+    case "session.execution.interrupted":
+    case "session.idle":
+      next = "idle"
+      break
+    case "session.status": {
+      const status = (data as { status?: { type?: unknown } }).status?.type
+      // The same reading opencode 1's status map gets: anything but idle is a
+      // turn still running, a `retry` included.
+      if (typeof status === "string") next = status === "idle" ? "idle" : "busy"
+      break
+    }
+  }
+  if (!next) return
+  eventRunStates.delete(sessionID)
+  eventRunStates.set(sessionID, next)
+  while (eventRunStates.size > MAX_EVENT_RUN_STATES) {
+    const oldest = eventRunStates.keys().next().value
+    if (oldest === undefined) break
+    eventRunStates.delete(oldest)
+  }
+}
+
+/**
+ * The run state the event stream reported, or `unknown` when no feed is open
+ * or this session has not been seen since it opened. A session that started
+ * before the plugin subscribed stays `unknown` until its next execution.
+ */
+export function sessionRunStateFromEvents(sessionID: string): SessionRunState {
+  if (openEventFeeds === 0) return "unknown"
+  return eventRunStates.get(sessionID) ?? "unknown"
+}
+
+/**
+ * Every session the event stream reports running, in opencode 1's
+ * `GET /session/status` shape (a session missing from it is idle), or
+ * undefined when no feed is open and nothing can be said. `/btw` reads it.
+ */
+export function busySessionsFromEvents(): Record<string, { type: "busy" }> | undefined {
+  if (openEventFeeds === 0) return undefined
+  const busy: Record<string, { type: "busy" }> = {}
+  for (const [sessionID, state] of eventRunStates) {
+    if (state === "busy") busy[sessionID] = { type: "busy" }
+  }
+  return busy
+}
+
+/** Test seam: no feeds, nothing remembered. */
+export function _resetSessionRunEventsForTests(): void {
+  openEventFeeds = 0
+  eventRunStates.clear()
+}
+
+/**
  * Whether opencode still considers this session to be running a turn.
  * `unknown` when there is no client or the route is missing, which every
  * caller must treat as "do not act": a wrong guess here is worse than no
- * answer.
+ * answer. On opencode 2, which has no route, the event stream answers instead
+ * whenever it can (`sessionRunStateFromEvents`).
  */
 export async function fetchSessionRunState(
   sessionID: string,
@@ -250,7 +357,7 @@ export async function fetchSessionRunState(
 ): Promise<SessionRunState> {
   if (!sessionID || sessionID === "default") return "unknown"
   const status = opencodeClient?.session?.status
-  if (!status) return "unknown"
+  if (!status) return sessionRunStateFromEvents(sessionID)
   try {
     // opencode keeps one status map per workspace directory, and the client
     // the plugin holds is scoped to whichever directory loaded it last. Asked

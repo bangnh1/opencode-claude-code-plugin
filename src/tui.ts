@@ -82,6 +82,7 @@ import { buildTurnModel, type TurnModel } from "./turn-model.js"
 import { createTurnProgressReader, type TurnProgress } from "./turn-progress-store.js"
 import { createAccountUsageReader, type AccountUsage, type KnownAccounts } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
+import { TOAST_DURATION_MS, TOAST_TITLE, createNoticeToaster } from "./plugin-notice.js"
 
 export const SUBAGENTS_TUI_PLUGIN_ID = "opencode-claude-code-plugin.subagents"
 
@@ -902,6 +903,11 @@ interface V2Context {
       cost?(sessionID: string): number
       message: { list(sessionID: string): V2Message[] | undefined }
     }
+    /**
+     * Every bus event, the plugin's own RPC events included (2.0.31,
+     * h #g253): how the server half's warnings arrive (`src/plugin-notice.ts`).
+     */
+    listen?(handler: (event: { details?: { type?: unknown; data?: unknown } }) => void): () => void
   }
   theme: {
     text: {
@@ -916,6 +922,9 @@ interface V2Context {
   ui: {
     router: { navigate(destination: { type: "session"; sessionID: string }): void }
     slot(claim: { append: string; render: (input: { sessionID: string }) => OpentuiNode }): () => void
+    toast?: {
+      show(options: { title?: string; message: string; variant?: "info" | "success" | "warning" | "error"; duration?: number }): void
+    }
   }
 }
 
@@ -1032,8 +1041,24 @@ export function setupV2(context: V2Context): () => void {
       }),
     undefined,
   )
+  // The server half's warnings, which opencode 2 gives no other way to the
+  // screen (`src/plugin-notice.ts`). Once each, however many of the plugin's
+  // locations emitted them.
+  const toastNotice = createNoticeToaster((notice) =>
+    context.ui.toast?.show({
+      title: TOAST_TITLE,
+      message: notice.message,
+      variant: notice.level === "error" ? "error" : "warning",
+      duration: TOAST_DURATION_MS,
+    }),
+  )
+  const stopNotices = attempt(
+    () => context.data.listen?.((event) => void toastNotice(event?.details?.type, event?.details?.data)),
+    undefined,
+  )
   return () => {
     if (release) attempt(release, undefined)
+    if (stopNotices) attempt(stopNotices, undefined)
     sidebar.dispose()
   }
 }

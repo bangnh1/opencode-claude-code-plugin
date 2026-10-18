@@ -202,6 +202,12 @@ reports "the plugin printed garbage over my opencode UI", the answer is to upgra
 turn logging off; and when they ask where a WARN went in the TUI, point them at opencode's
 own log or the toast rather than at stderr.
 
+On opencode 2 the plugin runs in a separate process whose stderr nobody sees, so WARN and
+ERROR also go to the plugin's own sidebar half over the RPC channel opencode 2 gives a
+plugin between its two halves, and the sidebar half raises the same `claude-code` toast
+under the same limits, in the window the warning came from (measured on 2.0.31). When a 2.x
+user asks where a warning went, it is that toast and the plugin log file; stderr is a pipe.
+
 ## Environment variables
 
 Set variables in the environment that launches opencode, then fully restart it.
@@ -291,7 +297,7 @@ Same package, same config. 2.x's native key is `plugins` (plural), but it still 
 - Check the major first with `opencode --version`. `plugin` is read by both majors (recorded in `docs/agents-history.md` #g39); `plugins` is read by 2.x only.
 - Provider settings, lowest precedence first: `provider.claude-code.options` (1.x's spelling, still read on 2.x), `provider.claude-code.settings`, `providers.claude-code.settings` (2.x's own), and the plugin entry's own `options`, which wins over all three. Any option of this plugin can sit in any of them; the plugin entry is the usual home for `accounts`: `{"package": "@khalilgharbaoui/opencode-claude-code-plugin", "options": {"accounts": ["work"]}}`.
 - A local checkout is loaded by pointing `plugins` at its **`dist`** directory, never the repository root: 2.x resolves a configured plugin path as `<dir>/server` or `<dir>/index`.
-- Known 2.x differences: `/btw` is answered after the running turn rather than inside it, and there is no todo panel (2.x has no `todowrite` tool). Do not set `hostApi`; the 2.x entrypoint sets it, and forcing it on 1.x breaks every proxied tool call.
+- Known 2.x differences: there is no todo panel (2.x has no `todowrite` tool, so the sidebar's progress bar is always the time estimate), `bridgeMcpOauthTokens` finds nothing (2.x's plugin API can activate a stored credential but not read one), and Claude's `EnterPlanMode`, `ExitPlanMode` and `NotebookEdit` calls get no tool row (2.x rejects an unknown tool name). Everything else behaves as on 1.x, including `/btw` answered inside the running turn, a permission prompt not counting against a proxied call's deadline, a stopped turn releasing its parked proxied calls, and warnings shown as toasts: the plugin reads busy and idle off opencode 2's event stream (`session.execution.*`) and sends warnings over its plugin RPC channel (measured on 2.0.22 and 2.0.31). Do not set `hostApi`; the 2.x entrypoint sets it, and forcing it on 1.x breaks every proxied tool call.
 - Every form the plugin raises is answered through 2.x's own `Form` surface rather than a question tool, which changes nothing the operator does. The account-switch form and the plan-mode approval were measured live on 2.0.22, and the `subagentDispatch` form (including `Customise…`, `Per type…` accounts and `Same as last time` across a restart) on 2026-10-08. The by-hand account carry and the `accountGroups` guard were measured live there the same day: both behave exactly as on 1.x.
 
 #### V2 MCP and Code Mode

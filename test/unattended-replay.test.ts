@@ -20,9 +20,17 @@ import { UNATTENDED_REPLAY_MARKER } from "../src/cli-events.js"
 import { createClaudeCode } from "../src/index.js"
 import { filterSideQuestionHistory } from "../src/message-builder.js"
 
-function createFixture() {
+const TEXT_DELTAS_BETWEEN_TURNS = [
+  { type: "content_block_delta", delta: { type: "text_delta", text: "ver" } },
+  { type: "content_block_delta", delta: { type: "text_delta", text: "ification call timed out (likely a st" } },
+  { type: "content_block_delta", delta: { type: "text_delta", text: "alled permission prompt)" } },
+]
+
+/** `between`: what the fake CLI writes after its first turn's stream closed. */
+function createFixture(between: object[] = TEXT_DELTAS_BETWEEN_TURNS) {
   const cwd = mkdtempSync(join(tmpdir(), "opencode-unattended-replay-"))
   const cliPath = join(cwd, "fake-claude.cjs")
+  const betweenLines = JSON.stringify(between.map((line) => JSON.stringify(line)))
   writeFileSync(
     cliPath,
     `#!/usr/bin/env node
@@ -45,9 +53,7 @@ readline.createInterface({ input: process.stdin }).on("line", () => {
     // side — nobody is listening, so this becomes "unattended" output that
     // the next turn must replay.
     setTimeout(() => {
-      process.stdout.write(JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "ver" } }) + "\\n")
-      process.stdout.write(JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "ification call timed out (likely a st" } }) + "\\n")
-      process.stdout.write(JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "alled permission prompt)" } }) + "\\n")
+      for (const line of ${betweenLines}) process.stdout.write(line + "\\n")
     }, 200)
     return
   }
@@ -137,6 +143,39 @@ test("a reused process's unattended output replays as a single text block, not o
       String(replayBlockDeltas[0].delta).trimStart().startsWith(UNATTENDED_REPLAY_MARKER),
       `the replay block must open with ${UNATTENDED_REPLAY_MARKER}, got ${JSON.stringify(String(replayBlockDeltas[0].delta).slice(0, 80))}`,
     )
+  } finally {
+    rmSync(fixture.cwd, { recursive: true, force: true })
+  }
+})
+
+test("frames with no reply text between turns leave no empty between-turns block", {
+  timeout: 10_000,
+}, async () => {
+  // What a `/btw` asked while a proxied call is parked leaves on stdout: a
+  // status frame for the side call, no narration (measured on 2.0.31, h #g253).
+  const fixture = createFixture([
+    { type: "system", subtype: "status", status: "requesting", session_id: "fake-session" },
+    { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+  ])
+  try {
+    const model = createClaudeCode({
+      cliPath: fixture.cliPath,
+      cwd: fixture.cwd,
+      bridgeOpencodeMcp: false,
+      proxyOpencodeMcpTools: false,
+      proxyTools: [],
+    }).languageModel("claude-test-unattended-quiet")
+
+    await runTurn(model, [{ role: "user", content: [{ type: "text", text: "First message." }] }])
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const parts = await runTurn(model, [
+      { role: "user", content: [{ type: "text", text: "First message." }] },
+      { role: "assistant", content: [{ type: "text", text: "First answer." }] },
+      { role: "user", content: [{ type: "text", text: "Second message." }] },
+    ])
+    const text = parts.filter((part) => part.type === "text-delta").map((part) => String(part.delta)).join("")
+    assert.ok(!text.includes(UNATTENDED_REPLAY_MARKER), `no marker over nothing, got ${JSON.stringify(text.slice(0, 120))}`)
+    assert.match(text, /Second answer\./, "the turn itself is untouched")
   } finally {
     rmSync(fixture.cwd, { recursive: true, force: true })
   }
