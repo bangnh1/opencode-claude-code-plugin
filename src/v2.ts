@@ -1,4 +1,5 @@
 import type { LanguageModelV3 } from "@ai-sdk/provider"
+import { randomUUID } from "node:crypto"
 import {
   BASE_PROVIDER_ID,
   accountDisplayName,
@@ -8,10 +9,15 @@ import {
   resolveAccounts,
 } from "./accounts.js"
 import { readAccountTier, registerSidebarAccounts } from "./account-tier.js"
-import { log } from "./logger.js"
+import { log, setToastNotifier, type LogSinkEntry } from "./logger.js"
 import { defaultModels } from "./models.js"
 import type { OpenCodeModel } from "./opencode-types.js"
-import { BTW_COMMAND_DESCRIPTION } from "./btw-command.js"
+import {
+  BTW_COMMAND_DESCRIPTION,
+  askBtwThenRelease,
+  type BtwSdkClient,
+  type BtwWaitOptions,
+} from "./btw-command.js"
 import { DOCTOR_COMMAND, DOCTOR_COMMAND_DESCRIPTION } from "./doctor.js"
 import type {
   V2Cleanup,
@@ -23,9 +29,19 @@ import type {
   V2ProviderInfo,
   V2Registration,
   V2RequestKind,
+  V2RpcRegistration,
 } from "./opencode-v2-types.js"
 import {
+  NOTICE_EVENT,
+  NOTICE_RPC_DEFINITION,
+  pluginNotice,
+  type PluginNotice,
+} from "./plugin-notice.js"
+import {
+  busySessionsFromEvents,
   isUsableDirectory,
+  noteSessionRunEvent,
+  openSessionRunEventFeed,
   setOpencodeClient,
   setOpencodeProjectDirectory,
 } from "./runtime-status.js"
@@ -33,6 +49,7 @@ import { createV1ClientShim, type V2ClientContext } from "./v2-client.js"
 import {
   deleteActiveProcessesForSession,
   ensureProcessExitCleanup,
+  releaseParkedProxyCallsForSession,
 } from "./session-manager.js"
 import { readBundledSkillInfos } from "./skill-bridge.js"
 import { logStartupDiagnostics } from "./startup-diagnostics.js"
@@ -319,26 +336,139 @@ export function deletedSessionIdV2(event: V2Event | undefined): string | undefin
   return typeof id === "string" && id.length > 0 ? id : undefined
 }
 
-async function releaseDeletedSessions(
+/**
+ * The session the operator stopped, from a V2 `session.execution.interrupted`
+ * event (`data.reason: "user"`). Only that reason: `shutdown` is the host
+ * exiting, whose own cleanup ends every process, and nothing measured says
+ * what a `superseded` or `inactivity` execution leaves behind, so those keep
+ * today's behaviour (the next message's orphan sweep).
+ */
+export function stoppedSessionIdV2(event: V2Event | undefined): string | undefined {
+  if (!event || event.type !== "session.execution.interrupted") return undefined
+  if (event.data?.reason !== "user") return undefined
+  const id = event.data?.sessionID
+  return typeof id === "string" && id.length > 0 ? id : undefined
+}
+
+/**
+ * One subscription per `setup`, so one per location (opencode 2 sets a plugin
+ * up once per location, all in one process; measured on 2.0.31 for the project
+ * and the home directory, h #g253), and each can see the same event: every
+ * action here is idempotent. It does three things:
+ *   - feeds the run-state map `fetchSessionRunState` answers from on a host
+ *     with no status route, which is what lets the proxy deadline guard keep a
+ *     call opencode is still serving (h #g27) and settles a background task
+ *     without its transcript;
+ *   - releases a deleted session's `claude` state, as V1's `event` hook does;
+ *   - releases a stopped session's parked proxy calls, as V1's abort does.
+ */
+export async function followSessionEvents(
   subscribe: (options?: { signal?: AbortSignal }) => AsyncIterable<V2Event>,
   signal: AbortSignal,
 ): Promise<void> {
+  const closeFeed = openSessionRunEventFeed()
   try {
     for await (const event of subscribe({ signal })) {
       if (signal.aborted) break
-      const sessionID = deletedSessionIdV2(event)
-      if (!sessionID) continue
-      const released = deleteActiveProcessesForSession(sessionID)
-      if (released.length > 0) {
-        log.info("released claude state for deleted session", { sessionID, released })
+      noteSessionRunEvent(event)
+      const deleted = deletedSessionIdV2(event)
+      if (deleted) {
+        const released = deleteActiveProcessesForSession(deleted)
+        if (released.length > 0) {
+          log.info("released claude state for deleted session", { sessionID: deleted, released })
+        }
+        continue
       }
+      const stopped = stoppedSessionIdV2(event)
+      if (stopped) releaseParkedProxyCallsForSession(stopped)
     }
   } catch (err) {
     if (!signal.aborted) {
-      log.warn("opencode 2 event subscription ended; deleted sessions keep their claude process until idle eviction", {
-        error: err instanceof Error ? err.message : String(err),
-      })
+      log.warn(
+        "opencode 2 event subscription ended; deleted sessions keep their claude process until idle eviction, and stopped turns keep their proxy calls until the next message",
+        { error: err instanceof Error ? err.message : String(err) },
+      )
     }
+  } finally {
+    closeFeed()
+  }
+}
+
+/** Every live notice registration, one per `setup` (so one per location). */
+const noticeEmitters = new Set<(notice: PluginNotice) => void>()
+
+/** A notice id has to be unique across processes: the sidebar drops copies by it. */
+const NOTICE_PROCESS_TAG = randomUUID().slice(0, 8)
+let noticeCounter = 0
+
+/**
+ * The logger's notifier on opencode 2: a warn/error line that passed the toast
+ * policy, handed to every registration. Never throws and never logs, because
+ * the logger calls it from inside `emit`.
+ */
+function emitNotice(entry: LogSinkEntry): void {
+  if (entry.level !== "warn" && entry.level !== "error") return
+  noticeCounter += 1
+  const notice = pluginNotice(`${NOTICE_PROCESS_TAG}-${noticeCounter}`, entry.level, entry.message)
+  for (const emit of noticeEmitters) emit(notice)
+}
+
+/**
+ * Register the channel the plugin's warnings reach its sidebar half on
+ * (`src/plugin-notice.ts`). Undefined on a host without `ctx.rpc`, or one that
+ * refuses the definition: warnings then stay in the plugin log file, exactly
+ * as before.
+ */
+async function registerNoticeChannel(ctx: V2Context): Promise<V2Registration | undefined> {
+  const rpc = ctx.rpc
+  if (typeof rpc?.register !== "function") return undefined
+  let registration: V2RpcRegistration
+  try {
+    registration = await rpc.register(NOTICE_RPC_DEFINITION, {})
+  } catch (err) {
+    log.debug("opencode 2 refused the notice channel; warnings stay in the plugin log", {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return undefined
+  }
+  const emitter = (notice: PluginNotice): void => {
+    try {
+      void Promise.resolve(registration.events.emit(NOTICE_EVENT, { ...notice })).catch(() => undefined)
+    } catch {
+      // intentionally silent: the logger is calling
+    }
+  }
+  noticeEmitters.add(emitter)
+  setToastNotifier(emitNotice)
+  return {
+    dispose: async () => {
+      noticeEmitters.delete(emitter)
+      if (noticeEmitters.size === 0) setToastNotifier(null)
+      await registration.dispose()
+    },
+  }
+}
+
+/**
+ * The client `/btw` reads on opencode 2: the conversation's earlier asides
+ * from the shim's `session.messages`, and the busy state from the event stream
+ * in opencode 1's status-map shape. The route is absent while no event feed is
+ * open, so `/btw` falls back to the process's own stream, as it does on any
+ * client without one.
+ */
+function v2BtwClient(shim: Record<string, unknown>): BtwSdkClient {
+  const shimSession = shim.session as BtwSdkClient["session"] | undefined
+  const messages = shimSession?.messages
+  const status = async () => ({ data: busySessionsFromEvents() ?? {} })
+  return {
+    session: {
+      ...(typeof messages === "function"
+        ? { messages: (options: { path: { id: string } }) => messages.call(shimSession, options) }
+        : {}),
+      get status() {
+        return busySessionsFromEvents() === undefined ? undefined : status
+      },
+    },
   }
 }
 
@@ -358,6 +488,8 @@ export interface V2SetupDeps {
    * rewritten (src/agent-models.ts).
    */
   buildAgentRegistry?: (config: Record<string, unknown>) => Promise<void>
+  /** Test seam for `/btw`'s waits; production uses the defaults. */
+  btwWaitOptions?: BtwWaitOptions
 }
 
 export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2Cleanup> {
@@ -371,9 +503,16 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
     ensureProcessExitCleanup()
     // The live-state calls (MCP status, tool registry, session lookups) are
     // answered in V1's shapes, so their callers need no V2 branch.
-    setOpencodeClient(createV1ClientShim(ctx as unknown as V2ClientContext))
+    const shim = createV1ClientShim(ctx as unknown as V2ClientContext)
+    setOpencodeClient(shim)
     const directory = ctx.location?.directory
     setOpencodeProjectDirectory(isUsableDirectory(directory) ? directory : undefined)
+
+    const registrations: V2Registration[] = []
+    // First, so a warning raised while the providers are planned below already
+    // has a way to the screen.
+    const noticeChannel = await registerNoticeChannel(ctx)
+    if (noticeChannel) registrations.push(noticeChannel)
 
     if (deps.buildAgentRegistry) {
       try {
@@ -397,7 +536,6 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
     }
 
     const planned = new Map<string, Record<string, unknown>>()
-    const registrations: V2Registration[] = []
 
     registrations.push(
       await ctx.provider.transform((editor) => {
@@ -469,6 +607,7 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
     // here they are real commands, and the config's own commands are applied
     // after plugin transforms, so a user-defined one still wins.
     const prompt = ctx.session.prompt
+    const btwClient = v2BtwClient(shim)
     if (ctx.command?.transform && typeof prompt === "function") {
       const send = (
         input: V2CommandInvocation,
@@ -490,17 +629,26 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
             description: DOCTOR_COMMAND_DESCRIPTION,
             execute: (input) => send(input, DOCTOR_COMMAND, input.delivery),
           })
-          // Always queued. A `/btw` steered into a running turn becomes that
-          // turn's next step, the one carrying the results of the tools opencode
-          // just ran, and answering the aside there swallows the continuation
-          // (the failure V1's hold exists to prevent). Queued, the aside branch
-          // answers it from the idle process once the turn is over. V1's
-          // answer-inside-the-running-turn needs a session-status route V2's
-          // plugin session domain does not offer.
+          // Asked early, as V1's `command.execute.before` asks it: `execute`
+          // runs the moment the command is issued, busy or not (h #g253), so
+          // the answer can land inside the running turn. Its message, when one
+          // is still needed, is always queued: a `/btw` steered into a running
+          // turn becomes that turn's next step, the one carrying the results
+          // of the tools opencode just ran, and answering the aside there
+          // swallows the continuation. Not awaited, so opencode's command
+          // route is never held for a turn's length.
           editor.add({
             name: "btw",
             description: BTW_COMMAND_DESCRIPTION,
-            execute: (input) => send(input, "btw", "queue"),
+            execute: (input) => {
+              void askBtwThenRelease(
+                btwClient,
+                { command: "btw", sessionID: input.sessionID, arguments: input.prompt.text ?? "" },
+                () => send(input, "btw", "queue"),
+                deps.btwWaitOptions,
+              )
+              return Promise.resolve()
+            },
           })
         }),
       )
@@ -525,11 +673,11 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
       )
     }
 
-    // Release a deleted session's `claude` child, proxy server and session id
-    // at once, as V1's `event` hook does.
+    // Session run state, deleted sessions and stopped turns, from opencode's
+    // own event stream (`followSessionEvents`).
     const events = new AbortController()
     if (typeof ctx.event?.subscribe === "function") {
-      void releaseDeletedSessions(ctx.event.subscribe.bind(ctx.event), events.signal)
+      void followSessionEvents(ctx.event.subscribe.bind(ctx.event), events.signal)
     }
 
     log.info("claude-code plugin set up for opencode 2", {

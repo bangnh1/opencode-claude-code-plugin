@@ -508,41 +508,48 @@ export async function fetchAsideHistory(
 }
 
 /**
- * `command.execute.before` handler for `btw`. Returns normally so opencode
- * creates the `/btw` message in this conversation; throws only when there is
- * nothing to keep (a bare `/btw`, or a turn that never ended).
+ * How a `/btw` ended, which decides what becomes of its message:
+ *   - `bare`: there was no question, so nothing was asked;
+ *   - `release`: the message should now be created, carrying the remembered
+ *     answer (or asking afresh) when the aside branch runs it;
+ *   - `inline`: the answer is already in the running turn's reply, so the
+ *     message has nothing left to carry;
+ *   - `timeout`: the turn did not end within the hold's cap.
+ */
+export type BtwOutcome = "bare" | "release" | "inline" | "timeout"
+
+/**
+ * The aside itself, shared by both opencode majors: find the conversation's
+ * `claude` process, ask the question on the side at once, write a receipt and
+ * then the answer into the running turn when one is open, and wait until the
+ * outcome is known. What happens to the `/btw` message is the caller's:
+ * `handleBtwCommand` on opencode 1, `askBtwThenRelease` on opencode 2.
  *
- * While the session is busy the return is delayed until it is idle. opencode
- * would otherwise queue the message behind the running turn and run it as
- * that turn's next step, which is also the step that carries the results of
- * the tools opencode just ran: answering the aside there would swallow the
- * turn's own continuation (measured live: the main answer never appeared).
- * opencode already keeps the command route open for a queued prompt, so
- * holding it here changes nothing on the wire, and the TUI's call is
- * fire-and-forget.
+ * While the session is busy this waits until it is idle. opencode would
+ * otherwise run the message as the running turn's next step, which is also the
+ * step that carries the results of the tools opencode just ran: answering the
+ * aside there would swallow the turn's own continuation (measured live: the
+ * main answer never appeared).
  *
  * Both waits before that hold exist because a `/btw` typed early in a turn
  * used to be seen as belonging to an idle conversation with no process, and
  * was let through to be queued: `waitForAsideProcess` covers the spawn gap,
  * `settleSessionBusy` covers opencode registering the turn.
  */
-export async function handleBtwCommand(
+export async function runBtwCommand(
   client: BtwSdkClient | null,
   input: BtwCommandInput,
   options: BtwWaitOptions = {},
-): Promise<void> {
+): Promise<BtwOutcome> {
   const question = input.arguments.trim()
-  if (!question) {
-    showToast(client, { title: "btw", message: SIDE_QUESTION_USAGE, variant: "warning", duration: 6_000 })
-    throw new BtwHandledError("/btw needs a question.")
-  }
+  if (!question) return "bare"
   const active = await waitForAsideProcess(client, input.sessionID, options)
   const transport = active?.asideTransport
   if (!active || !transport) {
     // The message still goes through: the aside branch answers it with an
     // explanation that stays readable in the conversation.
     if (active) log.info("btw: process has no aside transport, leaving it to the turn", { sessionID: input.sessionID })
-    return
+    return "release"
   }
   let busy = false
   let inlineDone = false
@@ -628,7 +635,7 @@ export async function handleBtwCommand(
       },
     )
   }
-  if (!busy) return
+  if (!busy) return "release"
   const started = Date.now()
   const outcome = await Promise.race([
     inlineDelivered,
@@ -641,15 +648,81 @@ export async function handleBtwCommand(
       sessionID: input.sessionID,
       waitedMs: Date.now() - started,
     })
-    throw new BtwHandledError(BTW_INLINE_HANDLED_MESSAGE)
+    return "inline"
   }
   log.info("btw: turn over, releasing the /btw message", {
     sessionID: input.sessionID,
     idle: outcome === "idle",
     waitedMs: Date.now() - started,
   })
+  return outcome === "timeout" ? "timeout" : "release"
+}
+
+/**
+ * `command.execute.before` handler for `btw` on opencode 1. Returns normally
+ * so opencode creates the `/btw` message in this conversation; throws only
+ * when there is nothing to keep (a bare `/btw`, an answer already written into
+ * the turn, or a turn that never ended).
+ *
+ * The return is held for as long as `runBtwCommand` waits. opencode already
+ * keeps the command route open for a queued prompt, so holding it changes
+ * nothing on the wire, and opencode 1's TUI call is fire-and-forget.
+ */
+export async function handleBtwCommand(
+  client: BtwSdkClient | null,
+  input: BtwCommandInput,
+  options: BtwWaitOptions = {},
+): Promise<void> {
+  const outcome = await runBtwCommand(client, input, options)
+  if (outcome === "bare") {
+    showToast(client, { title: "btw", message: SIDE_QUESTION_USAGE, variant: "warning", duration: 6_000 })
+    throw new BtwHandledError("/btw needs a question.")
+  }
+  if (outcome === "inline") throw new BtwHandledError(BTW_INLINE_HANDLED_MESSAGE)
   if (outcome === "timeout") {
     showToast(client, { title: "btw", message: BTW_TURN_TOO_LONG_MESSAGE, variant: "warning", duration: 8_000 })
     throw new BtwHandledError(BTW_TURN_TOO_LONG_MESSAGE)
   }
+}
+
+/**
+ * `/btw` on opencode 2, where the command's own `execute` is the hook and runs
+ * the moment the command is issued, busy or not (measured on 2.0.31, h #g253).
+ * So the aside is asked early exactly as opencode 1's hook asks it, and its
+ * answer lands inside the running turn the same way.
+ *
+ * What differs is who creates the message. opencode 1 creates it when its hook
+ * returns, which is why that hook holds; here the plugin creates it itself,
+ * through `release`, once the outcome is known, and the caller does not wait
+ * for this, so opencode's command route is never held for a turn's length.
+ * `release` is skipped only when the answer is already in the turn. A bare
+ * `/btw` is released at once and answered with the usage text, and a turn that
+ * outlived the cap gets its answer when it finally ends.
+ *
+ * Resolves with what happened and never rejects: a failure anywhere falls back
+ * to releasing the message, which is what `/btw` did on opencode 2 before.
+ */
+export async function askBtwThenRelease(
+  client: BtwSdkClient | null,
+  input: BtwCommandInput,
+  release: () => Promise<void>,
+  options: BtwWaitOptions = {},
+): Promise<BtwOutcome | "failed"> {
+  let outcome: BtwOutcome | "failed"
+  try {
+    outcome = await runBtwCommand(client, input, options)
+  } catch (error) {
+    log.warn("btw: the early aside failed; sending the /btw message as it is", {
+      sessionID: input.sessionID,
+      error: errorText(error),
+    })
+    outcome = "failed"
+  }
+  if (outcome === "inline") return outcome
+  try {
+    await release()
+  } catch (error) {
+    log.warn("btw: could not send the /btw message", { sessionID: input.sessionID, error: errorText(error) })
+  }
+  return outcome
 }

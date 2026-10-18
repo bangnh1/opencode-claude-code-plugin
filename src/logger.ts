@@ -240,7 +240,28 @@ const MAX_TOASTED_MESSAGES = 200
 let toastBurstLimit = 3
 let toastBurstWindowMs = 2_000
 
+/**
+ * A second consumer of the toast policy below, for a host whose stderr is not
+ * on screen but which can still put a line in front of the operator another
+ * way: opencode 2 runs plugins in a `serve --stdio` subprocess with a piped
+ * stderr (measured on 2.0.22, h #g193), and from 2.0.31 the server half can
+ * hand a warning to its own sidebar half over an RPC event, which raises it as
+ * a toast (`src/plugin-notice.ts`, h #g253). Registered by the V2 entry only,
+ * and only ever given warn and error lines that passed the same once-per-text
+ * dedup and burst guard the TUI sink's toasts pass; stderr and the log file
+ * are unchanged. Same contract as `LogSink`: it may never throw or log.
+ */
+export type ToastNotifier = (entry: LogSinkEntry) => void
+
 let activeSink: LogSink | null = null
+let activeNotifier: ToastNotifier | null = null
+/**
+ * warn/error lines raised before the notifier existed, bounded like the sink's
+ * buffer. On opencode 2 the notifier registers at the top of `setup`, so this
+ * holds the handful of lines that can precede it; a host that never registers
+ * one keeps at most this many entries.
+ */
+let bufferedNotices: LogSinkEntry[] = []
 let bufferedEntries: LogSinkEntry[] = []
 let droppedBeforeSink = 0
 const toastedMessages = new Set<string>()
@@ -274,9 +295,24 @@ export function setLogSink(sink: LogSink | null): void {
   }
 }
 
+/**
+ * Register where warn/error lines go on a host whose stderr is not the screen
+ * (see `ToastNotifier`), and flush the ones raised before it existed, in
+ * order. `null` unregisters; lines then buffer again.
+ */
+export function setToastNotifier(notifier: ToastNotifier | null): void {
+  activeNotifier = notifier
+  if (!notifier) return
+  const pending = bufferedNotices
+  bufferedNotices = []
+  for (const entry of pending) maybeToast(entry, notifier)
+}
+
 /** Test-only: forget the sink, the buffer, the toast dedup and the burst. */
 export function _resetLogSinkForTests(): void {
   activeSink = null
+  activeNotifier = null
+  bufferedNotices = []
   bufferedEntries = []
   droppedBeforeSink = 0
   toastedMessages.clear()
@@ -318,19 +354,44 @@ function deliverToSink(entry: LogSinkEntry): void {
   } catch {
     // intentionally silent
   }
+  maybeToast(entry, (toast) => sink.toast(toast))
+}
+
+/**
+ * The toast policy, shared by the TUI sink and the notifier: warn and error
+ * only, each message text once per process, and at most a burst's worth at a
+ * time with the rest counted into one summary.
+ */
+function maybeToast(entry: LogSinkEntry, send: (entry: LogSinkEntry) => void): void {
   if (entry.level !== "warn" && entry.level !== "error") return
   if (toastedMessages.has(entry.message)) return
   if (toastedMessages.size < MAX_TOASTED_MESSAGES) toastedMessages.add(entry.message)
   if (!allowToastNow()) return
-  sendToast(sink, entry)
+  sendToast(send, entry)
 }
 
-function sendToast(sink: LogSink, entry: LogSinkEntry): void {
+function sendToast(send: (entry: LogSinkEntry) => void, entry: LogSinkEntry): void {
   try {
-    sink.toast(entry)
+    send(entry)
   } catch {
     // intentionally silent
   }
+}
+
+/** Where a toast goes right now: the TUI sink when there is one, else the notifier. */
+function toastTarget(): ((entry: LogSinkEntry) => void) | null {
+  const sink = activeSink
+  if (sink) return (entry) => sink.toast(entry)
+  return activeNotifier
+}
+
+function routeToNotifier(entry: LogSinkEntry): void {
+  const notifier = activeNotifier
+  if (notifier) {
+    maybeToast(entry, notifier)
+    return
+  }
+  if (bufferedNotices.length < MAX_BUFFERED_SINK_ENTRIES) bufferedNotices.push(entry)
 }
 
 /** Whether this toast fits in the current burst; counts it when it does not. */
@@ -361,11 +422,14 @@ function armBurstSummary(): void {
     const suppressed = burstSuppressed
     burstSuppressed = 0
     if (suppressed <= 0) return
-    const sink = activeSink
-    if (!sink) return
+    const target = toastTarget()
+    if (!target) return
     // Built here rather than through `log.warn`, which would re-enter `emit`.
-    const message = `${suppressed} more claude-code warning(s) were not shown; the full text is in opencode's log`
-    sendToast(sink, { level: "warn", message, line: fmt("WARN", message) })
+    // Only the TUI sink also files every line in opencode's log; through the
+    // notifier the full text is in the plugin's log file.
+    const where = activeSink ? "opencode's log" : "the plugin log file"
+    const message = `${suppressed} more claude-code warning(s) were not shown; the full text is in ${where}`
+    sendToast(target, { level: "warn", message, line: fmt("WARN", message) })
   }, toastBurstWindowMs)
   burstSummaryTimer.unref?.()
 }
@@ -393,6 +457,7 @@ function emit(level: LogLevel, msg: string, data?: Record<string, unknown>): voi
       routeToSink({ level, message: msg, data, line })
     } else {
       console.error(line)
+      if (level === "warn" || level === "error") routeToNotifier({ level, message: msg, data, line })
     }
   }
   writeToFile(line)
