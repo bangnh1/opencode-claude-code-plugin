@@ -55,6 +55,13 @@ import {
   snapshotActiveProcesses,
   type ActiveProcessSnapshot,
 } from "./session-manager.js"
+import { createTurnHistoryReader } from "./turn-history.js"
+import {
+  buildTurnModel,
+  CALIBRATION_PRIOR_RESIDUALS,
+  MIN_TURN_SAMPLES,
+  type TurnEstimateAssessment,
+} from "./turn-model.js"
 import {
   describeBuildStatus,
   staleBuildWatch,
@@ -213,6 +220,12 @@ export interface DoctorReport {
    * hand-built report in a test needs no entry; the live report always has one.
    */
   accountUsage?: AccountUsage
+  /**
+   * How the sidebar's progress estimate has done on this install's own turns
+   * (src/turn-model.ts, h #g251). Optional like `accountUsage`, and absent
+   * when the store could not be read.
+   */
+  turnEstimate?: TurnEstimateAssessment
   /** Background subagents: the gate as last read, and what this process did. */
   backgroundSubagents: {
     gate: BackgroundSubagentGate | undefined
@@ -472,6 +485,13 @@ export function formatDoctorReport(report: DoctorReport): string {
     lines.push(...formatAccountUsage(report.accountUsage))
   }
 
+  if (report.turnEstimate) {
+    lines.push("")
+    lines.push("**Progress estimate**")
+    lines.push("")
+    lines.push(...formatTurnEstimate(report.turnEstimate))
+  }
+
   lines.push("")
   lines.push("**Background subagents**")
   lines.push("")
@@ -643,6 +663,61 @@ function formatAccountUsage(usage: AccountUsage, now: number = Date.now()): stri
     "|---|---|---|---|---|---|---|",
     ...rows,
   ]
+}
+
+/**
+ * How the sidebar's progress estimate has done on this install's own turns
+ * (h #g251): every recorded turn estimated at its start from the rest of its
+ * agent and model's record (leave-one-out), and how far off that was. These
+ * are the same errors the model's calibration is fitted on, so this section
+ * is what to read before believing a bar: a key that is typically off by a
+ * factor of three is telling you its turns vary that much, not that the
+ * arithmetic is wrong.
+ */
+function formatTurnEstimate(assessment: TurnEstimateAssessment): string[] {
+  if (assessment.keys.length === 0) {
+    return [
+      "No turns recorded yet. The server half records one per served turn in " +
+        "`turn-history.json`; the sidebar draws a bar once an agent has " +
+        `${MIN_TURN_SAMPLES} under one model, or that many across its other models.`,
+    ]
+  }
+  const percent = (share: number | undefined) => (share === undefined ? "n/a" : `${Math.round(share * 100)}%`)
+  const lines = [
+    assessment.residuals === 0
+      ? "No leave-one-out error to calibrate on yet, so the band is the normal curve's."
+      : `The band is calibrated on ${assessment.residuals} leave-one-out error${assessment.residuals === 1 ? "" : "s"}, ` +
+        `which weigh ${percent(assessment.calibrationWeight)} against the normal curve: the curve counts as ` +
+        `${CALIBRATION_PRIOR_RESIDUALS}, so the measured spread takes over as they accrue.`,
+    "",
+    "| agent/model | turns | failed | typical | assessed | off by | outran | in band |",
+    "|---|---|---|---|---|---|---|---|",
+  ]
+  for (const key of assessment.keys) {
+    lines.push(
+      `| ${tableCell(key.key)} | ${key.turns} | ${key.failed} | ${key.turns > 0 ? formatAge(key.typicalMs) : "n/a"} | ` +
+        `${key.assessed} | ${key.missFactor === undefined ? "n/a" : `×${key.missFactor.toFixed(1)}`} | ` +
+        `${percent(key.overShare)} | ${percent(key.inBandShare)} |`,
+    )
+  }
+  lines.push("")
+  lines.push(
+    "Each turn is estimated at its start from the rest of its record. `off by` is the typical factor " +
+      "between that estimate and what the turn took, either way (×1.5 is 50% off); `outran` is the " +
+      "share that took longer than estimated, and half is unbiased; `in band` is the share that ended " +
+      "inside the band the bar draws, and half is calibrated. A turn that ended on a failed tool is " +
+      "counted under `failed` and never read.",
+  )
+  return lines
+}
+
+/** The progress estimate's record, assessed; absent when the store cannot be read. */
+function assessTurnEstimate(): TurnEstimateAssessment | undefined {
+  try {
+    return buildTurnModel(createTurnHistoryReader().read()).assess()
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -943,6 +1018,7 @@ export async function gatherDoctorReport(
     hookFailures: snapshotHookFailures(),
     planUsage,
     accountUsage: snapshotAccountUsage(),
+    turnEstimate: assessTurnEstimate(),
     backgroundSubagents: {
       gate: snapshotBackgroundSubagentGate(),
       ledgers: snapshotBackgroundTasks(),

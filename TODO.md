@@ -211,6 +211,18 @@ raised, so they survive context compaction; removed when answered, done or dropp
   (one API call's prefill plus generation) was declined: the clock here is mostly tool time, and the output
   tokens it needs are the unknown. Still open: the estimate revisit after a week of real samples, and the
   `startsTurn` candidate above.
+  Then (2026-10-18) "how accurate is this ? or does it rely on historic data always?", "what else can we do to
+  improve this calculation?", "what if we do all these and also a predictive mathematical equasion that is genious
+  level into the mix?", "All three in 1 PR 1 release 0.58.0 ?", "maybe we keep this in 0.58.0 and use that for a
+  while", "go": every candidate went into one PR for the v0.58.0 release (h #g251). The record gained `failed`,
+  `out` and a session tag, and a turn after an interrupt is now marked (the `startsTurn` candidate above, closed).
+  The estimate is a calibrated log-normal (`src/turn-model.ts`) with shrinkage, recency and a session level, the
+  bar draws its band, a live `turn-progress.json` carries the output a turn has generated, a parked parent is
+  floored by its foreground children, and `/claude-code-doctor` has a Progress estimate section. **The estimate is
+  frozen for observation**: after a week, read the doctor's section first. Known from day one: the build key ends
+  in its band 33% of the time against the explore keys' 67%, because the calibration pools every key's errors, so
+  a per-key calibration is the first candidate; the mid-turn conditions (calls, output, the floor) are not measured
+  by the section, which assesses each turn at its start.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished

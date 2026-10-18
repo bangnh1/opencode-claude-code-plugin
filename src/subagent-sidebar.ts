@@ -366,7 +366,8 @@ function rowFor(
 /**
  * A run of text with the role the TUI maps onto a theme colour. `bar-done`
  * through `cost` are the progress line's and the spend (`src/progress-line.ts`,
- * h #g246); `tier`, `reset` and `ok` are the `Accounts` line's plan tier,
+ * h #g246), `bar-likely` and `bar-band` the estimate's band on the bar
+ * (h #g251); `tier`, `reset` and `ok` are the `Accounts` line's plan tier,
  * reset time and under-threshold level (`src/account-sidebar.ts`, h #g248).
  */
 export interface Segment {
@@ -381,6 +382,8 @@ export interface Segment {
     | "effort"
     | "effort-faded"
     | "bar-done"
+    | "bar-likely"
+    | "bar-band"
     | "bar-over"
     | "bar-track"
     | "fraction"

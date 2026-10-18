@@ -192,9 +192,11 @@ import {
 } from "./session-resume-store.js"
 import { recordSessionSpawn } from "./spawn-record-store.js"
 import {
+  lastToolResultFailed,
   markTurnStart,
   newestPromptChars,
   recordTurnSample,
+  sessionTag,
   startsTurn,
   takeTurnStart,
   turnHistoryKey,
@@ -1700,9 +1702,19 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       // A fresh user message starts the turn the sidebar's estimate is fed
       // from (h #g247): its start and its prompt's length wait here, keyed
       // like the process, for the step that sees the `result`. A tool-result
-      // step continues the turn and marks nothing.
-      if (startsTurn(options.prompt)) {
-        markTurnStart(sk, turnStartedAt, newestPromptChars(options.prompt))
+      // step continues the turn and marks nothing, unless its results answer
+      // no parked call, which is the prompt after an interrupted turn
+      // (h #g251). The prompt's length is where the turn's calls count from,
+      // and the session's tag is where its output so far is written as each
+      // API call ends, for the TUI's live estimate.
+      const parked = new Set(getPendingProxyCalls(sk).map((call) => call.toolCallId))
+      if (startsTurn(options.prompt, parked)) {
+        markTurnStart(sk, {
+          at: turnStartedAt,
+          chars: newestPromptChars(options.prompt),
+          promptLength: options.prompt.length,
+          session: sessionTag(affinity),
+        })
       }
     }
 
@@ -3929,7 +3941,20 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 // The turn's tool calls, counted as the TUI counts its tool
                 // parts (h #g250): the earlier steps' from the prompt, this
                 // step's own from what it emitted.
-                calls: turnToolCalls(options.prompt) + state.toolCallEmittedIds.size,
+                calls: turnToolCalls(options.prompt, start.promptLength) + state.toolCallEmittedIds.size,
+                // The output its API calls generated, summed as the live
+                // channel wrote it, so a running turn is compared with the
+                // record in the same unit (h #g251).
+                out: start.out,
+                // A turn whose newest tool result was an error ended on a
+                // failure (h #g251): this step's own CLI-executed results
+                // are newer than the prompt's, so they answer first.
+                failed:
+                  state.lastCliToolResultError ??
+                  lastToolResultFailed(options.prompt, start.promptLength ?? 0),
+                // The conversation, as a hash of its id: the estimate's
+                // session level (h #g251).
+                session: sessionTag(affinity),
                 at: endedAt,
               })
             }

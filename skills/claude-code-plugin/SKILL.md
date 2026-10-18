@@ -988,17 +988,22 @@ row gets a third line: the same progress line the viewed session gets above the 
 under a `Main Progress` heading while its turn runs (and 15 s after). That line is a ten-cell
 `▰▱` bar, two spaces, then the todo list's completed fraction with `2/4` when the session has
 one (opencode 1 only; opencode 2 exposes no todo list to a TUI plugin), else the turn's
-elapsed over its estimated total (`1m02s/~2m30s`: the weighted median of what remained of
-this agent and model's recorded turns that lasted longer than this one so far and made at
-least as many tool calls, weighted toward turns with a prompt of about this length at this
-effort, another effort's turns scaled by the two efforts' measured duration ratio once two of
-each are on record, read from
-`$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json`, which the plugin writes at
-every served result; full in the warning colour once past every recorded turn, in time or in
-calls), else no bar
-until three turns of that agent and model are on record; plus the call count (when neither
-is shown) and the running tool. No model call, no option, nothing read from the prompt but
-its length.
+elapsed over its estimated total (`1m02s/~2m30s`), else no bar until three turns of that
+agent and model (or of that agent across its other models) are on record; plus the call
+count (when neither is shown) and the running tool. The estimate is a log-normal fitted to
+this agent and model's recorded turns in
+`$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json` (written at every served
+result), weighted toward a prompt of about this length, this effort (another effort's turns
+at half weight, scaled by the measured duration ratio) and recent turns, borrowing the
+agent's other models for a new model and pulled toward this session's own earlier turns. It
+is conditioned on the turn's elapsed time, its tool calls and the output tokens it has
+generated, which the provider half writes per API call to `turn-progress.json` beside it.
+The bar's shades are the band (where the turn likely ends, calibrated on the estimate's own
+past misses), a turn waiting on a foreground subagent is floored at what that subagent has
+left, and past every recorded turn the bar is full in the warning colour. A turn that ended
+on a failed tool is never read. How far to trust it: `/claude-code-doctor`'s `Progress
+estimate` section (per agent and model: turns, typical, `off by`, `outran`, `in band`). No
+model call, no option, nothing read from the prompt but its length.
 Clicking a row opens the subagent's session; `up` returns to the parent. More than two
 rows fold behind a `▼` heading. Setup: nothing on opencode 2; on opencode 1 the
 `tui.json` line under Minimum install. If the section never appears on 1.x, that line is

@@ -35,6 +35,7 @@ import {
   turnStatsLogPayload,
 } from "./turn-stats.js"
 import { recordResultCost, takeBudgetNote, type TurnBudget } from "./budget-ledger.js"
+import { noteTurnOutput } from "./turn-history.js"
 import { formatAskUserQuestion, isAskUserQuestionTool } from "./ask-user-question.js"
 import { createExitPlanModeQuestionCall } from "./plan-mode-question.js"
 import { PROXY_TOOL_PREFIX } from "./proxy-mcp.js"
@@ -645,6 +646,14 @@ export function createLineHandler(
       ) {
         state.lastStopReason = (msg as any).delta.stop_reason
       }
+      // The same event carries the call's real output count, once per API
+      // call (the `assistant` frames carry a placeholder: 6 against the
+      // call's 41, measured on 2.1.293). The turn's running total is the
+      // progress estimate's live channel (h #g251).
+      if (msg.type === "message_delta") {
+        const output = (msg as any).usage?.output_tokens
+        if (typeof output === "number") noteTurnOutput(state.sessionKey, output)
+      }
 
       // assistant message (complete, not streaming).
       // When --include-partial-messages is on, this is a duplicate of
@@ -1072,6 +1081,7 @@ export function createLineHandler(
               // tool was forwarded as a success whose output happened
               // to be an error message.
               const isError = block.is_error === true
+              state.lastCliToolResultError = isError
               state.controller.enqueue({
                 type: "tool-result",
                 toolCallId: block.tool_use_id,
