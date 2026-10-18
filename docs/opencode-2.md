@@ -23,10 +23,20 @@ For a local checkout, point opencode 2 at the **`dist` directory**, not the repo
 }
 ```
 
-Last checked on opencode **2.0.31** (2026-10-16: the plugin API is additive over 2.0.22, and a text turn in a subdirectory, a proxied `shell` and a CLI-native read passed live). First verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill. Differences from 1.x:
+Last checked on opencode **2.0.31** (2026-10-18). First verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill.
 
-- **`/btw` is answered after the running turn**, not inside it. opencode 2's plugin API has no session-status route, which is what 1.x uses to write the answer into a turn that is still running. The aside is queued, so it can never swallow the turn's own continuation.
-- **No todo panel.** opencode 2 has no `todowrite` tool, so Claude's task list is not mirrored into one.
+opencode 2 gives a plugin no way to ask whether a session is busy and no toast of its own, so the plugin reads opencode 2's event stream for the first and uses the channel opencode 2 gives a plugin between its two halves for the second. With those, these work as they do on 1.x (measured on 2.0.22 and 2.0.31):
+
+- **`/btw` is answered inside the running turn.** opencode 2 runs the command the moment you type it, so the aside goes to Claude at once and the answer lands in the reply you are watching. Only when the turn has nothing open to write into does a `/btw` message follow, queued, once the turn ends. See [`/btw`](guides/btw.md).
+- **A permission prompt does not count against a proxied call's deadline.** While opencode is still running the turn, because it is waiting on you or the tool is still working, a proxied call that passes its deadline is kept.
+- **Stopping a turn releases the proxied calls it was waiting on**, and interrupts Claude's own turn, instead of leaving them until your next message.
+- **The plugin's warnings appear as toasts** titled `claude-code`, raised by the sidebar half. See [Logging](configuration/logging.md).
+
+Differences from 1.x:
+
+- **No todo panel.** opencode 2 has no `todowrite` tool, so Claude's task list is not mirrored into one, and the sidebar's progress bar is always the time estimate, never a share of todos done.
+- **`bridgeMcpOauthTokens` finds nothing.** opencode 2 keeps MCP OAuth tokens in its database, and the plugin API can activate a stored credential but not read one, so a server you signed into through opencode still reports `needs-auth` to the Claude CLI. See [MCP bridge](configuration/mcp.md).
+- **Claude's `EnterPlanMode`, `ExitPlanMode` and `NotebookEdit` calls get no tool row.** opencode 2 has no tools of those names and rejects an unknown one, so the plugin leaves the row out. The call itself still runs.
 - **Forms are opencode 2's own `Form` surface** rather than a question tool, which changes nothing you do: pick an option as usual. The account-switch form and the plan-mode approval were measured live on 2.0.22 (2026-10-07), and the [subagent dispatch form](configuration/subagents.md#choosing-per-dispatch-not-per-file) on 2026-10-08.
 - **An account switch, by hand or through the form, carries the conversation** on opencode 2 exactly as on 1.x, and [`accountGroups`](configuration/accounts.md#account-groups) blocks it exactly as on 1.x. Both measured live on 2.0.22 (2026-10-08).
 - **A session opened below the project root spawns `claude` in that directory.** Before 0.55.0 the plugin appended opencode 2's project-relative `subpath` to the session's own directory and spawned in a path that does not exist, so every turn of such a session failed with `ENOENT ... posix_spawn` while a session at the root worked (issue #113). A `cwd` set only to work around that can go.
