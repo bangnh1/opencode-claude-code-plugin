@@ -6725,3 +6725,29 @@ typecheck and build; `dist/tui.js` with zero logger prefixes. Not re-run on
 the rig: the fake CLI emits no `rate_limit_event`, so a rig run would show
 the registered lines the unit tests already lay out. The live proof is the
 maintainer's pane after a restart.
+
+### `ok` is green (2026-10-18)
+
+After the restart that showed the two fixes: "that worked", then "5h ok needs
+to be green". The level under the warning threshold took the muted colour, so a
+reading with headroom looked like nothing at all beside a red `limited` and a
+yellow `87%`. Now it takes the success colour at full strength, through a new
+`ok` role on the segment union and in `SidebarColors`, and `ok` the word is
+included because it IS the under-threshold state (the CLI reported the window
+with no number). Not the `done` role: that is the finished subagent row's
+success mixed 45% into muted, chosen so a ✓ row recedes, which is the opposite
+of what a live reading should do. `levelRole` is the one decision:
+`limited` is `error`, `warning` is `effort` (the warning colour), everything
+else is `ok`. Shipped as v0.57.1. `test/account-sidebar.test.ts`.
+
+## Every release also gets a GitHub Release (2026-10-18)
+
+h #g249. The maintainer, closing the sidebar feature: "tag the release also on
+github next time". v0.57.0 had gone out as every release since v0.9.2 had, a
+git tag and the npm publish and no Release on GitHub, which (h #g22) had
+recorded as optional. The rule is now in the Release Workflow section: after
+the tag push and the publish check, `gh release create vX.Y.Z --title vX.Y.Z
+--notes "..."`, with short notes in the commit-message tone naming what
+changed, the PR and the history entry. v0.57.1 is the first release under it.
+An older tag (v0.57.0 included) is backfilled only when asked, because a
+Release is outward-facing and "next time" named the future ones.

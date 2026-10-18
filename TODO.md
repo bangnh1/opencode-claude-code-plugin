@@ -195,7 +195,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
   shape also defeats `startsTurn` is unverified, no plugin log file is in this machine's state dir. Candidate:
   `startsTurn` should treat a trailing `tool` message that matches no pending proxy call as a turn start. A second
   haiku batch, run once the key had three samples, drew the bar on every row (20.7 s, 23.9 s, 48.2 s against a
-  ~25 s estimate, the third over in the warning colour).
+  ~25 s estimate, the third over in the warning colour). Then (2026-10-18) "that worked", "5h ok needs to be green"
+  (an under-threshold level now takes the success colour at full strength, shipped as v0.57.1), "tag the release also
+  on github next time" (now a rule in AGENTS.md, h #g249, first applied to v0.57.1) and "i think thats it for this
+  feature right?": yes; what stays open is the estimate revisit in the Future Features note and the `startsTurn`
+  candidate above.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished

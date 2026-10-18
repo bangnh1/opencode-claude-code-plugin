@@ -100,6 +100,8 @@ export interface SidebarColors {
   muted: Color
   spinner: Color
   done: Color
+  /** An account's level under the warning threshold, `ok` included: the success colour at full strength (h #g248). */
+  ok: Color
   error: Color
   /** The effort on a row's second line: the theme's warning colour. */
   effort: Color
@@ -132,6 +134,7 @@ export interface SidebarColors {
 const ROLE_COLOR: Record<Segment["role"], keyof SidebarColors> = {
   spinner: "spinner",
   done: "done",
+  ok: "ok",
   error: "error",
   agent: "text",
   description: "text",
@@ -697,6 +700,7 @@ export function registerV1(api: V1Api): void {
         muted,
         spinner: theme.accent,
         done: mix(theme.success, muted, 0.45),
+        ok: theme.success ?? theme.accent,
         error: mix(theme.error, muted, 0.35),
         effort: theme.warning ?? muted,
         effortFaded: mix(theme.warning ?? muted, muted, 0.45),
@@ -881,6 +885,7 @@ export function setupV2(context: V2Context): () => void {
         muted,
         spinner: accent,
         done: mix(theme.text.feedback.success.muted ?? theme.text.feedback.success.base, muted, 0.45),
+        ok: theme.text.feedback.success.base ?? accent,
         error: mix(theme.text.feedback.error.muted ?? theme.text.feedback.error.base, muted, 0.35),
         effort: theme.text.feedback.warning?.base ?? muted,
         effortFaded: mix(theme.text.feedback.warning?.base ?? muted, muted, 0.45),

@@ -127,7 +127,7 @@ test("the level and the reset time are different roles, and the word `resets` st
   assert.deepEqual(painted(line), [
     ["appical", "agent"],
     [" · ", "muted"],
-    ["5h 72%", "muted"],
+    ["5h 72%", "ok"],
     [" · ", "muted"],
     ["resets ", "muted"],
     ["18:00", "reset"],
@@ -217,7 +217,7 @@ test("unknown utilization is `ok`, never 0%, and 75% or more takes the warning c
     NOW,
   )
   assert.equal(lineText(lines[0]), "a · 5h ok · resets 18:00")
-  assert.equal(roleOf(lines[0], "5h ok"), "muted")
+  assert.equal(roleOf(lines[0], "5h ok"), "ok", "under the warning level the reading is green, the word `ok` included")
   assert.equal(lineText(lines[1]), "b · 5h 75% · resets 18:00")
   assert.equal(lines[1].state, "warning")
   assert.equal(roleOf(lines[1], "5h 75%"), "effort")

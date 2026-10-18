@@ -21,8 +21,10 @@
  * own `.claude.json` (`src/account-tier.ts`) when the store has one.
  *
  * Colours, by segment: the name in the text colour; the level in its state's
- * (`limited` in the error colour, 75% and up in the warning colour, else
- * muted); the reset time in its own (`reset`, the theme's info colour), so it
+ * (`limited` in the error colour, 75% and up in the warning colour, else the
+ * success colour at full strength, `ok` included: the `ok` role, never `done`,
+ * which is the finished row's faded success); the reset time in its own
+ * (`reset`, the theme's info colour), so it
  * reads apart from the level beside it; the word `resets` and every separator
  * muted; the tier in its own (`tier`, the secondary colour).
  */
@@ -143,7 +145,7 @@ const cells = (value: string) => Array.from(value).length
 const segmentsCells = (segments: Segment[]) => segments.reduce((sum, segment) => sum + cells(segment.text), 0)
 
 function levelRole(state: AccountUsageLine["state"]): Segment["role"] {
-  return state === "limited" ? "error" : state === "warning" ? "effort" : "muted"
+  return state === "limited" ? "error" : state === "warning" ? "effort" : "ok"
 }
 
 /**

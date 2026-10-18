@@ -366,8 +366,8 @@ function rowFor(
 /**
  * A run of text with the role the TUI maps onto a theme colour. `bar-done`
  * through `cost` are the progress line's and the spend (`src/progress-line.ts`,
- * h #g246); `tier` and `reset` are the `Accounts` line's plan tier and reset
- * time (`src/account-sidebar.ts`, h #g248).
+ * h #g246); `tier`, `reset` and `ok` are the `Accounts` line's plan tier,
+ * reset time and under-threshold level (`src/account-sidebar.ts`, h #g248).
  */
 export interface Segment {
   text: string
@@ -390,6 +390,7 @@ export interface Segment {
     | "cost"
     | "tier"
     | "reset"
+    | "ok"
 }
 
 /**
