@@ -204,6 +204,13 @@ raised, so they survive context compaction; removed when answered, done or dropp
   Two corrections from the check: v0.57.1 re-marked `--latest` (the backfilled v0.57.0 had taken the badge) and
   its notes lost a false sentence, because `gh release list` showed a Release for every tag back to v0.4.14 and
   v0.57.0 was the lone omission, not "the first since v0.9.2" as this entry, AGENTS.md and h #g249 first said.
+  Then (2026-10-18) a Google AI overview of latency prediction, "is this usefull to us in any way?", then "keep
+  what usefull and add it to 0.57.2": the two useful pieces shipped as v0.57.2 (h #g250), effort as the measured
+  ratio between two efforts' typical durations (scaling the other effort's samples once two turns at each are on
+  record) and the turn's tool-call count as a second survival condition beside the elapsed. The formula itself
+  (one API call's prefill plus generation) was declined: the clock here is mostly tool time, and the output
+  tokens it needs are the unknown. Still open: the estimate revisit after a week of real samples, and the
+  `startsTurn` candidate above.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished

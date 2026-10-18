@@ -15,6 +15,7 @@ import { test } from "node:test"
 import {
   MAX_TURN_KEYS,
   MAX_TURN_SAMPLES,
+  MIN_EFFORT_RATIO_SAMPLES,
   MIN_TURN_SAMPLES,
   TURN_SAMPLE_MAX_AGE_MS,
   _setTurnHistoryStorePathForTests,
@@ -28,6 +29,7 @@ import {
   takeTurnStart,
   turnHistoryKey,
   turnHistoryStorePath,
+  turnToolCalls,
   type TurnSample,
 } from "../src/turn-history.js"
 
@@ -87,7 +89,7 @@ test("a turn's start is taken once, and the newest mark on a key wins", () => {
   assert.equal(takeTurnStart("never-marked"), undefined)
 })
 
-test("a sample round-trips with nothing but its four fields", () => {
+test("a sample round-trips with nothing but its five fields", () => {
   const dir = scratch()
   try {
     assert.equal(
@@ -95,16 +97,18 @@ test("a sample round-trips with nothing but its four fields", () => {
         ms: 61_230.4,
         chars: 420,
         effort: "high",
+        calls: 3.2,
         at: NOW,
         ...({ prompt: "secret", sessionKey: "/x" } as object),
       } as TurnSample),
       true,
     )
     const [entry] = onDisk().turns["build/claude-opus-5-5"]
-    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", at: NOW })
-    assert.deepEqual(Object.keys(entry).sort(), ["at", "chars", "effort", "ms"])
+    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, at: NOW })
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms"])
     // An unusable sample is not written, and says so.
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: -1, at: NOW }), false)
+    assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, calls: -1, at: NOW }), false)
     assert.equal(recordTurnSample("", { ms: 1, at: NOW }), false)
     assert.equal(onDisk().turns["build/claude-opus-5-5"].length, 1)
   } finally {
@@ -222,16 +226,80 @@ test("the estimate weighs toward turns whose prompt was about this long", () => 
   assert.equal(estimateTurn(unknown, { elapsedMs: 0, chars: 10 })?.totalMs, seconds(10))
 })
 
-test("a turn at another effort weighs half", () => {
+test("a turn at another effort weighs half, and once two turns at each effort are on record its duration is scaled by their measured ratio", () => {
+  assert.equal(MIN_EFFORT_RATIO_SAMPLES, 2)
+  // One `low` turn is no ratio: the `high` turns count at half weight, as recorded.
   const samples = [sample(seconds(10), { effort: "low" }), sample(seconds(100), { effort: "high" }), sample(seconds(100), { effort: "high" })]
   assert.equal(estimateTurn(samples, { elapsedMs: 0, effort: "low" })?.totalMs, seconds(10))
   assert.equal(estimateTurn(samples, { elapsedMs: 0, effort: "high" })?.totalMs, seconds(100))
   assert.equal(estimateTurn(samples, { elapsedMs: 0 })?.totalMs, seconds(100))
+  // A key full of `low` turns and two `high` ones: the `low` durations are
+  // stretched by the measured ratio (100 s over 10 s), so a `high` turn is
+  // expected to take 100 s, where the half weight alone still said 10 s.
+  const mostlyLow = [
+    ...Array.from({ length: 6 }, () => sample(seconds(10), { effort: "low" })),
+    sample(seconds(100), { effort: "high" }),
+    sample(seconds(100), { effort: "high" }),
+  ]
+  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0, effort: "high" })?.totalMs, seconds(100))
+  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0, effort: "low" })?.totalMs, seconds(10))
+  // The scaled duration is what the turn is conditioned on: fifty seconds
+  // into a `high` turn, every stretched `low` sample is still a candidate.
+  assert.deepEqual(estimateTurn(mostlyLow, { elapsedMs: seconds(50), effort: "high" }), {
+    totalMs: seconds(100),
+    fill: 0.5,
+    over: false,
+  })
+  // An unknown effort scales nothing and weighs every sample alike.
+  assert.equal(estimateTurn(mostlyLow, { elapsedMs: 0 })?.totalMs, seconds(10))
+})
+
+test("the estimate conditions on the turn's tool calls too: a recorded turn with fewer calls than this one has made is not how it ends", () => {
+  const samples = [sample(seconds(20), { calls: 1 }), sample(seconds(60), { calls: 3 }), sample(seconds(100), { calls: 8 })]
+  // Ten seconds in with no call yet, every turn is a candidate, as without the count.
+  assert.equal(estimateTurn(samples, { elapsedMs: seconds(10), calls: 0 })?.totalMs, seconds(60))
+  // On its fourth call, only the eight-call turn is left to be like.
+  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(10), calls: 4 }), {
+    totalMs: seconds(100),
+    fill: 0.1,
+    over: false,
+  })
+  // Beyond every recorded turn's calls is over, as beyond its time is.
+  assert.deepEqual(estimateTurn(samples, { elapsedMs: seconds(10), calls: 9 }), {
+    totalMs: seconds(60),
+    fill: 1,
+    over: true,
+  })
+  // A sample recorded before the count existed survives on time alone.
+  const older = [sample(seconds(20)), ...samples.slice(1)]
+  assert.equal(estimateTurn(older, { elapsedMs: seconds(10), calls: 4 })?.totalMs, seconds(20))
+  // A turn whose count is unknown is conditioned on time alone.
+  assert.equal(estimateTurn(samples, { elapsedMs: seconds(10) })?.totalMs, seconds(60))
+})
+
+test("turnToolCalls counts the turn's tool calls since the message that started it, a steered message included", () => {
+  const call = { type: "tool-call", toolCallId: "t", toolName: "bash", input: {} }
+  const prompt = [
+    { role: "user", content: [{ type: "text", text: "earlier" }] },
+    { role: "assistant", content: [call] },
+    { role: "tool", content: [] },
+    { role: "assistant", content: [{ type: "text", text: "done" }] },
+    { role: "user", content: [{ type: "text", text: "now" }] },
+    { role: "assistant", content: [call, call] },
+    { role: "tool", content: [] },
+    { role: "assistant", content: [{ type: "text", text: "and" }, call] },
+    { role: "tool", content: [] },
+    { role: "user", content: [{ type: "text", text: "steered" }] },
+  ]
+  assert.equal(turnToolCalls(prompt), 3, "the earlier turn's call is not counted, and the steered message does not restart the count")
+  assert.equal(turnToolCalls(prompt.slice(0, 5)), 0, "a fresh message has made none")
+  assert.equal(turnToolCalls(prompt.slice(0, 7)), 2)
+  assert.equal(turnToolCalls([]), 0)
 })
 
 // The fake CLI is a shebang script made executable with chmod, which means
 // nothing on Windows (see .github/windows-skipped-tests.txt).
-test("a real turn records its duration under the agent and model it spawned, with the prompt's length and the effort", { skip: process.platform === "win32" }, async () => {
+test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort and its tool calls", { skip: process.platform === "win32" }, async () => {
   const dir = scratch()
   const savedHome = process.env.HOME
   const savedState = process.env.XDG_STATE_HOME
@@ -249,6 +317,9 @@ const session_id = "fake-turn-history"
 const emit = (m) => process.stdout.write(JSON.stringify(m) + "\\n")
 require("node:readline").createInterface({ input: process.stdin }).on("line", () => {
   emit({ type: "system", subtype: "init", session_id })
+  // One CLI-executed call, then the reply: the sample counts the call.
+  emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_read_1", name: "Read", input: { file_path: "/x" } }] } })
+  emit({ type: "user", session_id, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: "x" }] } })
   emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }] } })
   setTimeout(() => {
     emit({ type: "result", subtype: "success", session_id, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } })
@@ -288,6 +359,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
     assert.ok(entry.ms >= 80 && entry.ms <= elapsed, `the sample's duration is the turn's: ${entry.ms} of ${elapsed}`)
     assert.equal(entry.chars, 11, "the prompt's length, the reminder block taken off")
     assert.equal(entry.effort, "high")
+    assert.equal(entry.calls, 1, "the step's own CLI-executed call is counted")
     assert.ok(entry.at >= started)
   } finally {
     for (const active of snapshotActiveProcesses()) {

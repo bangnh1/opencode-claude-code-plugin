@@ -198,6 +198,7 @@ import {
   startsTurn,
   takeTurnStart,
   turnHistoryKey,
+  turnToolCalls,
 } from "./turn-history.js"
 import { encodeCwd, resolveConfigDir } from "./claude-session-bun.js"
 import {
@@ -3925,6 +3926,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 ms: endedAt - start.at,
                 chars: start.chars,
                 effort: reasoningEffort,
+                // The turn's tool calls, counted as the TUI counts its tool
+                // parts (h #g250): the earlier steps' from the prompt, this
+                // step's own from what it emitted.
+                calls: turnToolCalls(options.prompt) + state.toolCallEmittedIds.size,
                 at: endedAt,
               })
             }

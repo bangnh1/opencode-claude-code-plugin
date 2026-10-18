@@ -989,10 +989,13 @@ under a `Main Progress` heading while its turn runs (and 15 s after). That line 
 `▰▱` bar, two spaces, then the todo list's completed fraction with `2/4` when the session has
 one (opencode 1 only; opencode 2 exposes no todo list to a TUI plugin), else the turn's
 elapsed over its estimated total (`1m02s/~2m30s`: the weighted median of what remained of
-this agent and model's recorded turns that lasted longer than this one so far, weighted
-toward turns with a prompt of about this length at this effort, read from
+this agent and model's recorded turns that lasted longer than this one so far and made at
+least as many tool calls, weighted toward turns with a prompt of about this length at this
+effort, another effort's turns scaled by the two efforts' measured duration ratio once two of
+each are on record, read from
 `$XDG_STATE_HOME/opencode-claude-code-plugin/turn-history.json`, which the plugin writes at
-every served result; full in the warning colour once past every recorded turn), else no bar
+every served result; full in the warning colour once past every recorded turn, in time or in
+calls), else no bar
 until three turns of that agent and model are on record; plus the call count (when neither
 is shown) and the running tool. No model call, no option, nothing read from the prompt but
 its length.

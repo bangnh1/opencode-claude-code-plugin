@@ -6766,3 +6766,77 @@ re-confirmed the release rule's npm half: from this Mac the package document
 answered `latest: 0.54.2` with no version after it (Aikido's minimum-age
 filter), while the per-version documents carried both 0.57.x shasums and the
 `dist-tags` endpoint said `0.57.1`.
+
+## The estimate conditions on the turn's tool calls, and effort is a measured ratio (2026-10-18)
+
+h #g250. The maintainer pasted a Google AI overview of how to predict an
+LLM's response time (prefill time plus generation time, effort as a
+multiplier on hidden thinking tokens) and asked "is this usefull to us in
+any way?", then "keep what usefull and add it to 0.57.2".
+
+### What was kept, and why
+
+Two pieces, both already candidates in (h #g247)'s revisit list, now built:
+
+- **Effort as a multiplier, not a label.** Until now a sample at another
+  effort counted at `OTHER_EFFORT_WEIGHT` (0.5) with its duration as
+  recorded, so a key full of `low` turns told a `high` turn it would be
+  short. The overview's point is that a higher effort multiplies the thinking
+  a turn does before it answers, which is a ratio on time, not a different
+  kind of turn. So once a key holds `MIN_EFFORT_RATIO_SAMPLES` (2) turns at
+  this effort and as many at another, `effortScales` measures the ratio of
+  the two groups' weighted medians (the prompt-length kernel on both, so a
+  group of long prompts is not read as a slow effort) and the other effort's
+  durations are scaled by it before the survival conditioning, still at the
+  half weight. With fewer than two at either effort nothing changes, because
+  one turn against one turn is noise; with no turn at the current effort
+  there is nothing to measure a ratio from, and that is the first `high`
+  turn on a `low` key, which still reads the half-weighted record as before.
+- **Condition on the turn's progress.** The overview's one real input is the
+  output so far, and the plugin's equivalent that both halves can count is
+  the turn's tool calls. Each sample now records `calls`, and a sample with
+  fewer calls than this turn has already made is not a survivor: a turn on
+  its twelfth call will not end like the two-call ones. The count must be the
+  same number on both halves or the condition is wrong in a direction that
+  depends on which half overcounts. The TUI reads the tool parts of the
+  turn's messages (`measureProgress`); the server reads the `tool-call` parts
+  of the prompt's assistant messages since the message that started the turn
+  (`turnToolCalls`, `startsTurn`'s rule, so a steered message does not
+  restart it) and adds the final step's own `toolCallEmittedIds`, which are
+  not in its prompt yet. Every proxied and CLI-executed call is one tool part
+  opencode stores and hands back, so the two agree. A sample from before this
+  release has no `calls` and survives on time alone, as does a turn whose
+  count is unknown. `over` now also means beyond every recorded turn's
+  calls: nothing is left to condition on in either dimension, and the usual
+  duration is shown as before.
+
+### What was declined
+
+- **The formula itself** (`N_input / S_prefill + N_output / S_generation`)
+  predicts one API call. A turn here is a run of calls with tool work
+  between them, and the tool work is most of what the clock measures: the
+  haiku rows of the day before ran twenty to fifty seconds because the
+  children slept fifteen and forty, where the formula would have said about
+  five for all three. Its one real input, the output tokens, is known when
+  the turn ends and is the whole thing being predicted, so it moves the
+  unknown rather than removing it. The median of this install's own turns
+  already contains the model's speed and the usual tool time for that key,
+  measured on this machine rather than read off a table.
+- **A token-based condition** instead of the call count. A mid-turn finish
+  reports zero output on purpose (h #g169, or opencode auto-compacts and
+  loses the parked proxied call), so the TUI has no token count to condition
+  on; the calls are what it can see.
+
+### Tests
+
+`test/turn-history.test.ts`: the ratio engaging only with two turns at each
+effort, a key of six `low` turns and two `high` ones estimating a `high` turn
+at the `high` duration where the half weight alone said the `low` one, the
+scaled duration being what the survival conditions on, an unknown effort
+scaling nothing; the call condition at four calls selecting the eight-call
+turn, `over` at nine, an old sample surviving on time alone, an unknown count
+conditioning on time alone; `turnToolCalls` over a prompt with an earlier
+turn and a steered message; and the fake CLI's turn now making one
+CLI-executed `Read` call, which the recorded sample counts. Shipped as
+v0.57.2. The revisit after a week of real samples still stands, now with
+three inputs to read the error rate against.

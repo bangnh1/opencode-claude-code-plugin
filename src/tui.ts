@@ -294,11 +294,12 @@ function createSidebar(host: SidebarHost) {
     attempt(() => host.progress(sessionID), EMPTY_SOURCE)
 
   /**
-   * A running line's estimate (h #g247): the session's recorded agent and
-   * model name the history, the turn's prompt length and the effort weight
-   * it, and the fill is held so the bar only advances within the turn. No
-   * spawn record, no history or too little of it is no estimate, and the
-   * line then draws no bar.
+   * A running line's estimate (h #g247, h #g250): the session's recorded
+   * agent and model name the history, the turn's prompt length and the
+   * effort weight it, its tool calls so far condition it beside the elapsed,
+   * and the fill is held so the bar only advances within the turn. No spawn
+   * record, no history or too little of it is no estimate, and the line then
+   * draws no bar.
    */
   const estimateFor = (
     sessionID: string,
@@ -311,7 +312,12 @@ function createSidebar(host: SidebarHost) {
     if (!record?.model) return view
     const samples = historyMap.get(turnHistoryKey(record.agent ?? agentFallback, record.model))
     if (!samples) return view
-    const estimate = estimateTurn(samples, { elapsedMs: view.elapsedMs, chars: measure.chars, effort: record.effort })
+    const estimate = estimateTurn(samples, {
+      elapsedMs: view.elapsedMs,
+      chars: measure.chars,
+      effort: record.effort,
+      calls: measure.calls,
+    })
     if (!estimate) return view
     const turn = measure.startedAt ?? 0
     return { ...view, estimate: { ...estimate, fill: fills.hold(sessionID, turn, estimate.fill) } }
