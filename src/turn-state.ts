@@ -226,6 +226,14 @@ export interface TurnState {
    * (h #g190).
    */
   readonly toolCallAnsweredIds: Set<string>
+  /**
+   * Whether the newest CLI-executed tool result this step was an error
+   * (`block.is_error`), or undefined when the step had none. The turn-history
+   * sample reads it at the `result` to mark a turn that ended on a failed
+   * tool (h #g251): the CLI's own refusal of a tool the model called is the
+   * measured case, a subagent opencode then reports as failed.
+   */
+  lastCliToolResultError: boolean | undefined
 
   // ---- The terminal result ------------------------------------------------
 
@@ -433,6 +441,7 @@ export function createTurnState(init: TurnStateInit): TurnState {
     toolCallsById: new Map<string, { id: string; name: string; input: unknown }>(),
     toolCallEmittedIds: new Set<string>(),
     toolCallAnsweredIds: new Set<string>(),
+    lastCliToolResultError: undefined,
 
     resultMeta: {},
     lastCallUsage: undefined,

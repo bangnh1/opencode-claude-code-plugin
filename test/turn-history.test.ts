@@ -21,6 +21,7 @@ import {
   _setTurnHistoryStorePathForTests,
   createTurnHistoryReader,
   estimateTurn,
+  lastToolResultFailed,
   markTurnStart,
   newestPromptChars,
   promptChars,
@@ -78,18 +79,48 @@ test("newestPromptChars reads the last user message, and startsTurn tells a fres
   assert.equal(startsTurn([user("hello"), assistant, tool, user("steer")]), false)
   assert.equal(startsTurn([user("hello"), assistant]), false)
   assert.equal(startsTurn([]), false)
+  // Told which calls are still parked: a tool result for one of them is a
+  // continuation, a tool result for none of them is the prompt after an
+  // interrupted turn, which starts one (h #g251).
+  assert.equal(startsTurn([user("hello"), assistant, tool, user("steer")], new Set(["t1"])), false)
+  assert.equal(startsTurn([user("hello"), assistant, tool, user("after the interrupt")], new Set(["t9"])), true)
+  assert.equal(startsTurn([user("hello"), assistant, tool, user("after the interrupt")], new Set()), true)
+  assert.equal(startsTurn([user("hello"), assistant, tool], new Set()), false, "no user message, no turn")
 })
 
-test("a turn's start is taken once, and the newest mark on a key wins", () => {
+test("lastToolResultFailed reads the newest tool result of this turn, past a steered message and never before the turn's start", () => {
+  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] })
+  const assistant = { role: "assistant", content: [{ type: "tool-call", toolCallId: "t", toolName: "bash", input: {} }] }
+  const result = (output: unknown) => ({ role: "tool", content: [{ type: "tool-result", toolCallId: "t", output }] })
+  const ok = result({ type: "text", value: "fine" })
+  const failed = result({ type: "error-text", value: "boom" })
+  assert.equal(lastToolResultFailed([user("go"), assistant, failed], 1), true)
+  assert.equal(lastToolResultFailed([user("go"), assistant, result({ type: "error-json", value: {} })], 1), true)
+  assert.equal(lastToolResultFailed([user("go"), assistant, result({ type: "execution-denied", reason: "no" })], 1), true)
+  assert.equal(lastToolResultFailed([user("go"), assistant, ok], 1), false)
+  // The newest result decides, and a steered message is looked past.
+  assert.equal(lastToolResultFailed([user("go"), assistant, failed, assistant, ok], 1), false)
+  assert.equal(lastToolResultFailed([user("go"), assistant, failed, user("steer")], 1), true)
+  // A tool message from before the turn started is not this turn's.
+  assert.equal(lastToolResultFailed([user("go"), assistant, failed, user("next")], 4), false)
+  // A plain-string output, a message with no results, and no tool message at all.
+  assert.equal(lastToolResultFailed([user("go"), assistant, result("text")], 1), false)
+  assert.equal(lastToolResultFailed([user("go"), assistant, { role: "tool", content: [] }], 1), false)
+  assert.equal(lastToolResultFailed([user("go"), assistant], 0), false)
+})
+
+test("a turn's start is taken once, the newest mark on a key wins, and it carries where the prompt stood", () => {
   _setTurnHistoryStorePathForTests(null)
   markTurnStart("key-a", 1_000, 42)
   markTurnStart("key-a", 2_000)
   assert.deepEqual(takeTurnStart("key-a"), { at: 2_000 })
   assert.equal(takeTurnStart("key-a"), undefined, "a second result in the same turn finds nothing")
   assert.equal(takeTurnStart("never-marked"), undefined)
+  markTurnStart("key-b", 3_000, 7, 5)
+  assert.deepEqual(takeTurnStart("key-b"), { at: 3_000, chars: 7, promptLength: 5 })
 })
 
-test("a sample round-trips with nothing but its five fields", () => {
+test("a sample round-trips with nothing but its six fields, and `failed` is written only when true", () => {
   const dir = scratch()
   try {
     assert.equal(
@@ -98,6 +129,7 @@ test("a sample round-trips with nothing but its five fields", () => {
         chars: 420,
         effort: "high",
         calls: 3.2,
+        failed: false,
         at: NOW,
         ...({ prompt: "secret", sessionKey: "/x" } as object),
       } as TurnSample),
@@ -106,11 +138,14 @@ test("a sample round-trips with nothing but its five fields", () => {
     const [entry] = onDisk().turns["build/claude-opus-5-5"]
     assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, at: NOW })
     assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms"])
+    assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 6_077, calls: 1, failed: true, at: NOW + 1 }), true)
+    assert.deepEqual(onDisk().turns["build/claude-opus-5-5"][1], { ms: 6_077, calls: 1, failed: true, at: NOW + 1 })
     // An unusable sample is not written, and says so.
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: -1, at: NOW }), false)
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, calls: -1, at: NOW }), false)
+    assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, at: NOW, ...({ failed: "yes" } as object) } as TurnSample), false)
     assert.equal(recordTurnSample("", { ms: 1, at: NOW }), false)
-    assert.equal(onDisk().turns["build/claude-opus-5-5"].length, 1)
+    assert.equal(onDisk().turns["build/claude-opus-5-5"].length, 2)
   } finally {
     _setTurnHistoryStorePathForTests(null)
     rmSync(dir, { recursive: true, force: true })
@@ -208,6 +243,13 @@ test("estimateTurn needs MIN_TURN_SAMPLES, conditions on the turns that outlaste
   // A negative elapsed is zero; an unusable sample does not count toward the minimum.
   assert.equal(estimateTurn(samples, { elapsedMs: -5 })?.fill, 0)
   assert.equal(estimateTurn([...samples.slice(0, 2), sample(Number.NaN)], { elapsedMs: 0 }), undefined)
+  // A turn that ended on a failed tool result neither counts toward the
+  // minimum nor moves the estimate (h #g251).
+  assert.equal(estimateTurn([...samples.slice(0, 2), sample(seconds(6), { failed: true })], { elapsedMs: 0 }), undefined)
+  assert.deepEqual(
+    estimateTurn([sample(seconds(6), { failed: true }), ...samples], { elapsedMs: seconds(10) }),
+    estimateTurn(samples, { elapsedMs: seconds(10) }),
+  )
 })
 
 test("the estimate weighs toward turns whose prompt was about this long", () => {
@@ -295,11 +337,25 @@ test("turnToolCalls counts the turn's tool calls since the message that started 
   assert.equal(turnToolCalls(prompt.slice(0, 5)), 0, "a fresh message has made none")
   assert.equal(turnToolCalls(prompt.slice(0, 7)), 2)
   assert.equal(turnToolCalls([]), 0)
+  // Told where the turn started (the prompt's length when it was marked), the
+  // count is from there: here the turn that started after the first reply,
+  // whose prompt ends in an interrupted call's result before the new message.
+  const interrupted = [
+    { role: "user", content: [{ type: "text", text: "earlier" }] },
+    { role: "assistant", content: [call] },
+    { role: "tool", content: [] },
+    { role: "user", content: [{ type: "text", text: "after the interrupt" }] },
+    { role: "assistant", content: [call, call] },
+    { role: "tool", content: [] },
+  ]
+  assert.equal(turnToolCalls(interrupted, 4), 2)
+  assert.equal(turnToolCalls(interrupted), 3, "without the start, the plain rule reads the tool message as a continuation")
+  assert.equal(turnToolCalls(interrupted, 40), 3, "a start past the prompt's end (a compaction between) falls back to the rule")
 })
 
 // The fake CLI is a shebang script made executable with chmod, which means
 // nothing on Windows (see .github/windows-skipped-tests.txt).
-test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort and its tool calls", { skip: process.platform === "win32" }, async () => {
+test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort, its tool calls, and that it ended on a failed one", { skip: process.platform === "win32" }, async () => {
   const dir = scratch()
   const savedHome = process.env.HOME
   const savedState = process.env.XDG_STATE_HOME
@@ -317,9 +373,10 @@ const session_id = "fake-turn-history"
 const emit = (m) => process.stdout.write(JSON.stringify(m) + "\\n")
 require("node:readline").createInterface({ input: process.stdin }).on("line", () => {
   emit({ type: "system", subtype: "init", session_id })
-  // One CLI-executed call, then the reply: the sample counts the call.
+  // One CLI-executed call the CLI refuses, then the reply: the sample counts
+  // the call and is marked failed, as the haiku child of h #g251 was.
   emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_read_1", name: "Read", input: { file_path: "/x" } }] } })
-  emit({ type: "user", session_id, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", content: "x" }] } })
+  emit({ type: "user", session_id, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", is_error: true, content: "Read is disabled for this session" }] } })
   emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }] } })
   setTimeout(() => {
     emit({ type: "result", subtype: "success", session_id, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } })
@@ -360,6 +417,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
     assert.equal(entry.chars, 11, "the prompt's length, the reminder block taken off")
     assert.equal(entry.effort, "high")
     assert.equal(entry.calls, 1, "the step's own CLI-executed call is counted")
+    assert.equal(entry.failed, true, "the CLI's own refusal of the call is the turn's last tool result")
     assert.ok(entry.at >= started)
   } finally {
     for (const active of snapshotActiveProcesses()) {

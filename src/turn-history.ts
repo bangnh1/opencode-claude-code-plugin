@@ -41,11 +41,13 @@
  *
  * ```json
  * { "version": 1, "turns": { "build/claude-opus-5-5": [
- *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "at": 1760000000000 } ] } }
+ *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "at": 1760000000000 },
+ *     { "ms": 6077, "chars": 279, "effort": "low", "calls": 1, "failed": true, "at": 1760000100000 } ] } }
  * ```
  *
- * A duration, a character count, an effort level, a tool-call count and a
- * time: no prompt text, no path, no session id, nothing secret. Same discipline as the spawn
+ * A duration, a character count, an effort level, a tool-call count, whether
+ * the turn ended on a failed tool result, and a time: no prompt text, no
+ * path, no session id, nothing secret. Same discipline as the spawn
  * record store (h #g234): merge-on-write so two opencode processes do not
  * erase each other, atomic rename, `0600` in the `0700` directory, bounded
  * at `MAX_TURN_SAMPLES` newest samples per key, `MAX_TURN_KEYS` keys and
@@ -68,6 +70,14 @@ export interface TurnSample {
   effort?: string
   /** Tool calls the turn made, counted as the TUI counts a turn's tool parts; absent on a sample from before 0.57.2. */
   calls?: number
+  /**
+   * The turn's last tool result was an error (the CLI's own refusal of a tool,
+   * or a proxied tool opencode reported as failed), so the turn ended on a
+   * failure opencode may have reported as the subagent failing. Its length
+   * says nothing about a served turn's, and the estimate skips it (h #g251).
+   * Written only when true.
+   */
+  failed?: boolean
   at: number
 }
 
@@ -157,38 +167,63 @@ export function newestPromptChars(prompt: readonly PromptMessageLike[]): number 
   return undefined
 }
 
+function toolResultParts(message: PromptMessageLike): Array<{ toolCallId?: unknown; output?: unknown }> {
+  if (!Array.isArray(message.content)) return []
+  return message.content.filter(
+    (part): part is { toolCallId?: unknown; output?: unknown } =>
+      !!part && typeof part === "object" && (part as { type?: unknown }).type === "tool-result",
+  )
+}
+
 /**
  * Whether a prompt STARTS a turn: it ends in a user message that does not
  * follow a tool result. A tool-result prompt continues the turn that made
  * the call, and so does a user message the host promoted beside one (h #g204).
+ *
+ * The exception is a tool result for no call this process is waiting on
+ * (h #g251): after an interrupted turn opencode's next prompt ends in the
+ * interrupted calls' results and then the operator's new message, which is a
+ * fresh turn, not a continuation. Given the ids of the proxied calls still
+ * parked, a trailing tool message that answers none of them starts the turn.
  */
-export function startsTurn(prompt: readonly PromptMessageLike[]): boolean {
+export function startsTurn(prompt: readonly PromptMessageLike[], pendingToolCallIds?: ReadonlySet<string>): boolean {
   const last = prompt[prompt.length - 1]
   if (!last || last.role !== "user") return false
   const before = prompt[prompt.length - 2]
-  return before === undefined || before.role !== "tool"
+  if (before === undefined || before.role !== "tool") return true
+  if (!pendingToolCallIds) return false
+  return toolResultParts(before).every((part) => typeof part.toolCallId !== "string" || !pendingToolCallIds.has(part.toolCallId))
 }
 
 /**
  * How many tool calls the turn a prompt continues has made so far: the
  * `tool-call` parts of the assistant messages since the message that started
- * it (the last user message not following a tool result, `startsTurn`'s
- * rule, so a message the host steered in mid-turn does not restart the
- * count). Every proxied and CLI-executed call the plugin emitted in an
- * earlier step is one of them, because opencode stores each as a tool part
- * and hands them back here; the step that sees the `result` adds its own
- * emitted calls, which are not in its prompt yet. That is the count the TUI
- * reads off the turn's tool parts (`measureProgress`), which is what lets the
+ * it. Every proxied and CLI-executed call the plugin emitted in an earlier
+ * step is one of them, because opencode stores each as a tool part and hands
+ * them back here; the step that sees the `result` adds its own emitted
+ * calls, which are not in its prompt yet. That is the count the TUI reads
+ * off the turn's tool parts (`measureProgress`), which is what lets the
  * estimate condition on it mid-turn (h #g250).
+ *
+ * Where the turn started is `from`, the prompt's length when `markTurnStart`
+ * ran, so the count agrees with the start that was marked (h #g251); without
+ * it, or with a prompt shorter than that (a compaction in between), the
+ * boundary is read back off the prompt by `startsTurn`'s plain rule, the
+ * last user message not following a tool result, so a message the host
+ * steered in mid-turn does not restart the count.
  */
-export function turnToolCalls(prompt: readonly PromptMessageLike[]): number {
+export function turnToolCalls(prompt: readonly PromptMessageLike[], from?: number): number {
   let start = 0
-  for (let index = prompt.length - 1; index >= 0; index -= 1) {
-    if (prompt[index].role !== "user") continue
-    const before = prompt[index - 1]
-    if (before === undefined || before.role !== "tool") {
-      start = index
-      break
+  if (from !== undefined && from >= 0 && from <= prompt.length) {
+    start = from
+  } else {
+    for (let index = prompt.length - 1; index >= 0; index -= 1) {
+      if (prompt[index].role !== "user") continue
+      const before = prompt[index - 1]
+      if (before === undefined || before.role !== "tool") {
+        start = index
+        break
+      }
     }
   }
   let calls = 0
@@ -202,12 +237,42 @@ export function turnToolCalls(prompt: readonly PromptMessageLike[]): number {
   return calls
 }
 
+/**
+ * Whether the turn's newest tool result in the prompt, the one the final
+ * step was answering, was an error: a proxied tool opencode ran and reported
+ * failed (`error-text`, `error-json`, `execution-denied`). Trailing user
+ * messages (a steered one) are looked past; a tool message from before the
+ * turn started (`from`) is not this turn's. The final step's own CLI-executed
+ * results are newer than anything here and are read off the stream instead.
+ */
+export function lastToolResultFailed(prompt: readonly PromptMessageLike[], from: number): boolean {
+  for (let index = prompt.length - 1; index >= Math.max(0, from); index -= 1) {
+    const message = prompt[index]
+    if (message.role === "user") continue
+    if (message.role !== "tool") return false
+    const parts = toolResultParts(message)
+    const newest = parts[parts.length - 1]
+    const output = newest?.output as { type?: unknown } | undefined
+    const type = output && typeof output === "object" ? output.type : undefined
+    return type === "error-text" || type === "error-json" || type === "execution-denied"
+  }
+  return false
+}
+
 // ---------------------------------------------------------------------------
 // When a turn started, held from its first step to its result
 // ---------------------------------------------------------------------------
 
 const MAX_TURN_STARTS = 256
-const turnStarts = new Map<string, { at: number; chars?: number }>()
+
+export interface TurnStart {
+  at: number
+  chars?: number
+  /** The prompt's length when the turn started: where `turnToolCalls` counts from. */
+  promptLength?: number
+}
+
+const turnStarts = new Map<string, TurnStart>()
 
 /**
  * Note that a turn on `key` started at `at`. A turn is a run of steps (every
@@ -216,17 +281,21 @@ const turnStarts = new Map<string, { at: number; chars?: number }>()
  * turn that never reaches a result leaves its start to be overwritten by
  * the key's next one.
  */
-export function markTurnStart(key: string, at: number, chars?: number): void {
+export function markTurnStart(key: string, at: number, chars?: number, promptLength?: number): void {
   turnStarts.delete(key)
   if (turnStarts.size >= MAX_TURN_STARTS) {
     const oldest = turnStarts.keys().next().value
     if (oldest !== undefined) turnStarts.delete(oldest)
   }
-  turnStarts.set(key, { at, ...(chars !== undefined ? { chars } : {}) })
+  turnStarts.set(key, {
+    at,
+    ...(chars !== undefined ? { chars } : {}),
+    ...(promptLength !== undefined ? { promptLength } : {}),
+  })
 }
 
 /** The start noted for `key`, once: a second `result` in the same turn finds nothing. */
-export function takeTurnStart(key: string): { at: number; chars?: number } | undefined {
+export function takeTurnStart(key: string): TurnStart | undefined {
   const start = turnStarts.get(key)
   turnStarts.delete(key)
   return start
@@ -248,6 +317,7 @@ function isSample(value: unknown): value is TurnSample {
   if (sample.calls !== undefined && (typeof sample.calls !== "number" || !Number.isFinite(sample.calls) || sample.calls < 0)) {
     return false
   }
+  if (sample.failed !== undefined && typeof sample.failed !== "boolean") return false
   return true
 }
 
@@ -257,6 +327,7 @@ function cleanSample(sample: TurnSample): TurnSample {
     ...(sample.chars !== undefined ? { chars: Math.round(sample.chars) } : {}),
     ...(sample.effort ? { effort: sample.effort } : {}),
     ...(sample.calls !== undefined ? { calls: Math.round(sample.calls) } : {}),
+    ...(sample.failed ? { failed: true } : {}),
     at: sample.at,
   }
 }
@@ -427,7 +498,7 @@ export function estimateTurn(
   samples: readonly TurnSample[],
   input: { elapsedMs: number; chars?: number; effort?: string; calls?: number },
 ): TurnEstimate | undefined {
-  const usable = samples.filter((sample) => Number.isFinite(sample.ms) && sample.ms >= 0)
+  const usable = samples.filter((sample) => Number.isFinite(sample.ms) && sample.ms >= 0 && !sample.failed)
   if (usable.length < MIN_TURN_SAMPLES) return undefined
   const elapsed = Math.max(0, input.elapsedMs)
   const charsWeights = usable.map((sample) => charsWeight(input.chars, sample.chars))

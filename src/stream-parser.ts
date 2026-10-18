@@ -1072,6 +1072,7 @@ export function createLineHandler(
               // tool was forwarded as a success whose output happened
               // to be an error message.
               const isError = block.is_error === true
+              state.lastCliToolResultError = isError
               state.controller.enqueue({
                 type: "tool-result",
                 toolCallId: block.tool_use_id,
