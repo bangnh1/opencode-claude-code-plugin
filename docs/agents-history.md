@@ -6767,6 +6767,8 @@ answered `latest: 0.54.2` with no version after it (Aikido's minimum-age
 filter), while the per-version documents carried both 0.57.x shasums and the
 `dist-tags` endpoint said `0.57.1`.
 
+**The count above was wrong; see (h #g252), which supersedes it: 17 more tags had no Release, all since backfilled.**
+
 ## The estimate conditions on the turn's tool calls, and effort is a measured ratio (2026-10-18)
 
 h #g250. The maintainer pasted a Google AI overview of how to predict an
@@ -6997,3 +6999,55 @@ refused call as failed, two calls' output off `message_delta`, its session's
 tag and the live record. `test/progress-line.test.ts`: `holdEstimate`,
 `estimateBandCells`, the band's roles, `floorByChildren`, `liveOutput`.
 `test/doctor.test.ts`: the section and its bundle.
+
+## Tags, npm and GitHub Releases compared one to one (2026-10-18)
+
+h #g252. After v0.58.0 the maintainer asked "so npm and tags are on par?". The
+answer was measured rather than recalled: every tag on origin (`git ls-remote
+--tags origin`, 145) against its npm version document, and against
+`gh release list --limit 1000 --json tagName`. The package document could not
+answer from this Mac: Aikido strips versions younger than its minimum age, and
+through both registry.npmjs.org and registry.yarnpkg.com it stopped at 0.54.2
+that day (h #g21).
+
+### npm
+
+142 of the 145 tags are on npm, v0.58.0 included, with `latest` on it and
+nothing newer (0.58.1, 0.59.0 and 1.0.0 answer 404), and no untagged patch
+sits after any version the package document hides (0.54.3, 0.55.1, 0.56.1 and
+0.57.3 answer 404 too). The three tags that are not on npm:
+
+- v0.6.0 and v0.6.1: their Publish runs failed at `Publish package` on
+  2026-05-29, the expired legacy `NPM_TOKEN` their Release notes describe;
+  v0.6.2 moved to trusted publishing the same day (h #g17).
+- v0.1.3: no Publish run exists for it, although `publish.yml` is in its tree.
+  Everything in it shipped in v0.1.4, tagged three minutes later.
+
+One npm version has no tag: 0.1.0, the package's first publish (15:42Z on
+2026-04-25), 22 minutes before the first tag. Nothing was withdrawn: every
+version in the package document's `time` is also in its `versions`.
+
+### GitHub Releases
+
+17 tags had no Release, every one of them on npm: v0.9.3 to v0.13.1 (nine),
+v0.21.0, v0.27.1, v0.27.2 and v0.41.0 to v0.42.3 (five). So (h #g249)'s
+"v0.57.0 was the lone omission" was wrong, and (h #g22)'s "lapsed after v0.9.2"
+had been right about where the gaps began. The h #g249 check read the span of
+`gh release list --limit 100`, v0.4.14 to v0.56.0, as complete; that span
+holds 115 tags and held 98 Releases. A list shows what is there, never what is
+missing: parity takes a diff of the two sets.
+
+The maintainer chose to backfill all 17 and to have the Releases of versions
+npm never got say so. Each backfill was created with `--latest=false` (the
+badge lesson in h #g249), with notes from the tag's first-parent commits
+(housekeeping commits left out), a compare link, and a line saying when the
+version reached npm. Contributors are named without `@`, so seventeen new
+Releases did not ping them at once. v0.1.3 gained the not-published note;
+v0.6.0 and v0.6.1 already had one, but their bodies held literal `\n`
+sequences instead of line breaks and rendered as one line, which was fixed.
+After: 145 tags, 145 Releases, none missing either way, v0.58.0 still Latest.
+
+Also found: two local tags, `v0.36.4-internetisalie.2` and `.3`, annotated
+tags fetched with the `fork-internetisalie` remote during a fork sweep.
+Neither is on origin or reachable from master, so the release flow's
+`--follow-tags` cannot push them; `git push --tags` would.

@@ -223,6 +223,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   in its band 33% of the time against the explore keys' 67%, because the calibration pools every key's errors, so
   a per-key calibration is the first candidate; the mid-turn conditions (calls, output, the floor) are not measured
   by the section, which assesses each turn at its start.
+  Then (2026-10-18) "so npm and tags are on par?": npm yes, every tag from v0.6.2 on and v0.58.0 as `latest` (v0.1.3,
+  v0.6.0 and v0.6.1 never reached npm; npm's first publish, 0.1.0, has no tag). GitHub Releases no: 17 tags had none
+  (v0.9.3 to v0.13.1, v0.21.0, v0.27.1, v0.27.2, v0.41.0 to v0.42.3), so the "lone omission" above was wrong, a list's
+  span read as a diff. The form was answered "Backfill all 17" and "Add a note": all 17 were created with
+  `--latest=false`, v0.1.3's Release got a not-published note, and v0.6.0/v0.6.1's literal `\n` line breaks were fixed.
+  Now 145 tags, 145 Releases, v0.58.0 still Latest (h #g252).
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
