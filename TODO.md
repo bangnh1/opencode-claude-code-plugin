@@ -96,6 +96,11 @@ Only decisions about this plugin belong here. Items about the global opencode co
 `opencode/Open items.md`; they were recorded here only because the sessions that raised
 them ran in this directory.
 
+- 2026-10-18: the sidebar's notation for a reset on another day: `2026-10-18 01:20`, the usage-limit
+  note's own, as shipped in v0.57.0, or `18/10/2026 01:20`. Maintainer: "not sure". Stays as shipped
+  until they decide; the note (`formatLocalMinute`) and the sidebar (`formatResetClock`) would change
+  together, so it is one decision, not two.
+
 ## Open from you
 
 
@@ -113,15 +118,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
   three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it.
-
-- 2026-10-17: `/tmp/pl-rig`, the scratch PTY rig (fake `claude`, `@xterm/headless` in its own
-  `node_modules`, the captured sidebar logs). Nothing in the repo refers to it. Waiting on: delete now /
-  later / keep.
-
-- 2026-10-17: `~/.config/opencode/tui.json` now carries
-  `"plugin": ["file:///Users/khalil/code/Private/opencode-claude-code-plugin"]`, added so the TUI half could
-  be tested in the maintainer's pane. On 1.x that line is the only way the sidebar sections load, so it stays
-  for daily use unless the maintainer wants the sections gone. Waiting on: keep / remove.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -199,7 +195,10 @@ raised, so they survive context compaction; removed when answered, done or dropp
   (an under-threshold level now takes the success colour at full strength, shipped as v0.57.1), "tag the release also
   on github next time" (now a rule in AGENTS.md, h #g249, first applied to v0.57.1) and "i think thats it for this
   feature right?": yes; what stays open is the estimate revisit in the Future Features note and the `startsTurn`
-  candidate above.
+  candidate above. Then (2026-10-18) "1,2,3,4 yes if needed? 5 not sure": v0.57.0 got its GitHub Release
+  backfilled, the merged `progress-line` branch was deleted locally and on origin, `/tmp/pl-rig` was removed,
+  the `tui.json` plugin line stays (on 1.x it is the only thing that loads the TUI half), and the reset
+  notation is under Deferred decisions.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
