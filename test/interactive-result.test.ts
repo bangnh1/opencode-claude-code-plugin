@@ -19,7 +19,7 @@ import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { test } from "node:test"
+import { after, test } from "node:test"
 import { ClaudeSession, encodeCwd } from "../src/claude-session-bun.js"
 import { spawnInteractiveProcess } from "../src/claude-session-wrapper.js"
 import { describeResultFailure } from "../src/cli-events.js"
@@ -181,9 +181,16 @@ test("a failed turn stays an error result", async () => {
 // Bug 2: the transcript dir name follows the cwd's REAL path.
 // ---------------------------------------------------------------------------
 
+/** Every scratch dir the tests below make, removed once this file's tests are done. */
+const scratchDirs: string[] = []
+after(() => {
+  for (const dir of scratchDirs) fs.rmSync(dir, { recursive: true, force: true })
+})
+
 /** A scratch dir under the OS tmpdir, plus a symlink pointing at it. */
 function scratchWithSymlink(): { target: string; link: string } {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "cc-encodecwd-"))
+  scratchDirs.push(base)
   const target = path.join(base, "target")
   const link = path.join(base, "alias")
   fs.mkdirSync(target)
@@ -208,6 +215,7 @@ test("encodeCwd names the /tmp symlink's real path on macOS", () => {
   // /tmp/cc-probe-endturn wrote ~/.claude/projects/-private-tmp-cc-probe-endturn.
   // `path.resolve` alone produced `-tmp-...`, a directory the CLI never writes.
   const dir = fs.mkdtempSync(path.join("/tmp", "cc-encodecwd-tmp-"))
+  scratchDirs.push(dir)
   const encoded = encodeCwd(dir)
   assert.ok(
     encoded.startsWith("-private-tmp-"),
