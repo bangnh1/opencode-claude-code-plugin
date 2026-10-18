@@ -1704,10 +1704,17 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       // like the process, for the step that sees the `result`. A tool-result
       // step continues the turn and marks nothing, unless its results answer
       // no parked call, which is the prompt after an interrupted turn
-      // (h #g251). The prompt's length is where the turn's calls count from.
+      // (h #g251). The prompt's length is where the turn's calls count from,
+      // and the session's tag is where its output so far is written as each
+      // API call ends, for the TUI's live estimate.
       const parked = new Set(getPendingProxyCalls(sk).map((call) => call.toolCallId))
       if (startsTurn(options.prompt, parked)) {
-        markTurnStart(sk, turnStartedAt, newestPromptChars(options.prompt), options.prompt.length)
+        markTurnStart(sk, {
+          at: turnStartedAt,
+          chars: newestPromptChars(options.prompt),
+          promptLength: options.prompt.length,
+          session: sessionTag(affinity),
+        })
       }
     }
 
@@ -3935,6 +3942,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 // parts (h #g250): the earlier steps' from the prompt, this
                 // step's own from what it emitted.
                 calls: turnToolCalls(options.prompt, start.promptLength) + state.toolCallEmittedIds.size,
+                // The output its API calls generated, summed as the live
+                // channel wrote it, so a running turn is compared with the
+                // record in the same unit (h #g251).
+                out: start.out,
                 // A turn whose newest tool result was an error ended on a
                 // failure (h #g251): this step's own CLI-executed results
                 // are newer than the prompt's, so they answer first.

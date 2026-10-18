@@ -53,14 +53,20 @@
  * as the turn outlasts more of the record instead of the bar sitting full;
  * past the key's longest recorded turn the estimate is `over`, the bar is
  * full in the warning colour and the total shown is the usual one. The
- * turn's tool calls so far narrow the record the same way (h #g250): the fit
- * is redone over the recorded turns that made at least as many, shrunk
- * toward the unconditioned fit with `CONDITIONED_KAPPA` pseudo-turns, fewer
- * than the levels above use, because that prior is known to run short for
- * them: it holds the turns that ended sooner. A cut that would leave no turn
- * is not applied, so a turn on its fifth call on a key whose record stops at
- * four is still estimated from time rather than declared over at ten
- * seconds, which the h #g250 version did.
+ * turn's progress so far narrows the record the same way: its tool calls
+ * (h #g250), which the TUI counts off opencode's store, and the output
+ * tokens its finished API calls have generated, which only the server half
+ * can see and writes to a live channel as each call ends
+ * (`src/turn-progress-store.ts`). The fit is redone over the recorded turns
+ * that did at least as much of both, shrunk toward the unconditioned fit
+ * with `CONDITIONED_KAPPA` pseudo-turns, fewer than the levels above use,
+ * because that prior is known to run short for them: it holds the turns that
+ * ended sooner. Output is compared only between turns at the same effort,
+ * because effort is mostly how much a turn thinks, so a `low` turn's whole
+ * output can be less than a `high` one's first call. A cut that would leave
+ * no turn is not applied, so a turn on its fifth call on a key whose record
+ * stops at four is still estimated from time rather than declared over at
+ * ten seconds, which the h #g250 version did.
  *
  * **Calibration.** C is not the normal curve but the distribution of the
  * model's own standardized errors: every recorded turn estimated from the
@@ -81,9 +87,10 @@
  * (`assess`).
  *
  * What is NOT read: no model call, nothing from the prompt but its length,
- * no token count the finish must not report (h #g169). A turn that ended on
- * a failed tool result is skipped: its length says nothing about a served
- * turn's.
+ * and no token count from a finish, whose mid-turn usage stays zeros on
+ * purpose (h #g169, h #g225): the output count comes through its own file.
+ * A turn that ended on a failed tool result is skipped: its length says
+ * nothing about a served turn's.
  */
 import type { TurnHistory, TurnSample } from "./turn-history.js"
 
@@ -149,6 +156,8 @@ export interface TurnEstimateInput {
   effort?: string
   /** Tool calls the turn has made so far. */
   calls?: number
+  /** Output tokens the turn's finished API calls have generated so far (the live channel). */
+  out?: number
   /** The session's tag (`sessionTag`), so its own earlier turns weigh as the session level. */
   session?: string
   /** The clock the recency weights are read against; the model's build time by default. */
@@ -260,6 +269,9 @@ interface Prepared {
   y: number
   weight: number
   calls?: number
+  out?: number
+  /** Recorded at this turn's effort, or either effort unknown: its output count is comparable. */
+  sameEffort: boolean
   session?: string
 }
 
@@ -279,6 +291,8 @@ function prepare(samples: readonly TurnSample[], input: { chars?: number; effort
       y: Math.log(Math.max(1, ms)),
       weight: base[index] * effortWeight(input.effort, sample.effort),
       calls: sample.calls,
+      out: sample.out,
+      sameEffort: input.effort === undefined || sample.effort === undefined || input.effort === sample.effort,
       session: sample.session,
     }
   })
@@ -374,7 +388,11 @@ interface KeyFit {
   maxMs: number
 }
 
-function fitKey(own: readonly Prepared[], pool: Pool, input: { calls?: number; session?: string }): KeyFit | undefined {
+function fitKey(
+  own: readonly Prepared[],
+  pool: Pool,
+  input: { calls?: number; out?: number; session?: string },
+): KeyFit | undefined {
   if (own.length + pool.count < MIN_TURN_SAMPLES) return undefined
   const poolPull = pool.fit ? (SHRINKAGE_KAPPA * pool.n) / (pool.n + SHRINKAGE_KAPPA) : SHRINKAGE_KAPPA
   const key = shrink(moments(own), pool.fit, SHRINKAGE_KAPPA, poolPull)
@@ -383,9 +401,17 @@ function fitKey(own: readonly Prepared[], pool: Pool, input: { calls?: number; s
   // by the same rule the key is shrunk toward its pool.
   const mine = input.session === undefined ? [] : own.filter((sample) => sample.session === input.session)
   const usual = mine.length > 0 ? (shrink(moments(mine), key) ?? key) : key
+  // The turn's progress so far: a recorded turn that made fewer calls, or
+  // generated less output at this effort, ended before this one could.
+  const calls = input.calls !== undefined && input.calls > 0 ? input.calls : undefined
+  const out = input.out !== undefined && input.out > 0 ? input.out : undefined
   let fit = usual
-  if (input.calls !== undefined && input.calls > 0) {
-    const kept = own.filter((sample) => sample.calls === undefined || sample.calls >= input.calls!)
+  if (calls !== undefined || out !== undefined) {
+    const kept = own.filter(
+      (sample) =>
+        (calls === undefined || sample.calls === undefined || sample.calls >= calls) &&
+        (out === undefined || sample.out === undefined || !sample.sameEffort || sample.out >= out),
+    )
     if (kept.length < own.length && kept.length >= MIN_CONDITIONED_SAMPLES) {
       fit = shrink(moments(kept), usual, CONDITIONED_KAPPA) ?? usual
     }

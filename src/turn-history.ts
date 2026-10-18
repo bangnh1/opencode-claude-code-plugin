@@ -11,14 +11,17 @@
  *
  * ```json
  * { "version": 1, "turns": { "build/claude-opus-5-5": [
- *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "session": "5c1d0f3a", "at": 1760000000000 },
+ *     { "ms": 61230, "chars": 420, "effort": "high", "calls": 3, "out": 5321, "session": "5c1d0f3a", "at": 1760000000000 },
  *     { "ms": 6077, "chars": 279, "effort": "low", "calls": 1, "failed": true, "at": 1760000100000 } ] } }
  * ```
  *
- * A duration, a character count, an effort level, a tool-call count, whether
- * the turn ended on a failed tool result, a short tag of the conversation it
- * ran in, and a time: no prompt text, no path, no session id, nothing
- * secret. The tag is a 32-bit hash of the opencode session id (`sessionTag`),
+ * A duration, a character count, an effort level, a tool-call count, the
+ * output tokens its API calls generated, whether the turn ended on a failed
+ * tool result, a short tag of the conversation it ran in, and a time: no
+ * prompt text, no path, no session id, nothing secret. The output count is
+ * the sum the live channel (`src/turn-progress-store.ts`) wrote as the turn
+ * ran, so the record and the running turn count it the same way. The tag is
+ * a 32-bit hash of the opencode session id (`sessionTag`),
  * enough for the estimate to tell this conversation's turns from another's
  * and not the id. Same discipline as the spawn record store (h #g234):
  * merge-on-write so two opencode processes do not erase each other, atomic
@@ -35,6 +38,8 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "no
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+import { recordTurnProgress } from "./turn-progress-store.js"
+
 export interface TurnSample {
   /** How long the turn took, from the prompt reaching the provider to the CLI's `result`. */
   ms: number
@@ -43,6 +48,12 @@ export interface TurnSample {
   effort?: string
   /** Tool calls the turn made, counted as the TUI counts a turn's tool parts; absent on a sample from before 0.57.2. */
   calls?: number
+  /**
+   * Output tokens the turn's API calls generated, summed off each call's
+   * `message_delta`; absent on a sample from before 0.58.0 and on a turn the
+   * stream carried no `message_delta` for (the interactive transport's).
+   */
+  out?: number
   /**
    * The turn's last tool result was an error (the CLI's own refusal of a tool,
    * or a proxied tool opencode reported as failed), so the turn ended on a
@@ -259,28 +270,49 @@ export interface TurnStart {
   chars?: number
   /** The prompt's length when the turn started: where `turnToolCalls` counts from. */
   promptLength?: number
+  /** The session's tag (`sessionTag`): where the live channel writes this turn's progress. */
+  session?: string
+  /** Output tokens the turn's API calls have generated so far; absent until the first call ends. */
+  out?: number
 }
 
 const turnStarts = new Map<string, TurnStart>()
 
 /**
- * Note that a turn on `key` started at `at`. A turn is a run of steps (every
- * proxied tool call ends one), and only its last step sees the `result`, so
- * the start waits here, keyed like the process, until `takeTurnStart`. A
- * turn that never reaches a result leaves its start to be overwritten by
+ * Note that a turn on `key` started. A turn is a run of steps (every proxied
+ * tool call ends one), and only its last step sees the `result`, so the
+ * start waits here, keyed like the process, until `takeTurnStart`; the
+ * output its calls generate is added to it as they end (`noteTurnOutput`).
+ * A turn that never reaches a result leaves its start to be overwritten by
  * the key's next one.
  */
-export function markTurnStart(key: string, at: number, chars?: number, promptLength?: number): void {
+export function markTurnStart(key: string, start: TurnStart): void {
   turnStarts.delete(key)
   if (turnStarts.size >= MAX_TURN_STARTS) {
     const oldest = turnStarts.keys().next().value
     if (oldest !== undefined) turnStarts.delete(oldest)
   }
   turnStarts.set(key, {
-    at,
-    ...(chars !== undefined ? { chars } : {}),
-    ...(promptLength !== undefined ? { promptLength } : {}),
+    at: start.at,
+    ...(start.chars !== undefined ? { chars: start.chars } : {}),
+    ...(start.promptLength !== undefined ? { promptLength: start.promptLength } : {}),
+    ...(start.session !== undefined ? { session: start.session } : {}),
   })
+}
+
+/**
+ * One API call of the turn on `key` ended, having generated `tokens` output
+ * tokens (its `message_delta`'s count, the real one): add them to the turn's
+ * total and write the total to the live channel, where the TUI reads it
+ * while the turn runs (h #g251). A key with no turn marked (a compaction, a
+ * turn opencode did not tag with a session) is not one the sidebar shows,
+ * and nothing is written.
+ */
+export function noteTurnOutput(key: string, tokens: number, now: number = Date.now()): void {
+  const start = turnStarts.get(key)
+  if (!start || !Number.isFinite(tokens) || tokens < 0) return
+  start.out = (start.out ?? 0) + tokens
+  if (start.session) recordTurnProgress(start.session, { turn: start.at, out: start.out }, now)
 }
 
 /** The start noted for `key`, once: a second `result` in the same turn finds nothing. */
@@ -306,6 +338,9 @@ function isSample(value: unknown): value is TurnSample {
   if (sample.calls !== undefined && (typeof sample.calls !== "number" || !Number.isFinite(sample.calls) || sample.calls < 0)) {
     return false
   }
+  if (sample.out !== undefined && (typeof sample.out !== "number" || !Number.isFinite(sample.out) || sample.out < 0)) {
+    return false
+  }
   if (sample.failed !== undefined && typeof sample.failed !== "boolean") return false
   if (sample.session !== undefined && (typeof sample.session !== "string" || !SESSION_TAG.test(sample.session))) {
     return false
@@ -319,6 +354,7 @@ function cleanSample(sample: TurnSample): TurnSample {
     ...(sample.chars !== undefined ? { chars: Math.round(sample.chars) } : {}),
     ...(sample.effort ? { effort: sample.effort } : {}),
     ...(sample.calls !== undefined ? { calls: Math.round(sample.calls) } : {}),
+    ...(sample.out !== undefined ? { out: Math.round(sample.out) } : {}),
     ...(sample.failed ? { failed: true } : {}),
     ...(sample.session ? { session: sample.session } : {}),
     at: sample.at,

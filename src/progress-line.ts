@@ -31,9 +31,10 @@
  *         ▰▰▰▰▰▰▱▱▱▱      sure ▰▰▰▰ · likely ▰▰ · band ▱▱ · track ▱▱
  *
  *     Nothing on the bar ever steps back within a turn (`createFillMemory`),
- *     though the total it is drawn against can rise. Past every recorded
- *     turn it is full in the warning colour and the total shown is the
- *     usual one.
+ *     though the total it is drawn against can rise, which it does while a
+ *     foreground subagent has longer left than the session's own estimate
+ *     (`floorByChildren`). Past every recorded turn it is full in the
+ *     warning colour and the total shown is the usual one.
  *   - Else there is no bar: the spinner says the session works, and a bar
  *     that could not fill would say nothing the spinner does not.
  *   - The rest is the turn's own record: elapsed since the last user message
@@ -367,6 +368,78 @@ export function estimateBandCells(estimate: TurnEstimate, width: number = BAR_WI
   const sure = Math.min(likely, Math.max(0, Math.round(estimate.band.sure * width)))
   const band = Math.max(likely, Math.min(width, Math.round(estimate.band.maybe * width)))
   return { sure, likely, band }
+}
+
+/** How far before the TUI's own start of a turn the server half may have marked it. */
+export const TURN_PROGRESS_SLACK_MS = 1_000
+
+/**
+ * The output a running turn has generated so far, from the live channel's
+ * record for its session (`src/turn-progress-store.ts`, h #g251), or
+ * undefined when the record is an earlier turn's. The server half marks a
+ * turn when opencode asks it for the reply, which is after the message that
+ * started the turn was stored, so this turn's record started no earlier
+ * than the TUI's start of it, less a little slack. A message steered in
+ * mid-turn restarts the TUI's turn and not the server's, so the record's
+ * count, which runs from the server's start, is not read against it. A turn
+ * the TUI dates from no message has nothing to check against and reads
+ * nothing.
+ */
+export function liveOutput(record: { turn: number; out: number } | undefined, startedAt: number | undefined): number | undefined {
+  if (!record || startedAt === undefined) return undefined
+  return record.turn >= startedAt - TURN_PROGRESS_SLACK_MS ? record.out : undefined
+}
+
+/**
+ * A turn parked in a foreground subagent cannot end before the subagent does
+ * (h #g251), because its `task` call returns the child's answer. So each
+ * running foreground child's remaining time, read off the child's own
+ * estimate, floors the parent's: the total at least the parent's elapsed
+ * plus the child's remaining median, each edge of the band at least the
+ * elapsed plus the child's remaining edge. A `task_batch` waits for every
+ * child it started, so the longest of each wins. The parent's record already
+ * holds the time its turns usually spend in children, so the floor only
+ * moves an estimate that a child is visibly outlasting.
+ *
+ * A child past its own record (`over`) has no remaining time to offer and
+ * floors nothing, and an `over` parent stays over: it is past every recorded
+ * turn of its own. The host applies this before the fill memory's hold, so a
+ * rising floor lowers nothing on the bar.
+ */
+export function floorByChildren(estimate: TurnEstimate, elapsedMs: number, children: readonly ProgressView[]): TurnEstimate {
+  if (estimate.over) return estimate
+  let median = 0
+  let low = 0
+  let high = 0
+  for (const child of children) {
+    const own = child.estimate
+    if (child.state !== "running" || !own || own.over) continue
+    const left = (ms: number) => Math.max(0, ms - child.elapsedMs)
+    median = Math.max(median, left(own.totalMs))
+    low = Math.max(low, left(own.band?.lowMs ?? own.totalMs))
+    high = Math.max(high, left(own.band?.highMs ?? own.totalMs))
+  }
+  const elapsed = Math.max(0, elapsedMs)
+  const totalMs = Math.max(estimate.totalMs, elapsed + median)
+  const band = estimate.band
+  if (totalMs === estimate.totalMs && (!band || (band.lowMs >= elapsed + low && band.highMs >= elapsed + high))) {
+    return estimate
+  }
+  const fill = totalMs > 0 ? elapsed / totalMs : 0
+  if (!band) return { ...estimate, totalMs, fill }
+  const lowMs = Math.min(totalMs, Math.max(band.lowMs, elapsed + low))
+  const highMs = Math.max(totalMs, band.highMs, elapsed + high)
+  return {
+    ...estimate,
+    totalMs,
+    fill,
+    band: {
+      lowMs,
+      highMs,
+      sure: highMs > 0 ? elapsed / highMs : 0,
+      maybe: lowMs > 0 ? Math.min(1, elapsed / lowMs) : 0,
+    },
+  }
 }
 
 /** `12s`, `1m03s`, `1h02m`. */

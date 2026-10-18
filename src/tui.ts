@@ -63,7 +63,9 @@ import {
 import {
   createFillMemory,
   createStatusWatch,
+  floorByChildren,
   layoutProgressLine,
+  liveOutput,
   measureProgress,
   rowProgress,
   sessionProgress,
@@ -77,6 +79,7 @@ import {
 import { createSpawnRecordReader, type SpawnRecord } from "./spawn-record-store.js"
 import { createTurnHistoryReader, promptChars, sessionTag, turnHistoryKey, type TurnHistory } from "./turn-history.js"
 import { buildTurnModel, type TurnModel } from "./turn-model.js"
+import { createTurnProgressReader, type TurnProgress } from "./turn-progress-store.js"
 import { createAccountUsageReader, type AccountUsage, type KnownAccounts } from "./account-usage.js"
 import { accountUsageLines, type AccountUsageLine } from "./account-sidebar.js"
 
@@ -238,6 +241,11 @@ function createSidebar(host: SidebarHost) {
   // per change to it because that is when its calibration is fitted, then
   // read once per line per tick.
   let turnModel: TurnModel | undefined = attempt(() => buildTurnModel(historyMap), undefined)
+  // What each running turn has generated so far, which only the server half
+  // sees: it writes the total as each API call ends (h #g251). Read on the
+  // second hand like the others; the clock re-derives the lines.
+  const liveProgress = createTurnProgressReader()
+  let progressMap: Map<string, TurnProgress> = attempt(() => liveProgress.read(), new Map())
   const [recordVersion, setRecordVersion] = createSignal(0)
   // What the TUI itself remembers about each session's status (h #g246): when
   // it first saw a run and when it saw the stop, for the one line whose turn
@@ -278,6 +286,7 @@ function createSidebar(host: SidebarHost) {
         historyMap = nextHistory
         setRecordVersion((value) => value + 1)
       }
+      progressMap = attempt(() => liveProgress.read(), progressMap)
       setNow(Date.now())
     }
     // The reader hands back the same map while the file is unchanged, and
@@ -317,31 +326,36 @@ function createSidebar(host: SidebarHost) {
    * A running line's estimate (h #g247, h #g250, h #g251): the session's
    * recorded agent and model name the key, the turn's prompt length and the
    * effort weight its record, the session's own earlier turns are its
-   * session level, its tool calls so far condition it beside the elapsed,
-   * and the fill and the band are held so nothing on the bar steps back
-   * within the turn. No spawn record, or too little record for the key and
-   * its agent's other models, is no estimate, and the line then draws no bar.
+   * session level, its tool calls and the output the server half saw it
+   * generate condition it beside the elapsed, its running foreground
+   * subagents floor it, and the fill and the band are held so nothing on the
+   * bar steps back within the turn. No spawn record, or too little record
+   * for the key and its agent's other models, is no estimate, and the line
+   * then draws no bar.
    */
   const estimateFor = (
     sessionID: string,
     measure: ProgressMeasure,
     view: ProgressView,
     agentFallback?: string,
+    children: readonly ProgressView[] = [],
   ): ProgressView => {
     if (view.state !== "running" || !turnModel) return view
     const record = recordMap.get(sessionID)
     if (!record?.model) return view
+    const tag = sessionTag(sessionID)
     const estimate = turnModel.estimate(turnHistoryKey(record.agent ?? agentFallback, record.model), {
       elapsedMs: view.elapsedMs,
       chars: measure.chars,
       effort: record.effort,
       calls: measure.calls,
-      session: sessionTag(sessionID),
+      out: liveOutput(tag ? progressMap.get(tag) : undefined, measure.startedAt),
+      session: tag,
       now: Date.now(),
     })
     if (!estimate) return view
     const turn = measure.startedAt ?? 0
-    return { ...view, estimate: fills.holdEstimate(sessionID, turn, estimate) }
+    return { ...view, estimate: fills.holdEstimate(sessionID, turn, floorByChildren(estimate, view.elapsedMs, children)) }
   }
 
   const deriveView = (sessionID: string): SidebarView => {
@@ -358,11 +372,15 @@ function createSidebar(host: SidebarHost) {
       now: clock,
     })
     const lines = new Map<string, ProgressView>()
+    // The running foreground children's lines: the session's turn waits in
+    // their `task` calls, so it cannot end before they do.
+    const waitedOn: ProgressView[] = []
     for (const row of rows) {
       if (row.state !== "running" || !row.sessionID) continue
       const measure = measureProgress(progressOf(row.sessionID))
-      const line = rowProgress(measure, { started: row.started, now: clock })
-      lines.set(row.sessionID, estimateFor(row.sessionID, measure, line, row.agent))
+      const line = estimateFor(row.sessionID, measure, rowProgress(measure, { started: row.started, now: clock }), row.agent)
+      lines.set(row.sessionID, line)
+      if (!row.background) waitedOn.push(line)
     }
     const status = gathered.status(sessionID)
     const memory = watch.observe(sessionID, status, clock)
@@ -373,7 +391,7 @@ function createSidebar(host: SidebarHost) {
       stoppedAt: gathered.stoppedAt(sessionID) ?? memory.stoppedAt,
       now: clock,
     })
-    const progress = session ? estimateFor(sessionID, measure, session) : undefined
+    const progress = session ? estimateFor(sessionID, measure, session, undefined, waitedOn) : undefined
     return { rows, lines, progress }
   }
 

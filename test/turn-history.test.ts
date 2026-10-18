@@ -3,9 +3,11 @@
  * h #g251): the store's round trip, bounds and discipline; the counts both
  * halves share (the prompt's length, the turn's tool calls, where a turn
  * starts, whether it ended on a failed tool, the session tag); the
- * turn-start registry; and a real `doStream` through a fake CLI writing one
- * sample keyed on the agent and model it spawned. The estimate itself is
- * `test/turn-model.test.ts`.
+ * turn-start registry and the output each API call adds to it and to the
+ * live channel; and a real `doStream` through a fake CLI writing one sample
+ * keyed on the agent and model it spawned. The estimate itself is
+ * `test/turn-model.test.ts`, the channel's store
+ * `test/turn-progress-store.test.ts`.
  */
 import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -22,6 +24,7 @@ import {
   lastToolResultFailed,
   markTurnStart,
   newestPromptChars,
+  noteTurnOutput,
   promptChars,
   recordTurnSample,
   sessionTag,
@@ -32,6 +35,7 @@ import {
   turnToolCalls,
   type TurnSample,
 } from "../src/turn-history.js"
+import { _setTurnProgressStorePathForTests } from "../src/turn-progress-store.js"
 
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), "opencode-turn-history-"))
@@ -123,16 +127,43 @@ test("lastToolResultFailed reads the newest tool result of this turn, past a ste
 
 test("a turn's start is taken once, the newest mark on a key wins, and it carries where the prompt stood", () => {
   _setTurnHistoryStorePathForTests(null)
-  markTurnStart("key-a", 1_000, 42)
-  markTurnStart("key-a", 2_000)
+  markTurnStart("key-a", { at: 1_000, chars: 42 })
+  markTurnStart("key-a", { at: 2_000 })
   assert.deepEqual(takeTurnStart("key-a"), { at: 2_000 })
   assert.equal(takeTurnStart("key-a"), undefined, "a second result in the same turn finds nothing")
   assert.equal(takeTurnStart("never-marked"), undefined)
-  markTurnStart("key-b", 3_000, 7, 5)
-  assert.deepEqual(takeTurnStart("key-b"), { at: 3_000, chars: 7, promptLength: 5 })
+  markTurnStart("key-b", { at: 3_000, chars: 7, promptLength: 5, ...({ out: 99 } as object) })
+  assert.deepEqual(takeTurnStart("key-b"), { at: 3_000, chars: 7, promptLength: 5 }, "a new turn starts with no output")
 })
 
-test("a sample round-trips with nothing but its seven fields, `failed` is written only when true, and a session is only ever a tag", () => {
+test("each API call's output is added to the turn and written to the live channel under the session's tag", () => {
+  const dir = scratch()
+  const channel = join(dir, "state", "turn-progress.json")
+  _setTurnProgressStorePathForTests(channel)
+  try {
+    const tag = sessionTag("ses_live")!
+    markTurnStart("key-live", { at: NOW, session: tag })
+    noteTurnOutput("key-live", 41, NOW + 1_000)
+    assert.deepEqual(JSON.parse(readFileSync(channel, "utf8")).turns[tag], { turn: NOW, out: 41, at: NOW + 1_000 })
+    noteTurnOutput("key-live", 959, NOW + 2_000)
+    assert.deepEqual(JSON.parse(readFileSync(channel, "utf8")).turns[tag], { turn: NOW, out: 1_000, at: NOW + 2_000 })
+    assert.equal(takeTurnStart("key-live")?.out, 1_000, "the sample is given the same total")
+    // No turn marked (a compaction, a `default` affinity), no session to write
+    // under, or an unusable count: nothing changes.
+    noteTurnOutput("never-marked", 5, NOW + 3_000)
+    markTurnStart("key-untagged", { at: NOW })
+    noteTurnOutput("key-untagged", 5, NOW + 3_000)
+    noteTurnOutput("key-untagged", Number.NaN, NOW + 3_000)
+    assert.equal(takeTurnStart("key-untagged")?.out, 5)
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(channel, "utf8")).turns), [tag])
+  } finally {
+    _setTurnProgressStorePathForTests(null)
+    _setTurnHistoryStorePathForTests(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a sample round-trips with nothing but its eight fields, `failed` is written only when true, and a session is only ever a tag", () => {
   const dir = scratch()
   try {
     const tag = sessionTag("ses_round_trip")!
@@ -142,6 +173,7 @@ test("a sample round-trips with nothing but its seven fields, `failed` is writte
         chars: 420,
         effort: "high",
         calls: 3.2,
+        out: 5_321.4,
         failed: false,
         session: tag,
         at: NOW,
@@ -150,8 +182,9 @@ test("a sample round-trips with nothing but its seven fields, `failed` is writte
       true,
     )
     const [entry] = onDisk().turns["build/claude-opus-5-5"]
-    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, session: tag, at: NOW })
-    assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms", "session"])
+    assert.deepEqual(entry, { ms: 61_230, chars: 420, effort: "high", calls: 3, out: 5_321, session: tag, at: NOW })
+    assert.deepEqual(Object.keys(entry).sort(), ["at", "calls", "chars", "effort", "ms", "out", "session"])
+    assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 1, out: -1, at: NOW }), false)
     assert.equal(recordTurnSample("build/claude-opus-5-5", { ms: 6_077, calls: 1, failed: true, at: NOW + 1 }), true)
     assert.deepEqual(onDisk().turns["build/claude-opus-5-5"][1], { ms: 6_077, calls: 1, failed: true, at: NOW + 1 })
     // An unusable sample is not written, and says so.
@@ -269,7 +302,7 @@ test("turnToolCalls counts the turn's tool calls since the message that started 
 
 // The fake CLI is a shebang script made executable with chmod, which means
 // nothing on Windows (see .github/windows-skipped-tests.txt).
-test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort, its tool calls, that it ended on a failed one, and its session's tag", { skip: process.platform === "win32" }, async () => {
+test("a real turn records its duration under the agent and model it spawned, with the prompt's length, the effort, its tool calls, its output, that it ended on a failed one, and its session's tag", { skip: process.platform === "win32" }, async () => {
   const dir = scratch()
   const savedHome = process.env.HOME
   const savedState = process.env.XDG_STATE_HOME
@@ -292,6 +325,11 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
   emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_read_1", name: "Read", input: { file_path: "/x" } }] } })
   emit({ type: "user", session_id, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read_1", is_error: true, content: "Read is disabled for this session" }] } })
   emit({ type: "assistant", session_id, message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "ok" }] } })
+  // Each call's real output count, in the shape 2.1.293 sends it. Both come
+  // after the content frames because a stream_event turns the parser's
+  // partial mode on, and this fake streams no partial content blocks.
+  emit({ type: "stream_event", session_id, event: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 120 } } })
+  emit({ type: "stream_event", session_id, event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 30 } } })
   setTimeout(() => {
     emit({ type: "result", subtype: "success", session_id, is_error: false, usage: { input_tokens: 1, output_tokens: 1 } })
   }, 80)
@@ -334,7 +372,16 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", ()
     assert.equal(entry.failed, true, "the CLI's own refusal of the call is the turn's last tool result")
     assert.equal(entry.session, sessionTag(affinity), "the conversation, as the tag the TUI computes from the same id")
     assert.ok(!JSON.stringify(entry).includes(affinity), "never the session id itself")
+    assert.equal(entry.out, 150, "both calls' output, off their message_delta events")
     assert.ok(entry.at >= started)
+    // The live channel saw the same total as the turn ran, under the same tag.
+    const channel = JSON.parse(
+      readFileSync(join(dir, "xdg-state", "opencode-claude-code-plugin", "turn-progress.json"), "utf8"),
+    )
+    const live = channel.turns[sessionTag(affinity)!]
+    assert.equal(live.out, 150)
+    assert.ok(live.turn >= started && live.turn <= entry.at, "the turn's start, as the server half marked it")
+    assert.ok(!JSON.stringify(channel).includes(affinity), "never the session id itself")
   } finally {
     for (const active of snapshotActiveProcesses()) {
       if (active.sessionKey.includes(affinity)) await deleteActiveProcessAndWait(active.sessionKey)

@@ -6840,3 +6840,160 @@ turn and a steered message; and the fake CLI's turn now making one
 CLI-executed `Read` call, which the recorded sample counts. Shipped as
 v0.57.2. The revisit after a week of real samples still stands, now with
 three inputs to read the error rate against.
+
+## The estimate is a calibrated log-normal, with a band, a live output count and a subagent floor (2026-10-18)
+
+h #g251. After v0.57.2 the maintainer asked "how accurate is this ? or does it
+rely on historic data always?". Read through the estimator, the real store
+answered: the two `explore` keys within about ten seconds, the `build` key
+ranging from 30 s to 43 minutes. Asked "what else can we do to improve this
+calculation?", the answer listed nine improvements; the maintainer asked
+"what if we do all these and also a predictive mathematical equasion that is
+genious level into the mix?", answered the scope question with "All three in
+1 PR 1 release 0.58.0 ? also this is not intelligent and only mechanical
+right? anwer me first", and after the answer (yes: statistics over this
+install's own record; reading Claude's own plan would be the intelligent part,
+and that is a CLI investigation, not math) settled it with "maybe we keep this
+in 0.58.0 and use that for a while", then "go". So every piece went into one
+release, and **the estimate is now frozen for observation**: the doctor
+section below exists so the next change is decided on a measured error.
+
+### The record
+
+- **`failed`**: the turn's newest tool result was an error. The measured case
+  is the haiku child of the first sidebar test, which called Claude's native
+  `Bash` instead of the proxied one, was refused (`Bash is disabled for this
+  session`) and was reported by opencode as a failed subagent, yet wrote a
+  6.1 s sample because the CLI's own `result` was a success; its length pulled
+  every haiku estimate down. Read off the stream for the final step's
+  CLI-executed results (`lastCliToolResultError`, from `block.is_error`),
+  else off the prompt (`lastToolResultFailed`: `error-text`, `error-json`,
+  `execution-denied`). Recorded, counted by the doctor, never read by the
+  model.
+- **A turn after an interrupt** was never marked: opencode's next prompt ends
+  in the interrupted calls' results and then the operator's new message,
+  which `startsTurn` read as a continuation, so the old start was used and the
+  sample inflated. `startsTurn(prompt, parked)` now takes the ids of the
+  proxied calls still parked, and a trailing tool message answering none of
+  them starts a turn. `markTurnStart` records the prompt's length, and
+  `turnToolCalls(prompt, from)` counts from that marked start.
+- **`session`**: `sessionTag`, FNV-1a over the affinity as eight hex digits,
+  the only form a session takes in either file.
+- **`out`**: see the channel below.
+
+### The model (`src/turn-model.ts`)
+
+A turn's length is log-normal per `agent/model` key, because it varies by
+factors rather than seconds, fitted as weighted moments in log space: the
+prompt-length kernel and the effort weight and ratio of (h #g247, h #g250),
+plus recency, halving every week. Shrinkage at three levels by one rule: the
+key toward the same agent's other models with 2 pseudo-turns, the pool's pull
+on the mean discounted by its own size, κ·n/(n + κ), because undiscounted a
+single 200 s turn under another model put a five-turn key of 40 s turns at
+63 s, and the calibration then carried that error to every other key; this
+session's own turns toward the key; and with no pool, the variance toward
+σ = 0.8. σ is clamped to 0.2 through 1.6.
+
+At elapsed t every quantile is read off the distribution given T > t, and the
+turn's progress cuts the record: the recorded turns that made at least as many
+calls and generated at least as much output (at the same effort), refitted and
+shrunk toward the unconditioned fit with 1 pseudo-turn. A cut that would leave
+no turn is not applied, which reverses (h #g250)'s over-in-calls: it declared
+a turn on its fifth call over at ten seconds when the record stopped at four.
+
+The quantiles go through a calibration rather than the normal curve: every
+recorded turn estimated at its start from the rest of its key gives a
+standardized residual, residuals pool across keys because they are
+dimensionless, each weighed by its turn's recency (unweighted, month-old
+misses pulled an estimate 15% under its own fit's median: 74.7 s against
+87.3 s, and 90.4 s weighted), smoothed with a Gaussian kernel of Silverman's
+width (a dozen raw residuals are a staircase with ties) and blended with the
+normal curve counting as 12 residuals, then tabulated on a 0.04 grid from −8
+to 8 so a lookup is cheap. The median is the total shown, the quartiles the
+band, drawn as three shades on the same glyphs (`bar-done`, `bar-likely`,
+`bar-band`), and the fill and both band shares are held at their highest
+within a turn.
+
+`/claude-code-doctor` gained a **Progress estimate** section from the same
+leave-one-out estimates: per key, turns, failed, typical, `off by` (the median
+miss factor), `outran` (half is unbiased) and `in band` (half is calibrated).
+
+Measured on the final model, 2026-10-18:
+
+- A synthetic key (median 60 s, σ 0.5, 40 exact quantiles) estimates 58.1 s
+  with a band of 40.2 s to 1m23s, against a truth of 60 s and 42.8 s to
+  84.1 s.
+- A worst-case store (8 agents, 8 models, 48 turns each, σ 0.9) builds in
+  27.7 ms (102 ms before the agent pool was cached per key and effort),
+  assesses in 1 ms, and estimates in 0.013 ms; one of its keys reads off by
+  ×2.12, outran 56%, in band 50%, against a truth of ×1.84, 50% and 50%.
+- This Mac's store builds in 0.4 ms idle and 2.4 ms under load: 24 residuals
+  weighing 0.67 against the normal curve. `explore/claude-opus-5-5` off by
+  ×1.05 and `explore/claude-haiku-5-5` ×1.13, both 67% in band;
+  `build/claude-fable-5-1` (12 turns, typical 4m08s) off by ×3.46, outran 42%,
+  **only 33% in band**. The build key's misses are wider than its own spread
+  predicts because the calibration pools every key's standardized errors and
+  half of this store's are the tight explore keys'. A per-key calibration is
+  the first candidate if a week of record says so. A build turn reads 4m50s
+  (2m01s to 10m53s) at its start, 5m53s at one minute, and 11m10s (7m09s to
+  21m35s) at five minutes.
+
+### The live channel and the floor
+
+The output a turn has generated is the one progress measure the TUI cannot
+read off opencode's store, because a step's usage is reported as zeros until
+the turn's `result` (h #g169, h #g225). Probed on 2.1.293 with one haiku
+call: `message_start` and both `assistant` frames carried `output_tokens: 6`,
+the `message_delta` carried 41 (34 of them thinking), matching the `result`'s
+41, once per call and with no message id on it. So the stream parser reads
+each call's count at its `message_delta`, `noteTurnOutput` adds it to the
+turn's start and writes the total to `turn-progress.json` under the session's
+tag, once per API call, and the sample's `out` is that same sum. Absent on the
+interactive transport, whose synthesized frames carry no `message_delta`. The
+TUI reads a record only when it started no earlier than the TUI's own start of
+the turn, less a second (`liveOutput`), because a steered message restarts the
+TUI's turn and not the server's. Output is compared only at the same effort: a
+`low` turn's whole output can be less than a `high` turn's first call. This
+supersedes (h #g250)'s declined "token-based condition", whose reason, the
+finish's zeros, still holds; the count travels through its own file instead.
+
+A turn parked in a foreground subagent cannot end before the child does, so
+`floorByChildren` floors the parent's total and both band edges at the
+parent's elapsed plus what each running foreground child has left (the
+longest of a batch), before the hold, so a rising floor lowers nothing on
+the bar. A background child, a finished one, one with no estimate and one
+past its own record floor nothing, and an `over` parent stays over.
+
+### Declined, or not done
+
+- **A model call to read the prompt**: a cost on every turn to decorate a bar,
+  and its guess at how long is itself uncalibrated until measured.
+- **Claude's own plan as progress**: the plan reaching the bar again is a CLI
+  investigation and belongs after this.
+- **Recording each turn's estimate at its start**: the leave-one-out
+  assessment recomputes it from the record, so nothing more is stored and
+  turns recorded before 0.58.0 are assessable too.
+- **API round trips as a condition**: mostly the tool calls again, so neither
+  recorded nor read.
+- **Progress within a call**: streamed thinking is a summary on models with
+  summarized thinking display, so its length is not the thinking done.
+- **Assessing the mid-turn conditions**: a sample holds a turn's totals, not
+  its trajectory, so the doctor measures the estimate at a turn's start only.
+  The calls, output and floor conditions are not measured by it.
+
+### Tests
+
+`test/turn-model.test.ts` (new): the normal curve's approximations, a fit
+recovering a known log-normal, the truncation and `over`, the minimum and the
+failed-turn skip, the kernel, the effort weight and ratio, the call and output
+cuts with output compared only at the same effort, recency, the agent pool
+and its size discount, the session level, the calibration's blend, smoothing,
+weights and skew, and the assessment of a record of known spread.
+`test/turn-progress-store.test.ts` (new): the channel's store.
+`test/turn-history.test.ts`: the old estimator's four tests moved to the
+model's file; `sessionTag`, the interrupted-turn start, `lastToolResultFailed`,
+`noteTurnOutput`, the eight-field sample, and the fake CLI's turn recording a
+refused call as failed, two calls' output off `message_delta`, its session's
+tag and the live record. `test/progress-line.test.ts`: `holdEstimate`,
+`estimateBandCells`, the band's roles, `floorByChildren`, `liveOutput`.
+`test/doctor.test.ts`: the section and its bundle.

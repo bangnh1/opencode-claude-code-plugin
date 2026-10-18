@@ -16,13 +16,16 @@ import {
   BAR_WIDTH,
   PROGRESS_LINGER_MS,
   STATUS_WATCH_CAP,
+  TURN_PROGRESS_SLACK_MS,
   createFillMemory,
   createStatusWatch,
   estimateBandCells,
   estimateCells,
   filledCells,
+  floorByChildren,
   formatElapsed,
   layoutProgressLine,
+  liveOutput,
   measureProgress,
   progressLineText,
   rowProgress,
@@ -308,6 +311,67 @@ test("estimateBandCells splits the lit cells at the band's far end and lights th
     likely: BAR_WIDTH,
     band: BAR_WIDTH,
   })
+})
+
+test("floorByChildren keeps a parked parent's estimate at least as long as its foreground children have left", () => {
+  // Fifty seconds into a turn expected to take 100 s, ending between 80 s and 140 s.
+  const parent = {
+    totalMs: 100_000,
+    fill: 50_000 / 100_000,
+    over: false,
+    band: { lowMs: 80_000, highMs: 140_000, sure: 50_000 / 140_000, maybe: 50_000 / 80_000 },
+  }
+  const child = (elapsedMs: number, totalMs: number, band?: { lowMs: number; highMs: number }, over = false): ProgressView => ({
+    state: "running",
+    elapsedMs,
+    calls: 0,
+    estimate: {
+      totalMs,
+      fill: elapsedMs / totalMs,
+      over,
+      ...(band ? { band: { ...band, sure: elapsedMs / band.highMs, maybe: Math.min(1, elapsedMs / band.lowMs) } } : {}),
+    },
+  })
+  // A child with less left than the parent changes nothing, the same object back.
+  const short = child(10_000, 30_000, { lowMs: 20_000, highMs: 40_000 })
+  assert.equal(floorByChildren(parent, 50_000, [short]), parent)
+  // A child with 120 s left (90 s to 180 s) raises the total and both edges,
+  // and the shares follow from the elapsed.
+  const long = child(30_000, 150_000, { lowMs: 120_000, highMs: 210_000 })
+  const floored = floorByChildren(parent, 50_000, [long])
+  assert.deepEqual(floored, {
+    totalMs: 170_000,
+    fill: 50_000 / 170_000,
+    over: false,
+    band: { lowMs: 140_000, highMs: 230_000, sure: 50_000 / 230_000, maybe: Math.min(1, 50_000 / 140_000) },
+  })
+  // A batch waits for every child it started: the longest of each wins.
+  assert.deepEqual(floorByChildren(parent, 50_000, [short, long]), floored)
+  // A child past its own record, a finished one, or one with no estimate floors nothing.
+  assert.equal(floorByChildren(parent, 50_000, [child(30_000, 150_000, undefined, true)]), parent)
+  assert.equal(floorByChildren(parent, 50_000, [{ ...long, state: "done" }]), parent)
+  assert.equal(floorByChildren(parent, 50_000, [{ state: "running", elapsedMs: 1, calls: 0 }]), parent)
+  // An over parent stays over.
+  const over = { totalMs: 40_000, fill: 1, over: true }
+  assert.equal(floorByChildren(over, 50_000, [long]), over)
+  // A parent with no band is floored in its total, and a child with none
+  // floors every edge with its median.
+  assert.deepEqual(floorByChildren({ totalMs: 100_000, fill: 0.5, over: false }, 50_000, [long]), {
+    totalMs: 170_000,
+    fill: 50_000 / 170_000,
+    over: false,
+  })
+  const plain = floorByChildren(parent, 50_000, [child(30_000, 150_000)])
+  assert.deepEqual([plain.band?.lowMs, plain.band?.highMs], [170_000, 170_000])
+})
+
+test("liveOutput reads the live channel's count only off this turn's record", () => {
+  const record = { turn: NOW, out: 5_000 }
+  assert.equal(liveOutput(record, NOW - 300), 5_000, "marked after the message that started the turn")
+  assert.equal(liveOutput(record, NOW + TURN_PROGRESS_SLACK_MS), 5_000, "within the slack")
+  assert.equal(liveOutput(record, NOW + TURN_PROGRESS_SLACK_MS + 1), undefined, "an earlier turn's, or a steered message's restart")
+  assert.equal(liveOutput(undefined, NOW), undefined)
+  assert.equal(liveOutput(record, undefined), undefined, "no start to check against")
 })
 
 test("formatElapsed reads as seconds, then minutes and seconds, then hours and minutes", () => {

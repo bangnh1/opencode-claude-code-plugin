@@ -196,6 +196,35 @@ test("the turn's tool calls narrow the record, and a turn past every recorded co
   assert.ok(olderFourth.totalMs > olderByTime.totalMs, "the 20 s turn of unknown count is kept, the 60 s one cut")
 })
 
+test("the output the turn has generated narrows the record like its calls, together with them, and only against turns at the same effort", () => {
+  const samples = [
+    sample(seconds(20), { out: 1_000, effort: "high" }),
+    sample(seconds(60), { out: 4_000, effort: "high" }),
+    sample(seconds(100), { out: 12_000, effort: "high" }),
+  ]
+  const input = { elapsedMs: seconds(10), effort: "high", now: NOW }
+  const byTime = estimateTurn(samples, input)!
+  assert.deepEqual(estimateTurn(samples, { ...input, out: 0 }), byTime, "no output yet is time alone")
+  // 5,000 tokens in, only the 12,000-token turn is left to be like.
+  const busy = estimateTurn(samples, { ...input, out: 5_000 })!
+  assert.ok(busy.totalMs > byTime.totalMs && busy.totalMs < seconds(100), `${busy.totalMs} between ${byTime.totalMs} and 100 s`)
+  assert.deepEqual(estimateTurn(samples, { ...input, out: 50_000 }), byTime, "past every recorded output, time alone")
+  // Calls and output cut together: a recorded turn must have done at least
+  // as much of both. Here calls keep the 20 s and 100 s turns and output the
+  // 60 s and 100 s ones, which leaves the one the 5,000-token cut left.
+  const counted = samples.map((turn, index) => ({ ...turn, calls: [5, 1, 9][index] }))
+  assert.deepEqual(estimateTurn(counted, { ...input, calls: 2, out: 2_000 }), busy)
+  // Another effort's output is never compared: a `low` turn's whole output
+  // can be less than a `high` turn's first call. Its turns stay in, exactly
+  // as turns recorded before output was counted do.
+  const low = [sample(seconds(20), { out: 1_000, effort: "low" }), sample(seconds(25), { out: 1_200, effort: "low" })]
+  const uncounted = low.map(({ out: _out, ...turn }) => turn)
+  assert.deepEqual(
+    estimateTurn([...low, ...samples.slice(1)], { ...input, out: 5_000 }),
+    estimateTurn([...uncounted, ...samples.slice(1)], { ...input, out: 5_000 }),
+  )
+})
+
 test("recency: a turn from weeks ago weighs a fraction of one from today", () => {
   const old = Array.from({ length: 3 }, () => sample(seconds(10), { at: NOW - 4 * RECENCY_HALF_LIFE_MS }))
   const fresh = Array.from({ length: 3 }, () => sample(seconds(100)))
