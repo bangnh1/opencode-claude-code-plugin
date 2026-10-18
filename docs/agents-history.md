@@ -6743,11 +6743,26 @@ else is `ok`. Shipped as v0.57.1. `test/account-sidebar.test.ts`.
 ## Every release also gets a GitHub Release (2026-10-18)
 
 h #g249. The maintainer, closing the sidebar feature: "tag the release also on
-github next time". v0.57.0 had gone out as every release since v0.9.2 had, a
-git tag and the npm publish and no Release on GitHub, which (h #g22) had
-recorded as optional. The rule is now in the Release Workflow section: after
+github next time". v0.57.0 had gone out with a git tag and the npm publish and
+no Release on GitHub. The rule is now in the Release Workflow section: after
 the tag push and the publish check, `gh release create vX.Y.Z --title vX.Y.Z
 --notes "..."`, with short notes in the commit-message tone naming what
-changed, the PR and the history entry. v0.57.1 is the first release under it.
-An older tag (v0.57.0 included) is backfilled only when asked, because a
-Release is outward-facing and "next time" named the future ones.
+changed, the PR and the history entry. v0.57.1 got one at its release;
+v0.57.0 was backfilled an hour later on request ("1,2,3,4 yes if needed?").
+
+### Corrected the same night: v0.57.0 was the lone omission
+
+This entry, AGENTS.md, TODO.md and v0.57.1's own notes first said that every
+release since v0.9.2 had gone out without a Release, read off (h #g22) rather
+than measured. When the maintainer asked "all releases ok?", `gh release list
+--limit 100` showed a Release for every tag from v0.4.14 to v0.56.0, the last
+created under the maintainer's account at 2026-10-17 18:11Z, under four hours
+before v0.57.0 was cut without one. So (h #g22) had been stale for months and
+the session that cut v0.57.0 followed it; the rule above is what replaces it.
+Two fixes came out of the same check: v0.57.1's notes lost the false sentence,
+and v0.57.1 was re-marked `--latest`, because GitHub's Latest badge follows
+creation time and the backfilled v0.57.0 had taken it. The check also
+re-confirmed the release rule's npm half: from this Mac the package document
+answered `latest: 0.54.2` with no version after it (Aikido's minimum-age
+filter), while the per-version documents carried both 0.57.x shasums and the
+`dist-tags` endpoint said `0.57.1`.

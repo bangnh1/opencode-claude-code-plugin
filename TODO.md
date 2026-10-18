@@ -193,12 +193,17 @@ raised, so they survive context compaction; removed when answered, done or dropp
   haiku batch, run once the key had three samples, drew the bar on every row (20.7 s, 23.9 s, 48.2 s against a
   ~25 s estimate, the third over in the warning colour). Then (2026-10-18) "that worked", "5h ok needs to be green"
   (an under-threshold level now takes the success colour at full strength, shipped as v0.57.1), "tag the release also
-  on github next time" (now a rule in AGENTS.md, h #g249, first applied to v0.57.1) and "i think thats it for this
+  on github next time" (now a rule in AGENTS.md, h #g249) and "i think thats it for this
   feature right?": yes; what stays open is the estimate revisit in the Future Features note and the `startsTurn`
   candidate above. Then (2026-10-18) "1,2,3,4 yes if needed? 5 not sure": v0.57.0 got its GitHub Release
   backfilled, the merged `progress-line` branch was deleted locally and on origin, `/tmp/pl-rig` was removed,
   the `tui.json` plugin line stays (on 1.x it is the only thing that loads the TUI half), and the reset
-  notation is under Deferred decisions.
+  notation is under Deferred decisions. Then "all releases ok?" (2026-10-18): yes. Both v0.57.x are on npm
+  (version documents with the published shasums, the `dist-tags` endpoint `latest: 0.57.1`; the package document
+  from this Mac stops at 0.54.2, Aikido's filter), CI and Publish green on both tags, a GitHub Release on both.
+  Two corrections from the check: v0.57.1 re-marked `--latest` (the backfilled v0.57.0 had taken the badge) and
+  its notes lost a false sentence, because `gh release list` showed a Release for every tag back to v0.4.14 and
+  v0.57.0 was the lone omission, not "the first since v0.9.2" as this entry, AGENTS.md and h #g249 first said.
 
 - 2026-10-17: **done**: "whatever is done is done and shipped whatever still needs work consolidate it here and do
   it and close them if they are already done and finished then like i said close and done". The three finished
