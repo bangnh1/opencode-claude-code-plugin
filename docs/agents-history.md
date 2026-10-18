@@ -7183,4 +7183,6 @@ location under one id and surviving a host without `rpc`),
 releasing for every outcome but an inline answer, never rejecting, and the inline
 path through the fake aside CLI), `test/v2-entrypoint.test.ts` (`execute`
 returning before the queued message) and `test/unattended-replay.test.ts` (no
-marker over frames that render nothing).
+marker over frames that render nothing). Shipped as v0.59.0 (PR #124), with a
+GitHub Release; the publish was verified from the Publish step's tail and the
+version document's shasum.

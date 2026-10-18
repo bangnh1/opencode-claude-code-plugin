@@ -150,7 +150,7 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-18: **done** (branch `v2-parity`, h #g253): opencode 1/2 parity, after "are all functionalities now for
+- 2026-10-18: **done** (v0.59.0, PR #124, h #g253): opencode 1/2 parity, after "are all functionalities now for
   opencode v1 and v2 on par?". The answer was not quite: five differences on opencode 2 (`/btw` after the turn, no
   todo panel, `bridgeMcpOauthTokens` finds nothing, the proxy deadline guard never keeps a call, warnings never
   reach the screen), the last three undocumented, plus no tool row for Claude's `EnterPlanMode`, `ExitPlanMode` and
