@@ -4245,7 +4245,36 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
             // Render narration only. Replaying actionable events could execute
             // old tools or close this new stream on a stale approval/result.
             let partialText = false
-            {
+            const narration: string[] = []
+            for (const line of unattended.lines) {
+              try {
+                const outer: ClaudeStreamMessage = JSON.parse(line)
+                const msg = outer.type === "stream_event" && outer.event ? outer.event : outer
+                let text = ""
+                if (msg.type === "content_block_delta" && msg.delta?.type === "text_delta") {
+                  text = msg.delta.text ?? ""
+                  partialText = true
+                } else if (msg.type === "assistant") {
+                  if (!partialText) text = (msg.message?.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("")
+                  partialText = false
+                } else if (msg.type === "result") {
+                  state.unattendedTurnEnded = true
+                  for (const entry of state.activeProcess.pendingProxyCompletions?.values() ?? []) {
+                    if (isPendingProxyCallChannelClosed(entry.call)) entry.recoveryRequired = true
+                  }
+                  if (outer.session_id) setClaudeSessionId(sk, outer.session_id)
+                  if (msg.is_error && msg.result) text = msg.result
+                }
+                if (text) narration.push(text)
+              } catch { /* Ignore incomplete or malformed buffered lines. */ }
+            }
+            // Only when there is something to show. A `/btw` asked while a
+            // proxied call is parked makes the CLI print a frame with no reply
+            // text in it (a status line for the side call), and writing the
+            // marker over nothing put an empty "between turns" block in the
+            // reply (measured on opencode 2.0.31, h #g253). Dropped lines
+            // still say so, because the operator lost something.
+            if (narration.length > 0 || unattended.dropped > 0) {
               // The marker leads the block, so the operator can tell this from
               // the answer to their own message and a rebuilt transcript drops
               // the whole part instead of handing it back as Claude's reply to
@@ -4256,30 +4285,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 id: replayId,
                 delta: formatUnattendedReplayNote(unattended.dropped),
               })
-              for (const line of unattended.lines) {
-                try {
-                  const outer: ClaudeStreamMessage = JSON.parse(line)
-                  const msg = outer.type === "stream_event" && outer.event ? outer.event : outer
-                  let text = ""
-                  if (msg.type === "content_block_delta" && msg.delta?.type === "text_delta") {
-                    text = msg.delta.text ?? ""
-                    partialText = true
-                  } else if (msg.type === "assistant") {
-                    if (!partialText) text = (msg.message?.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("")
-                    partialText = false
-                  } else if (msg.type === "result") {
-                    state.unattendedTurnEnded = true
-                    for (const entry of state.activeProcess.pendingProxyCompletions?.values() ?? []) {
-                      if (isPendingProxyCallChannelClosed(entry.call)) entry.recoveryRequired = true
-                    }
-                    if (outer.session_id) setClaudeSessionId(sk, outer.session_id)
-                    if (msg.is_error && msg.result) text = msg.result
-                  }
-                  if (text) controller.enqueue({ type: "text-delta", id: state.currentTextId ?? state.startTextBlock(), delta: text })
-                } catch { /* Ignore incomplete or malformed buffered lines. */ }
-              }
+              for (const text of narration) controller.enqueue({ type: "text-delta", id: replayId, delta: text })
+              state.endTextBlock()
             }
-            state.endTextBlock()
             // Replayed lines are history, not liveness: the watchdogs below
             // must judge the child on what it does from here on.
             clearFallbackTimer(state)
