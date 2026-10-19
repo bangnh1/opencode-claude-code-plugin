@@ -7515,6 +7515,10 @@ ended the turn on `Claude process produced no output after the envelope write
 (start watchdog timeout).`; this branch answered `ok` at 103.5 s and finished
 `stop`.
 
+Shipped as v0.60.2 on 2026-10-20 (PR #127, PR #128 and PR #129 together), with a
+GitHub Release; the publish was verified from the Publish step's tail and the
+version document's shasum.
+
 ## The `turnStats` footer prints the turn's cost, and PR #115's five leftovers (2026-10-19)
 
 h #g257. On 2026-10-19 the maintainer asked "what is still left now?", was given
@@ -7608,6 +7612,10 @@ It names the account that ran and says it "cannot serve this turn".
 
 Not measured live: every leftover needs a second limited or expired login,
 which this machine does not have (TODO.md, Parked).
+
+Shipped as v0.60.2 on 2026-10-20 (PR #127, PR #128 and PR #129 together), with a
+GitHub Release; the publish was verified from the Publish step's tail and the
+version document's shasum.
 
 ## A restart resumes a conversation dcp renumbered (2026-10-19)
 
@@ -7706,3 +7714,7 @@ renumbered, and is rewritten as version 2 by the next result.
 The same probe against the fix's build: A, B and C all resumed their own
 Claude session after the restart (`resuming the claude session from before the
 restart`, three matched messages each), where master started B over.
+
+Shipped as v0.60.2 on 2026-10-20 (PR #127, PR #128 and PR #129 together), with a
+GitHub Release; the publish was verified from the Publish step's tail and the
+version document's shasum.

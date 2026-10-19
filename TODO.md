@@ -107,7 +107,8 @@ raised, so they survive context compaction; removed when answered, done or dropp
   three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it. 2026-10-19, maintainer:
-  "defer the til message". Still parked.
+  "defer the til message". Still parked. 2026-10-20, maintainer, releasing v0.60.2: "do the recommended
+  dont send anything in til". Not sent; still parked.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -141,18 +142,18 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-19: **done** (branch `restart-resume-dcp`, h #g258): `resumeAfterRestart` refused as
+- 2026-10-19: **done** (v0.60.2, PR #129, h #g258): `resumeAfterRestart` refused as
   `conversation-changed`, recorded 2026-10-17. Reproduced live on opencode 1.19.3 + dcp 3.2.0 with a fake
   `claude`: an undo makes dcp renumber every later message after a restart (`m0004` became `m0003`), and its tag
   was hashed as text. The digest leaves dcp's references out, versioned so records from before still resume.
   The A/B: master started the undone conversation over, the fix resumed it.
-- 2026-10-19: **done** (branch `turn-cost-and-failover`, h #g257): the `turnStats` cost and PR #115's five
+- 2026-10-19: **done** (v0.60.2, PR #128, h #g257): the `turnStats` cost and PR #115's five
   leftovers, after "do the recommended for the rest". The footer prints the turn's delta (a resumed session's
   first footer leaves the cost out); a limited `doGenerate` turn errors in every mode; a stream cancel stops
   the turn in every mode; after a chain of overrides the form, the notes and the remembered limit name the
   account that ran and never offer it; the form's switch note says carried or replayed. Not live: needs a
   second limited login.
-- 2026-10-19: **done** (branch `start-watchdog-init`, h #g256): the start-watchdog fix, after "defer the til
+- 2026-10-19: **done** (v0.60.2, PR #127, h #g256): the start-watchdog fix, after "defer the til
   message do the recommended for the rest". Measured first on 2.1.293: `system`/`init` waits for every MCP
   server to connect or hit `MCP_TIMEOUT`. A child that has not written `init` now gets at least its
   `MCP_TIMEOUT` plus 30 s (150 s by default) before the first fire, then the configured 90 s from `init`.
