@@ -7433,3 +7433,84 @@ confirm, which passed it: 1855 of 1855 on Linux, and Windows green, for PR #126.
 Shipped as v0.60.1 (PR #126) together with the docs and skill commit `28a0c56`,
 with a GitHub Release; the publish was verified from the Publish step's tail and
 the version document's shasum.
+
+## The start watchdog waits out a new child's MCP servers (2026-10-19)
+
+h #g256. Recorded on 2026-10-17 as found in passing (TODO.md, the v0.56.0
+entry): the start watchdog (h #g84) fired at 90 s while every spawn gets
+`MCP_TIMEOUT=120000` (h #g235), and after the Mac woke from sleep at 12:44:01
+that morning every fresh `claude` spawn of the next three minutes (both lanes
+and two build sessions) stayed silent past 90 s twice and ended as an error,
+nothing written; a spawn at 12:47:54 answered within seconds. The research-pass
+table recommended "a spawn that has not emitted `init` yet gets at least
+`MCP_TIMEOUT` plus a margin before the first fire" as its own small PR, and the
+maintainer said "go forward with the recommended" (2026-10-17). On 2026-10-19,
+asked now or later, the maintainer answered "do the recommended for the rest".
+
+### The cause, measured this time
+
+The 2026-10-17 note said "cause correlated, not proven". Measured on Claude
+Code 2.1.293 with a stdio MCP server that answers `initialize` only after 8 s,
+a `--print` stream-json child, Haiku 4.5, the user message written at 1.5 s:
+
+- `MCP_TIMEOUT=20000`: `system`/`init` arrived at 8.8 s with the server
+  `connected`. Nothing else came out between the message and `init` except a
+  `hook_response`.
+- `MCP_TIMEOUT=3000`: `init` arrived at 2.3 s with the server `failed`.
+- The same process's second message: `init` again, immediately after the
+  write. A reused process writes `init` on every turn, at once.
+
+So a child is silent until its servers have connected or timed out, bounded by
+its own `MCP_TIMEOUT`. The CLI reads that value as a positive number capped at
+the timer maximum, else 30 s (`function ic(){let _=a.MCP_TIMEOUT;return
+_&&_>0?Math.min(_,2147483647):30000}` in 2.1.293). The binary also has an
+`MCP_CONNECTION_NONBLOCKING` path and a 5 s `MCP_CONNECT_TIMEOUT_MS`; neither
+applied here, since `init` waited for the server in both runs.
+
+### The fix
+
+`ActiveProcess.initSeen` is set from `spawnClaudeProcess`'s own line reader
+(`noteInitLine`, beside `noteTurnLine`), so an `init` written while no turn is
+listening still counts. `armStartWatchdog` picks the delay through
+`startWatchdogDelayMs`: until `initSeen`, at least the child's effective MCP
+timeout (`effectiveSpawnMcpTimeoutMs`: the plugin's 120 s fill, or the user's
+value read the CLI's way) plus `START_WATCHDOG_INIT_MARGIN_MS` (30 s, for the
+CLI's boot and the `SessionStart` hooks, which also run before `init`); from
+then on the configured delay. 150 s by default, against the 90 s before. The
+parser re-arms on the first `init` (`noteStartWatchdogInit`), so a child that
+gets past its servers and then goes silent is still caught one configured
+delay after `init`, which keeps the watchdog's original job. A reused process
+has `initSeen`, so it is unchanged; the interactive shim never respawns from
+the watchdog, so it keeps the configured delay. The WARN and the ERROR the
+watchdog writes carry the delay that fired and `beforeInit`, both allowlisted
+for `/claude-code-doctor bundle`.
+
+A respawn after a pre-`init` fire is a new child and waits again, so a child
+that never gets past its servers ends the turn after two of these delays
+(5 minutes by default) instead of two 90 s ones. That is the trade: the old
+deadline turned a slow start into a failure, and a slow start right after a
+wake is common, while a child that is truly stuck before `init` is rare.
+
+### Tests
+
+`test/respawn.test.ts`, through a real `doStream` against a fake CLI with the
+seam at 1 s and `MCP_TIMEOUT=1` (so the margin alone sets the pre-`init` delay
+at 30.001 s): a child silent for 2.5 s before its `init` and answer is spawned
+once and answers (on the old code: respawned at 1 s, checked red), and a child
+that writes `init` and then nothing is respawned with `--resume` between 0.9 s
+and 15 s later. Plus the delay rule itself, `noteInitLine` ignoring lines that
+merely mention `init` (`test/session-manager.test.ts`), and
+`effectiveSpawnMcpTimeoutMs` (`test/spawn-env.test.ts`). The recovery tests in
+`test/proxy-task.test.ts` pass unchanged, because their fakes write `init` at
+spawn.
+
+### Live, A/B
+
+The real `claude` (2.1.293, Haiku 4.5) driven through `createClaudeCode` with
+one opencode MCP server configured on disk (bridged, since no opencode client
+was there to overlay its status) that answers `initialize` after 100 s, both
+builds at once under scratch XDG dirs: master respawned the child at 90 s,
+logged `claude process still silent after respawn; ending turn` at 180 s and
+ended the turn on `Claude process produced no output after the envelope write
+(start watchdog timeout).`; this branch answered `ok` at 103.5 s and finished
+`stop`.

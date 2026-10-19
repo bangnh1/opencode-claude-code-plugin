@@ -3,6 +3,7 @@ import type { TurnState } from "./turn-state.js"
 import { cliToolCallInputJson, emitCliToolCall } from "./turn-state.js"
 import { log } from "./logger.js"
 import { formatStreamTimeoutNote } from "./cli-events.js"
+import { effectiveSpawnMcpTimeoutMs } from "./cli-version.js"
 import {
   deleteActiveProcess,
   deleteClaudeSessionId,
@@ -133,7 +134,11 @@ function onStartWatchdogFire(state: TurnState): void {
   if (state.respawnAttempted) {
     log.error(
       "claude process still silent after respawn; ending turn",
-      { sessionKey: state.sessionKey },
+      {
+        sessionKey: state.sessionKey,
+        startWatchdogMs: state.startWatchdogArmedMs,
+        beforeInit: state.startWatchdogBeforeInit,
+      },
     )
     deleteActiveProcess(state.sessionKey)
     deleteClaudeSessionId(state.sessionKey)
@@ -153,7 +158,11 @@ function onStartWatchdogFire(state: TurnState): void {
   state.respawnAttempted = true
   log.warn(
     "no stdout after envelope write; respawning claude process to resume conversation",
-    { sessionKey: state.sessionKey, startWatchdogMs: state.startWatchdogMs },
+    {
+      sessionKey: state.sessionKey,
+      startWatchdogMs: state.startWatchdogArmedMs,
+      beforeInit: state.startWatchdogBeforeInit,
+    },
   )
   state.lineEmitter.off("line", state.lineHandler)
   state.lineEmitter.off("close", state.closeHandler)
@@ -205,13 +214,59 @@ function onStartWatchdogFire(state: TurnState): void {
   armStartWatchdog(state)
 }
 
+/**
+ * What a headless child gets on top of its own `MCP_TIMEOUT` before its first
+ * `system`/`init`: its boot and the user's `SessionStart` hooks, which run
+ * before that line too and measured several seconds under load (h #g256).
+ */
+export const START_WATCHDOG_INIT_MARGIN_MS = 30_000
+
+/**
+ * The start watchdog's delay. A child that has not written `system`/`init`
+ * yet may be waiting on an MCP server, which Claude Code allows up to
+ * `MCP_TIMEOUT` (120 s from the plugin, 90 s being the configured delay):
+ * after a wake from sleep on 2026-10-17 that wait outlasted the delay on
+ * every spawn for three minutes, and each was killed twice and failed (h
+ * #g256). So until `init` the delay is at least that timeout plus a margin;
+ * from `init` on it is the configured delay, which is what a reused process
+ * always gets, since its servers are connected and it writes `init` at once.
+ */
+export function startWatchdogDelayMs(
+  configuredMs: number,
+  beforeInit: boolean,
+  mcpTimeoutMs: number = effectiveSpawnMcpTimeoutMs(),
+): number {
+  return beforeInit
+    ? Math.max(configuredMs, mcpTimeoutMs + START_WATCHDOG_INIT_MARGIN_MS)
+    : configuredMs
+}
+
 export function armStartWatchdog(state: TurnState): void {
   clearStartWatchdog(state)
   if (state.controllerClosed) return
+  const ap = state.activeProcess
+  // The interactive shim never respawns from here (see the fire handler), so
+  // it keeps the configured delay.
+  state.startWatchdogBeforeInit = !ap?.interactiveControl && ap?.initSeen !== true
+  state.startWatchdogArmedMs = startWatchdogDelayMs(
+    state.startWatchdogMs,
+    state.startWatchdogBeforeInit,
+  )
   state.startWatchdog = setTimeout(
     () => onStartWatchdogFire(state),
-    state.startWatchdogMs,
+    state.startWatchdogArmedMs,
   )
+}
+
+/**
+ * The parser calls this on every `system`/`init`. Only the first one a child
+ * writes changes anything: the watchdog armed with the longer pre-`init`
+ * delay starts over with the configured one, counted from now.
+ */
+export function noteStartWatchdogInit(state: TurnState): void {
+  if (!state.startWatchdog || !state.startWatchdogBeforeInit) return
+  if (state.activeProcess?.initSeen !== true) return
+  armStartWatchdog(state)
 }
 
 // ---- Late proxy results ---------------------------------------------------

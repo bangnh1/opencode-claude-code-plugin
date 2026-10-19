@@ -122,6 +122,7 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   // booleans: every one of these is a decision the plugin made
   applied: "flag",
   attached: "flag",
+  beforeInit: "flag",
   bridgeSkipNativeSkills: "flag",
   channelClosed: "flag",
   compaction: "flag",
@@ -225,6 +226,7 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   durationMs: "duration",
   elapsedMs: "duration",
   remainingMs: "duration",
+  startWatchdogMs: "duration",
   timeoutMs: "duration",
   waitedMs: "duration",
 

@@ -159,6 +159,14 @@ export interface TurnState {
   resultFallbackTimer: ReturnType<typeof setTimeout> | null
   /** Start watchdog timer, armed only on the fresh-turn write path. */
   startWatchdog: ReturnType<typeof setTimeout> | null
+  /**
+   * The delay the armed start watchdog was given, and whether that was the
+   * longer one a child gets before its first `system`/`init` (h #g256). The
+   * parser re-arms on that `init`, so a child that answers its MCP wait and
+   * then goes silent is still caught one ordinary delay later.
+   */
+  startWatchdogArmedMs: number
+  startWatchdogBeforeInit: boolean
   /** First fire respawns, a second ends the turn. */
   respawnAttempted: boolean
 
@@ -411,6 +419,8 @@ export function createTurnState(init: TurnStateInit): TurnState {
 
     resultFallbackTimer: null,
     startWatchdog: null,
+    startWatchdogArmedMs: 0,
+    startWatchdogBeforeInit: false,
     respawnAttempted: false,
 
     hasReceivedContent: false,

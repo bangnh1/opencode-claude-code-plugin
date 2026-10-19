@@ -175,6 +175,25 @@ export function spawnMcpTimeoutEnv(
   return inherited.MCP_TIMEOUT === undefined ? { MCP_TIMEOUT: String(SPAWN_MCP_TIMEOUT_MS) } : {}
 }
 
+/** Claude Code's own fallback for an `MCP_TIMEOUT` that is not a positive number (2.1.293). */
+const CLI_DEFAULT_MCP_TIMEOUT_MS = 30_000
+
+/**
+ * How long a spawned child may wait for its MCP servers: the plugin's fill
+ * when the user set nothing, otherwise the user's value read the way Claude
+ * Code reads it (a positive number, capped at the timer maximum, else 30 s).
+ * The start watchdog uses it, because the CLI writes its `system`/`init` line
+ * only once every server has connected or given up (h #g256).
+ */
+export function effectiveSpawnMcpTimeoutMs(
+  inherited: Record<string, string | undefined> = process.env,
+): number {
+  const value = inherited.MCP_TIMEOUT
+  if (value === undefined) return SPAWN_MCP_TIMEOUT_MS
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 2_147_483_647) : CLI_DEFAULT_MCP_TIMEOUT_MS
+}
+
 /**
  * Run `claude --version` once per cliPath and parse the leading semver.
  * Returns null on any failure (binary missing, unparseable output, etc.)

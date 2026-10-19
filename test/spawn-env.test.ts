@@ -4,6 +4,7 @@ import { claudeSpawnEnv, cliEffortLevel } from "../src/session-manager.js"
 import {
   CLI_HYGIENE_ENV_VARS,
   cliHygieneEnv,
+  effectiveSpawnMcpTimeoutMs,
   SPAWN_MCP_TIMEOUT_MS,
   spawnMcpTimeoutEnv,
 } from "../src/cli-version.js"
@@ -186,6 +187,16 @@ test("an MCP_TIMEOUT the user set is kept on both transports, empty included", (
     })
   }
   assert.deepEqual(spawnMcpTimeoutEnv({ MCP_TIMEOUT: "1" }), {})
+})
+
+test("the MCP timeout a child runs with is read the way Claude Code reads it (h #g256)", () => {
+  assert.equal(effectiveSpawnMcpTimeoutMs({}), 120_000, "the plugin's fill")
+  assert.equal(effectiveSpawnMcpTimeoutMs({ MCP_TIMEOUT: "300000" }), 300_000, "the user's own value")
+  // Anything that is not a positive number is the CLI's own 30 s default.
+  for (const value of ["", "0", "-5", "soon"]) {
+    assert.equal(effectiveSpawnMcpTimeoutMs({ MCP_TIMEOUT: value }), 30_000, JSON.stringify(value))
+  }
+  assert.equal(effectiveSpawnMcpTimeoutMs({ MCP_TIMEOUT: "99999999999" }), 2_147_483_647, "capped like a timer")
 })
 
 test("cliHygieneEnv fills only the vars missing from the inherited env", () => {

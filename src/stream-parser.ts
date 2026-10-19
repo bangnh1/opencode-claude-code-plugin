@@ -54,6 +54,7 @@ import {
   finishAwaitingPlanApproval,
   noteProxyActivity,
   noteReasoning,
+  noteStartWatchdogInit,
   noteToolActivity,
   noteVisibleText,
   resetLastVisibleTextBlock,
@@ -245,6 +246,9 @@ export function createLineHandler(
 
       // Handle system init
       if (msg.type === "system" && msg.subtype === "init") {
+        // The child got past its MCP servers: the start watchdog's longer
+        // pre-`init` delay gives way to the configured one (h #g256).
+        noteStartWatchdogInit(state)
         if (msg.session_id) {
           setClaudeSessionId(state.sessionKey, msg.session_id)
           log.info("session initialized", {
