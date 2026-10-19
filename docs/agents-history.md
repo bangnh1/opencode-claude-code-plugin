@@ -7608,3 +7608,101 @@ It names the account that ran and says it "cannot serve this turn".
 
 Not measured live: every leftover needs a second limited or expired login,
 which this machine does not have (TODO.md, Parked).
+
+## A restart resumes a conversation dcp renumbered (2026-10-19)
+
+h #g258. The third of the three items in (h #g257)'s order, after "do the
+recommended for the rest". Recorded in TODO.md on 2026-10-17: restarting
+opencode 1.19.0 on one of the maintainer's own sessions logged `not resuming
+the claude session from before the restart {"reason":"conversation-changed"}`
+and replayed 251 messages as text, 50 of them dropped by the 180,000-character
+bound. The same refusal appears in the retained log on 2026-10-19, on a 462
+message session. The note asked for a reproduction with a diff of the two
+digest chains before the comparison was touched, and named two candidates:
+opencode-dcp's message references renumbered after the restart, or the
+restarted host rendering an earlier message differently.
+
+### What dcp does
+
+Read out of `@tarquinen/opencode-dcp` 3.2.0, the version `@latest` resolves to
+on this Mac. dcp gives every message it hands a provider a reference
+(`assignMessageRefs`), allocated in order from `m0001`, keyed on opencode's
+message id, never reused (`allocateNextMessageRef` skips a number already
+taken), and held only in memory: `saveSessionState` persists its prune state
+and nudge anchors, not `messageIds`. `injectMessageIds` appends the reference
+to every text part of a user message (`\n\n<dcp-message-id>m0004</dcp-message-id>`)
+and to every completed tool output of an assistant message, or to its last
+text part. Its opencode 2 path uses the `compact` id format instead, a last
+line of `@4@`.
+
+So within one opencode process a message keeps its number, and after a restart
+every message is numbered again from scratch over the messages that exist
+NOW. Anything that removed a message dcp had already numbered shifts every
+later number down by one.
+
+### Reproduced, and the chains diffed
+
+Live, opencode 1.19.3 (`opencode serve` under scratch HOME and XDG dirs), dcp
+3.2.0 loaded from its cache path, the plugin built from master, and a fake
+`claude` that answers every envelope and writes the transcript file the lookup
+checks for, so no API call was made. A probe-only patch in a copy of the
+bundle dumped the prompt at every `recordResumePoint` and every
+`findResumePoint`. Three conversations, one restart:
+
+- A, two messages, restart, a third: resumed.
+- B, two messages, the second undone (`POST /session/{id}/revert`), a third,
+  restart, a fourth: **a fresh Claude session**, `conversation-changed`.
+- C, two messages, an opencode compaction (`/summarize`), a third, restart, a
+  fourth: resumed.
+
+B's diff: the recorded chain ended on the third message carrying `m0004` (the
+undone second message had been `m0003`), and the restarted host handed the same
+message over as `m0003`. Every word of every message was identical; only dcp's
+number had moved, and the number is part of the hashed text. The first
+candidate is the cause. The second (a host rendering a message differently) did
+not appear in any of the three conversations.
+
+### The fix
+
+`conversationDigests` leaves dcp's references out (`withoutDcpRefs`,
+`src/session-fork.ts`): the XML tag in any form dcp writes (a message, a
+compressed block `b3`, `BLOCKED`, with or without a `priority` attribute) and
+the compact form's last line (`@4@`, `@b3@`, `@blocked@`, an optional
+` [<priority>]`). The compact form is read off dcp's source and was NOT
+measured live; a V2 check is in TODO.md. The tag is removed without the
+newlines dcp puts before it, because those are written the same way every time
+and a leading `\s*` would scan a long run of whitespace quadratically.
+
+The resume store keeps digests, not text, across restarts AND upgrades, so
+changing the digest alone would have made every dcp user's records mismatch on
+the restart that installs it, which is the one restart the feature exists for.
+So digests are versioned (`DIGEST_VERSION` = 2), a record carries the version
+it was built with, and a record with none is compared as version 1. A message
+with no reference hashes identically under both versions, so an install without
+dcp is not affected either way. What the old record cannot be helped with is
+the case this fixes: a conversation renumbered between the old record and the
+restart replays once more, and its next result writes a version-2 record.
+
+The in-memory chains (fork fingerprints, `conversation-gap.ts`'s served chain)
+are built and compared in one process, so they always use the current version.
+Within one process dcp's numbers do not move, so the rewind and missed-message
+classifiers behaved the same before and after; measured in the probe, B's undo
+was still classified as a rewind (`history-rewound`, two shared messages, one
+removed).
+
+### Tests
+
+Each fails on the old code: `test/session-fork.test.ts` (every reference form
+left out, content still compared, text that merely ends in `@` or contains an
+`@word@` line kept) and `test/session-resume.test.ts` (the measured renumbering
+resumes, an edited message under its old reference is still refused, and a real
+`doStream` before and after a simulated restart sends `--resume` and no replay).
+Two more pin what must not change: version 1 still hashes the references, and a
+version-1 record on disk is compared as version 1, resumes when nothing was
+renumbered, and is rewritten as version 2 by the next result.
+
+### Live, A/B
+
+The same probe against the fix's build: A, B and C all resumed their own
+Claude session after the restart (`resuming the claude session from before the
+restart`, three matched messages each), where master started B over.

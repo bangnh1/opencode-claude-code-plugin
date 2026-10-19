@@ -5,6 +5,7 @@ import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { sessionKeyAccount } from "./account-groups.js"
 import { log } from "./logger.js"
 import {
+  DIGEST_VERSION,
   continuesRecordedConversation,
   conversationDigests,
   modelSiblingSignature,
@@ -67,6 +68,13 @@ interface ResumeRecord {
    */
   configDir?: string
   account?: string
+  /**
+   * The `DIGEST_VERSION` both chains were built with. Absent on a record an
+   * older version wrote, which means version 1 and is compared as version 1,
+   * so the restart that installs an upgrade still resumes what it can
+   * (h #g258).
+   */
+  version?: number
   updatedAt: number
 }
 
@@ -106,7 +114,8 @@ function isRecord(value: unknown): value is ResumeRecord {
     (record.shape === undefined ||
       (Array.isArray(record.shape) && record.shape.every(isDigest))) &&
     (record.configDir === undefined || typeof record.configDir === "string") &&
-    (record.account === undefined || typeof record.account === "string")
+    (record.account === undefined || typeof record.account === "string") &&
+    (record.version === undefined || typeof record.version === "number")
   )
 }
 
@@ -198,6 +207,7 @@ export function recordResumePoint(
     current.shape !== undefined &&
     current.configDir === configDir &&
     current.account === account &&
+    current.version === DIGEST_VERSION &&
     current.chain.length === chain.length &&
     current.chain.every((entry, i) => entry.digest === chain[i].digest)
   ) {
@@ -212,6 +222,7 @@ export function recordResumePoint(
       shape,
       ...(configDir === undefined ? {} : { configDir }),
       ...(account === undefined ? {} : { account }),
+      version: DIGEST_VERSION,
       updatedAt: Date.now(),
     })
   })
@@ -271,7 +282,7 @@ export function findResumePoint(opts: {
     return undefined
   }
   if (record.cliPath !== opts.cliPath) return refuse("another-claude-binary")
-  if (!continuesRecordedConversation(record.chain, opts.prompt)) {
+  if (!continuesRecordedConversation(record.chain, opts.prompt, { version: record.version ?? 1 })) {
     return refuse("conversation-changed")
   }
   if (!existsSync(opts.transcriptPath(record.claudeSessionId))) {
@@ -407,6 +418,7 @@ export function findSiblingResumePoint(opts: {
       !record.shape ||
       !continuesRecordedConversation(record.shape, opts.prompt, {
         assistantContent: false,
+        version: record.version ?? 1,
       })
     ) {
       refusal = "sibling-conversation-changed"

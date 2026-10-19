@@ -22,6 +22,7 @@ import {
   recordResumePoint,
   resumeStorePath,
 } from "../src/session-resume-store.js"
+import { DIGEST_VERSION, conversationDigests } from "../src/session-fork.js"
 import { encodeCwd } from "../src/claude-session-bun.js"
 import {
   _forgetClaudeSessionIdInMemory,
@@ -69,6 +70,101 @@ test("a recorded conversation is found again by a new process", () => {
     assert.deepEqual(find("key-a", AFTER, transcript), { claudeSessionId: "claude-1", matched: 3 })
     // 0600, because the keys carry working directories.
     assert.equal(statSync(resumeStorePath()).mode & 0o777, 0o600)
+  } finally {
+    _setResumeStorePath(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** A message as opencode-dcp hands it to a provider: its reference appended. */
+const dcpTag = (ref: string) => `<dcp-message-id>${ref}</dcp-message-id>`
+const dcpUser = (text: string, ref: string) => userText(`${text}\n\n${dcpTag(ref)}`)
+const dcpAssistant = (text: string, ref: string) => assistantText(`${text}\n\n${dcpTag(ref)}`)
+
+/**
+ * The measured case (h #g258): an undo removed the second of three messages,
+ * which dcp had already numbered m0003, so the third went out as m0004. dcp
+ * forgets its numbering on a restart and renumbers from m0001, so the same
+ * third message comes back as m0003.
+ */
+const DCP_BEFORE = [
+  { role: "system", content: "You are a helpful assistant." },
+  dcpUser("Explain the cache.", "m0001"),
+  dcpAssistant("The cache stores the prompt prefix.", "m0002"),
+  dcpUser("Now explain resuming.", "m0004"),
+] as any
+const DCP_AFTER = [
+  { role: "system", content: "You are a helpful assistant." },
+  dcpUser("Explain the cache.", "m0001"),
+  dcpAssistant("The cache stores the prompt prefix.", "m0002"),
+  dcpUser("Now explain resuming.", "m0003"),
+  dcpAssistant("Resuming continues a session.", "m0004"),
+  dcpUser("Shorter, please.", "m0005"),
+] as any
+
+test("dcp renumbering its references across a restart is not a changed conversation (h #g258)", () => {
+  const { dir, transcript } = scratchStore()
+  try {
+    recordResumePoint("key-dcp", "claude-dcp", DCP_BEFORE, CLI)
+    writeFileSync(transcript("claude-dcp"), "")
+    _setResumeStorePath(resumeStorePath())
+    assert.deepEqual(find("key-dcp", DCP_AFTER, transcript), { claudeSessionId: "claude-dcp", matched: 3 })
+
+    // Still a comparison of content: an edited message under the reference
+    // it had is refused.
+    const edited = [...DCP_AFTER]
+    edited[3] = dcpUser("Now explain forking.", "m0003")
+    assert.equal(find("key-dcp", edited, transcript), undefined)
+  } finally {
+    _setResumeStorePath(null)
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a record written before the digest version is compared the way it was built (h #g258)", () => {
+  const { dir, transcript } = scratchStore()
+  try {
+    // A conversation with no undo: dcp numbered it the same before and after.
+    const plainBefore = [...DCP_BEFORE.slice(0, 3), dcpUser("Now explain resuming.", "m0003")]
+    const plainAfter = [
+      ...plainBefore,
+      dcpAssistant("Resuming continues a session.", "m0004"),
+      dcpUser("Shorter, please.", "m0005"),
+    ]
+    // What the previous release wrote: version-1 digests, no `version` field.
+    const oldRecord = (prompt: any, claudeSessionId: string) => ({
+      claudeSessionId,
+      cliPath: CLI,
+      chain: conversationDigests(prompt, { version: 1 }),
+      shape: conversationDigests(prompt, { assistantContent: false, version: 1 }),
+      updatedAt: Date.now(),
+    })
+    mkdirSync(join(dir, "state"), { recursive: true })
+    writeFileSync(
+      resumeStorePath(),
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "key-plain": oldRecord(plainBefore, "claude-plain"),
+          "key-undo": oldRecord(DCP_BEFORE, "claude-undo"),
+        },
+      }),
+    )
+    writeFileSync(transcript("claude-plain"), "")
+    writeFileSync(transcript("claude-undo"), "")
+    _setResumeStorePath(resumeStorePath())
+
+    // The restart that installs the upgrade still resumes what the old build
+    // would have, rather than replaying every dcp conversation once.
+    assert.deepEqual(find("key-plain", plainAfter, transcript), { claudeSessionId: "claude-plain", matched: 3 })
+    // What an old record cannot be helped with: it hashed the old number.
+    assert.equal(find("key-undo", DCP_AFTER, transcript), undefined)
+
+    // The next result writes a current record, which a renumbering no longer
+    // breaks.
+    recordResumePoint("key-plain", "claude-plain", plainAfter, CLI)
+    const onDisk = JSON.parse(readFileSync(resumeStorePath(), "utf8")).sessions["key-plain"]
+    assert.equal(onDisk.version, DIGEST_VERSION)
   } finally {
     _setResumeStorePath(null)
     rmSync(dir, { recursive: true, force: true })
@@ -290,6 +386,28 @@ test("after a restart the conversation resumes its claude session instead of rep
     const sent = JSON.stringify(fake.events().filter((event) => event.type === "input").at(-1).envelope)
     assert.ok(!sent.includes("conversation_history"), sent.slice(0, 400))
     assert.ok(sent.includes("Shorter, please."))
+  } finally {
+    await fake.cleanup()
+  }
+})
+
+test("a conversation dcp renumbered across the restart resumes too (h #g258)", { timeout: 60_000 }, async () => {
+  const fake = createResumeCli({})
+  try {
+    await fake.warm()
+    await fake.turn([...DCP_BEFORE])
+    fake.writeTranscript("claude-before-restart")
+
+    await fake.restart()
+    await fake.turn([...DCP_AFTER])
+
+    const spawns = fake.events().filter((event) => event.type === "spawn")
+    assert.equal(spawns.length, 2)
+    const args: string[] = spawns[1].args
+    const at = args.indexOf("--resume")
+    assert.deepEqual(args.slice(at, at + 2), ["--resume", "claude-before-restart"])
+    const sent = JSON.stringify(fake.events().filter((event) => event.type === "input").at(-1).envelope)
+    assert.ok(!sent.includes("conversation_history"), "the thread is not replayed as text")
   } finally {
     await fake.cleanup()
   }

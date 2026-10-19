@@ -66,6 +66,54 @@ let fingerprintSeq = 0
 export const MAX_FORK_FINGERPRINTS = 64
 
 /**
+ * How a digest is computed. A chain is only comparable with one built the same
+ * way, and the resume store keeps chains across restarts AND upgrades, so a
+ * record says which way it was built (h #g258).
+ *
+ * 1. Every text and tool output hashed as it arrived.
+ * 2. The same, with opencode-dcp's message references taken out first.
+ *
+ * Version 2 exists because dcp numbers messages in memory: it hands every
+ * message it sends a provider a `<dcp-message-id>m0004</dcp-message-id>` tag
+ * (appended to each user text part and each completed tool output), allocates
+ * the numbers in order, never reuses one, and forgets them all when opencode
+ * restarts. Measured on opencode 1.19.3 with dcp 3.2.0: after an undo removed
+ * the second of three messages, the third carried `m0004` before a restart and
+ * `m0003` after it, with every word of it unchanged, so `resumeAfterRestart`
+ * refused it as a changed conversation and replayed the thread as text. A
+ * plain conversation and a compacted one kept their numbers and resumed.
+ */
+export const DIGEST_VERSION = 2
+
+/**
+ * dcp's message reference in its XML form (opencode 1): a message, a
+ * compressed block (`b3`) or `BLOCKED`, with an optional `priority`
+ * attribute. Only the tag itself goes, not the newlines dcp put before it,
+ * because those are put there the same way every time and a leading `\s*`
+ * would make the scan quadratic over a long run of whitespace.
+ */
+const DCP_MESSAGE_ID_TAG = /<dcp-message-id(?:\s[^>]*)?>[^<]*<\/dcp-message-id>/g
+
+/**
+ * The same reference in dcp's `compact` form, which its opencode 2 path uses:
+ * a last line of `@12@`, `@b3@` or `@blocked@`, optionally followed by
+ * ` [<priority>]`. Read off dcp 3.2.0's own source (`formatMessageIdTag`),
+ * not measured live.
+ */
+const DCP_COMPACT_REF_LINE = /^@(?:\d+|b\d+|blocked)@(?: \[[^\]\n]*\])?$/
+
+function withoutDcpRefs(text: string): string {
+  let out = text.includes("<dcp-message-id") ? text.replace(DCP_MESSAGE_ID_TAG, "") : text
+  for (;;) {
+    const trimmed = out.trimEnd()
+    if (!trimmed.endsWith("@") && !trimmed.endsWith("]")) return out
+    const lineStart = trimmed.lastIndexOf("\n") + 1
+    if (!DCP_COMPACT_REF_LINE.test(trimmed.slice(lineStart))) return out
+    out = trimmed.slice(0, lineStart)
+  }
+}
+
+/**
  * Feed one message's content into a hash. Only the parts that carry the
  * conversation are included: text, a tool call's name and input, a tool
  * result's name and output, and the kind plus media type of an attachment.
@@ -74,15 +122,22 @@ export const MAX_FORK_FINGERPRINTS = 64
  * part it copies, so a digest over ids would never match anything. Reasoning
  * is left out for the same class of reason: it is model-internal, it is not
  * what makes two conversations the same conversation, and a turn whose
- * reasoning differed also differs in the reply text that follows it.
+ * reasoning differed also differs in the reply text that follows it. dcp's
+ * message references are left out from version 2 on, for the reason
+ * `DIGEST_VERSION` gives.
  */
-function hashPart(hash: ReturnType<typeof createHash>, part: unknown): void {
+function hashPart(
+  hash: ReturnType<typeof createHash>,
+  part: unknown,
+  version: number,
+): void {
   const p = part as Record<string, unknown> | null
   const type = typeof p?.type === "string" ? p.type : "unknown"
+  const content = (text: string) => (version >= 2 ? withoutDcpRefs(text) : text)
   switch (type) {
     case "text":
       hash.update("text\u0000")
-      hash.update(String(p?.text ?? ""))
+      hash.update(content(String(p?.text ?? "")))
       break
     case "tool-call":
       hash.update("call\u0000")
@@ -94,7 +149,9 @@ function hashPart(hash: ReturnType<typeof createHash>, part: unknown): void {
       hash.update("result\u0000")
       hash.update(String(p?.toolName ?? ""))
       hash.update("\u0000")
-      hash.update(stableJson(p?.output))
+      // dcp appends its reference to a tool's output, which reaches the
+      // provider inside the result's `{ type, value }`.
+      hash.update(stableJson(p?.output, version >= 2 ? withoutDcpRefs : undefined))
       break
     case "file":
     case "image": {
@@ -122,10 +179,14 @@ function hashPart(hash: ReturnType<typeof createHash>, part: unknown): void {
   hash.update("\u001e")
 }
 
-/** Key-order-independent JSON, so two equal inputs always hash the same. */
-function stableJson(value: unknown): string {
+/**
+ * Key-order-independent JSON, so two equal inputs always hash the same.
+ * `text`, when given, rewrites every string in it first.
+ */
+function stableJson(value: unknown, text?: (value: string) => string): string {
   const seen = new WeakSet<object>()
   const walk = (node: unknown): unknown => {
+    if (typeof node === "string") return text ? text(node) : node
     if (node === null || typeof node !== "object") return node
     if (seen.has(node as object)) return "[circular]"
     seen.add(node as object)
@@ -143,16 +204,16 @@ function stableJson(value: unknown): string {
   }
 }
 
-function messageDigest(msg: { role: string; content: unknown }): string {
+function messageDigest(msg: { role: string; content: unknown }, version: number): string {
   const hash = createHash("sha256")
   hash.update(msg.role)
   hash.update("\u0000")
   if (typeof msg.content === "string") {
     hash.update("text\u0000")
-    hash.update(msg.content)
+    hash.update(version >= 2 ? withoutDcpRefs(msg.content) : msg.content)
     hash.update("\u001e")
   } else if (Array.isArray(msg.content)) {
-    for (const part of msg.content) hashPart(hash, part)
+    for (const part of msg.content) hashPart(hash, part, version)
   }
   return hash.digest("hex").slice(0, 32)
 }
@@ -189,6 +250,12 @@ export interface ConversationDigestOptions {
    * without it that feature cannot exist at all.
    */
   assistantContent?: boolean
+  /**
+   * Which `DIGEST_VERSION` to build, default the current one. Only a lookup
+   * against a record an older version wrote passes it, so that record is
+   * still compared the way it was built (h #g258).
+   */
+  version?: number
 }
 
 /** The conversation messages of a prompt, reduced to a digest chain. */
@@ -206,7 +273,7 @@ export function conversationDigests(
       digest:
         opts?.assistantContent === false && msg.role === "assistant"
           ? ASSISTANT_TURN_DIGEST
-          : messageDigest(msg),
+          : messageDigest(msg, opts?.version ?? DIGEST_VERSION),
     })
   }
   return out

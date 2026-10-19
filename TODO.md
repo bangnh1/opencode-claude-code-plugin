@@ -72,15 +72,9 @@
 Feature ideas live in the vault note `opencode-claude-code-plugin/Future Features.md`; this list is
 checks and suspected defects found in passing.
 
-- 2026-10-17: `resumeAfterRestart` refused in the maintainer's own pane. Restarting opencode 1.19.0 on
-  session `ses_eb61279e8ffexih00sExaC6KYv` (same key, same account wrapper) logged `not resuming the claude
-  session from before the restart {"reason":"conversation-changed"}` and then `replaying the conversation as
-  text ... "reason":"no-sibling-recorded","messages":251` with 50 messages dropped by the 180,000-character
-  bound. So the recorded digest chain was not a prefix of the history the restarted host handed over.
-  Candidates to test: opencode-dcp's `<dcp-message-id>` tags renumbered after the restart (they are part
-  of the hashed message text), or the restarted host rendering an earlier message differently (a tool
-  part's output, a question result). Reproduce with two turns, a restart and a diff of the two digest
-  chains before touching the comparison.
+- 2026-10-19: dcp's `compact` reference form on opencode 2 (`@4@` as a message's last line) is left out of the
+  resume digest from dcp 3.2.0's source only (h #g258). Check it live on 2.0.31: two prompts, the second undone,
+  a third, a restart, a fourth, and confirm the fourth resumes. Needs V2's revert route.
 - 2026-10-17: no todo tool reached this headless main conversation on Claude Code 2.1.300 (`TaskCreate`,
   `TaskUpdate`, `TaskList` absent from the model's tool list and not found by `ToolSearch`), although the
   spawn's `--disallowedTools` was only `Bash Edit MultiEdit Write WebFetch Agent AskUserQuestion`. The todo
@@ -147,6 +141,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (branch `restart-resume-dcp`, h #g258): `resumeAfterRestart` refused as
+  `conversation-changed`, recorded 2026-10-17. Reproduced live on opencode 1.19.3 + dcp 3.2.0 with a fake
+  `claude`: an undo makes dcp renumber every later message after a restart (`m0004` became `m0003`), and its tag
+  was hashed as text. The digest leaves dcp's references out, versioned so records from before still resume.
+  The A/B: master started the undone conversation over, the fix resumed it.
 - 2026-10-19: **done** (branch `turn-cost-and-failover`, h #g257): the `turnStats` cost and PR #115's five
   leftovers, after "do the recommended for the rest". The footer prints the turn's delta (a resumed session's
   first footer leaves the cost out); a limited `doGenerate` turn errors in every mode; a stream cancel stops
