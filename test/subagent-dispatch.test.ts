@@ -159,6 +159,42 @@ test("tasks are read out of a single task and out of a batch", () => {
   assert.deepEqual(dispatchAgentTypes(tasks), ["implementor", "designer"])
 })
 
+test("a task that names its own model is not asked about (h #g254)", () => {
+  const tasks = dispatchTasksFromCalls(
+    [
+      {
+        toolCallId: "one",
+        toolName: "task",
+        input: { prompt: "alpha", subagent_type: "implementor", description: "a", model: "claude-code/claude-opus-5-5" },
+      },
+      {
+        toolCallId: "two",
+        toolName: "task_batch",
+        input: {
+          tasks: [
+            { prompt: "beta", subagent_type: "designer", description: "b", model: "claude-code/claude-sonnet-5-5#high" },
+            { prompt: "gamma", subagent_type: "implementor", description: "c", model: "  " },
+          ],
+        },
+      },
+    ],
+    taskBatchTasks,
+  )
+  assert.deepEqual(
+    tasks.map((entry) => [entry.callId, entry.batchIndex, entry.prompt]),
+    [["two", 1, "gamma"]],
+    "the batch index is the task's own, and a blank model names nothing",
+  )
+  assert.deepEqual(
+    dispatchTasksFromCalls(
+      [{ toolCallId: "one", toolName: "task", input: { prompt: "alpha", model: "claude-code/claude-opus-5-5" } }],
+      taskBatchTasks,
+    ),
+    [],
+    "with every task named there is nothing to ask, so no form",
+  )
+})
+
 test("the first form is always exactly one question", () => {
   _resetSubagentDispatchForTests()
   const tasks = [

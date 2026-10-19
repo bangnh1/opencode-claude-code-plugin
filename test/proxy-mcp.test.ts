@@ -16,6 +16,9 @@ import {
   createProxyMcpServer,
   applyTaskModelSupport,
   applyBackgroundSubagentSupport,
+  liveTaskSupportsModel,
+  taskModelInputError,
+  TASK_INPUT_PROPERTIES,
   buildProxyTimeoutError,
   resolveProxyCallTimeoutMs,
   resolveProxyClientCeilingMs,
@@ -105,8 +108,8 @@ async function withServer<T>(
 }
 
 for (const background of [false, true]) {
-  test(`V1 omits model and refuses overrides before dispatch (background ${background})`, async () => {
-    const tools = applyTaskModelSupport(applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, background), "v1")
+  test(`a host without a per-call model omits it and refuses one before dispatch (background ${background})`, async () => {
+    const tools = applyTaskModelSupport(applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, background), false)
     const srv = await createProxyMcpServer(tools)
     let dispatched = false
     srv.calls.on("call", (call: ProxyToolCall) => {
@@ -125,7 +128,8 @@ for (const background of [false, true]) {
           params: { name, arguments: name === "task" ? { ...task, model: "openai/gpt-5#high" } : { tasks: [task, { ...task, model: "openai/gpt-5#high" }] } },
         })
         assert.equal(res.json.result.isError, true)
-        assert.match(res.json.result.content[0].text, /require OpenCode 2/)
+        assert.match(res.json.result.content[0].text, /takes no per-call `model`/)
+        assert.match(res.json.result.content[0].text, /no tasks were started/)
       }
       assert.equal(dispatched, false)
     } finally {
@@ -133,6 +137,118 @@ for (const background of [false, true]) {
     }
   })
 }
+
+test("the per-call model gate is read off opencode 1's own task schema, and answered on V2 without it", () => {
+  // opencode 1.19.0's `task` (read out of the binary): no `model` field.
+  const v1Task = {
+    type: "object",
+    properties: { description: {}, prompt: {}, subagent_type: {}, task_id: {}, command: {} },
+  }
+  assert.equal(liveTaskSupportsModel(v1Task, "v1"), false)
+  assert.equal(
+    liveTaskSupportsModel({ ...v1Task, properties: { ...v1Task.properties, model: {} } }, "v1"),
+    true,
+    "a 1.x that grows the field gets it without a plugin release",
+  )
+  assert.equal(liveTaskSupportsModel(undefined, "v1"), false, "an unread registry offers nothing")
+  // The V2 shim reports `parameters: {}` for every tool, so V2 is not asked.
+  assert.equal(liveTaskSupportsModel({}, "v2"), true)
+})
+
+test("model sits after subagent_type and is stripped from task and every task_batch item together", () => {
+  assert.deepEqual(Object.keys(TASK_INPUT_PROPERTIES).slice(0, 4), [
+    "description",
+    "prompt",
+    "subagent_type",
+    "model",
+  ])
+  assert.match(String((TASK_INPUT_PROPERTIES as any).model.description), /^NEVER set this unless the user explicitly asked/)
+  assert.match(String((TASK_INPUT_PROPERTIES as any).model.description), /never guess one/)
+
+  const kept = applyTaskModelSupport(DEFAULT_PROXY_TOOLS, true)
+  assert.equal(kept, DEFAULT_PROXY_TOOLS, "a supported host's list is returned as is")
+  const stripped = applyTaskModelSupport(DEFAULT_PROXY_TOOLS, false)
+  const task = stripped.find((tool) => tool.name === "task")!
+  const batch = stripped.find((tool) => tool.name === TASK_BATCH_TOOL_NAME)!
+  assert.equal("model" in (task.inputSchema.properties as any), false)
+  assert.equal("model" in (batch.inputSchema.properties as any).tasks.items.properties, false)
+  assert.ok("prompt" in (task.inputSchema.properties as any), "nothing else goes with it")
+  const malformed = [{ name: TASK_BATCH_TOOL_NAME, description: "", inputSchema: { type: "object" } }] as any
+  assert.deepEqual(applyTaskModelSupport(malformed, false), malformed, "an unexpected shape is left alone")
+})
+
+test("taskModelInputError answers for the whole call, first refusal wins, and is silent without a model", () => {
+  const offered = DEFAULT_PROXY_TOOLS.find((tool) => tool.name === "task")!
+  const batchDef = DEFAULT_PROXY_TOOLS.find((tool) => tool.name === TASK_BATCH_TOOL_NAME)!
+  const withoutModel = applyTaskModelSupport(DEFAULT_PROXY_TOOLS, false).find((tool) => tool.name === "task")!
+  const task = { description: "d", prompt: "p", subagent_type: "general" }
+  assert.equal(taskModelInputError(offered, task), null)
+  assert.equal(taskModelInputError(withoutModel, task), null, "no model, nothing to refuse")
+  assert.match(String(taskModelInputError(withoutModel, { ...task, model: "x/y" })), /takes no per-call `model`/)
+  assert.match(String(taskModelInputError(offered, { ...task, model: ["x/y"] })), /must be a string/)
+  const guard = (model: string) => (model.includes("private") ? `refused ${model}` : null)
+  assert.equal(taskModelInputError(offered, { ...task, model: "claude-code-work/m" }, guard), null)
+  assert.equal(
+    taskModelInputError(batchDef, { tasks: [{ ...task, model: "claude-code-work/m" }, { ...task, model: "claude-code-private/m" }] }, guard),
+    "refused claude-code-private/m",
+  )
+})
+
+test("a host that takes a per-call model keeps it in both schemas, and the guard refuses a whole batch before dispatch", async () => {
+  const tools = applyTaskModelSupport(applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, true, "v2"), true)
+  const asked: string[] = []
+  const srv = await createProxyMcpServer(tools, undefined, undefined, {
+    taskModelGuard: (model) => {
+      asked.push(model)
+      return model.startsWith("claude-code-private/") ? "outside this conversation's account group" : null
+    },
+  })
+  const dispatched: string[] = []
+  srv.calls.on("call", (call: ProxyToolCall) => {
+    dispatched.push(call.toolName)
+    call.resolve({ kind: "text", text: "ran" })
+  })
+  const task = { description: "Check", prompt: "Check it", subagent_type: "general" }
+  try {
+    const listed = await authedPost(srv, { jsonrpc: "2.0", id: 1, method: "tools/list" })
+    const byName = (name: string) =>
+      listed.json.result.tools.find((tool: { name: string }) => tool.name === name).inputSchema
+    assert.equal(byName("task").properties.model.type, "string")
+    assert.equal(byName("task_batch").properties.tasks.items.properties.model.type, "string")
+
+    const refused = await authedPost(srv, {
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: {
+        name: "task_batch",
+        arguments: { tasks: [{ ...task, model: "claude-code-work/claude-opus-5-5@work" }, { ...task, model: "claude-code-private/claude-opus-5-5@private" }] },
+      },
+    })
+    assert.equal(refused.json.result.isError, true)
+    assert.match(refused.json.result.content[0].text, /outside this conversation's account group/)
+    assert.deepEqual(dispatched, [], "a refused item stops the whole batch, including the item the guard allowed")
+
+    const wrongType = await authedPost(srv, {
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "task", arguments: { ...task, model: 42 } },
+    })
+    assert.equal(wrongType.json.result.isError, true)
+    assert.match(wrongType.json.result.content[0].text, /must be a string/)
+
+    const allowed = await authedPost(srv, {
+      jsonrpc: "2.0", id: 4, method: "tools/call",
+      params: { name: "task", arguments: { ...task, model: "claude-code-work/claude-sonnet-5-5@work#high" } },
+    })
+    assert.notEqual(allowed.json.result.isError, true)
+    assert.deepEqual(dispatched, ["task"])
+    assert.deepEqual(asked, [
+      "claude-code-work/claude-opus-5-5@work",
+      "claude-code-private/claude-opus-5-5@private",
+      "claude-code-work/claude-sonnet-5-5@work#high",
+    ], "every named model is asked about, and a task without one is not")
+  } finally {
+    await srv.close()
+  }
+})
 
 // Regression for the 2026-07-04 "malformed result that failed schema
 // validation" bug: Claude CLI validates tools/call responses against the

@@ -7186,3 +7186,112 @@ returning before the queued message) and `test/unattended-replay.test.ts` (no
 marker over frames that render nothing). Shipped as v0.59.0 (PR #124), with a
 GitHub Release; the publish was verified from the Publish step's tail and the
 version document's shasum.
+
+## A subagent model named per call on opencode 2, absorbed from PR #123 (2026-10-19)
+
+h #g254. The maintainer asked about PR #123 ("whatsup with it?") and why there
+was a workflow warning. The PR, a first contribution from @taylormitchell
+(Taylor Mitchell), was a draft: it forwards an optional `model` on the proxied
+`task` and `task_batch` to opencode 2's own `subagent` tool and hides it on
+opencode 1. Its two CI runs had never started. After the review below, the
+maintainer chose to approve the runs and "assimilate it and improve on it and
+credit the user and close it", and to fix the Docs warning now.
+
+### The two warnings
+
+- On the PR: both CI runs were `action_required` with zero jobs, because the
+  repository's fork-PR policy is `first_time_contributors`. Approved through
+  `POST /repos/{owner}/{repo}/actions/runs/{id}/approve`; both passed (Linux
+  1798 tests on the PR's own base, Windows green).
+- On master: every Docs run warned "Node.js 20 is deprecated", four times a day
+  with its 6-hourly schedule, because `docs.yml` still pinned `checkout@v4`,
+  `setup-node@v4`, `upload-pages-artifact@v3` (whose `upload-artifact@v4` is
+  Node 20) and `deploy-pages@v4`, while the other three workflows were on v6.
+  Moved to `checkout@v6`, `setup-node@v6`, `upload-pages-artifact@v5` and
+  `deploy-pages@v5`, each version's `action.yml` read for `node24`.
+  `upload-pages-artifact` v4 stopped including dotfiles; the deployed artifact
+  (166 entries) had none, so nothing was lost. The first run (`c473741`) built,
+  deployed and carried no Node 20 annotation. What remains is GitHub's notice
+  that `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19, informational.
+
+### What was measured before anything was built
+
+- opencode 2.0.22 and 2.0.31 both declare `subagent.model` with the description
+  "NEVER set this unless the user explicitly asks for a particular model or
+  variant ... Do not guess the ID: look the model up with the models tool", and
+  `SubagentTool.resolveModel` parses `providerID/modelID[#variant]` and looks it
+  up by exact `providerID` and `id` among the available models. The child's
+  model is `explicit ?? agent's model ?? parent's model`, and a resumed child is
+  switched to the explicit model (`switchModel`).
+- opencode 1.19.0's `task` tool has description, prompt, subagent_type,
+  task_id, command and the experimental background, and no model.
+- The PR merged cleanly onto v0.59.0, and on that merge typecheck, its tests
+  and the full suite (1829) passed.
+
+### What the PR did not handle, and what changed
+
+Three things in this plugin decide a subagent's model or account after opencode
+has, so forwarding the field was not the whole job:
+
+1. `accountGroups` (h #g226). A model on another account's provider moves the
+   subagent, and the task text it is handed, to that account; the dispatch form
+   only ever offers same-group accounts. The same rule now runs before any task
+   of the call is queued (`taskModelAccountRefusal`, through a `taskModelGuard`
+   option `ensureProxyServer` builds only with groups set on a multi-account
+   install), lifted by `subagentDispatchCrossGroup` as the form is. A model on a
+   provider that is not one of this plugin's accounts is opencode's own routing
+   and is not checked.
+2. `forceModel`, `defaultSubagentModel` and an agent's `reasoningEffort`
+   rewrite the model and effort inside the child's own turn, where an explicit
+   request looks exactly like an inherited one. The request is now noted where
+   the call is queued and found in the child's prologue by the dispatch form's
+   measured rule (parent, agent type, first message, h #g227, #g229; a resumed
+   child is named by its `task_id`). While the child runs on exactly that model
+   id it beats a held form choice and the agent's model rewrite, and a named
+   `#variant` beats the agent's effort, which is opencode's own order. With no
+   variant the agent's effort still applies.
+3. The dispatch form left the field unread: it would have asked about a task
+   the operator had already decided, and its answer would either have replaced
+   the explicit model or been dropped. A task that names a model is now left out
+   of the form, and a dispatch whose every task names one raises none.
+
+Smaller: the V1 gate reads opencode's own `task` schema (`liveTaskSupportsModel`)
+rather than the major, as the background gate does; `model` moved after
+`subagent_type`, where opencode puts it, instead of first; its description now
+leads with opencode's own "NEVER set this unless" and says never to guess an id,
+because Claude has no models tool through the proxy.
+
+### Live, opencode 2.0.31, A/B against v0.59.0
+
+Private `serve` under scratch XDG dirs, the real `claude` (2.1.293), the parent
+on Haiku 4.5 asked to dispatch a `general` subagent with
+`model: "claude-code/claude-haiku-5-5#low"`:
+
+| | this branch | v0.59.0 |
+| --- | --- | --- |
+| `subagent` input | `model` forwarded | no `model` |
+| child session's model | `claude-haiku-5-5`, variant `low` | `claude-haiku-4-5` |
+| child spawn | `--model claude-haiku-5-5`, effort `low` | `--model claude-haiku-4-5` |
+| plugin log | `explicit task model claimed by its child session` | nothing |
+| Claude's reply | `HELLOPROBE` | `HELLOPROBE`, plus a note that the tool has no `model` |
+
+opencode resolved the plugin's own model although its `GET /api/model` answers
+empty for a plugin provider (h #g229), and the claim matched V2's wrapped first
+message. The precedence over `forceModel`, the guard and the form exclusion were
+not run live: V2's agent config has no place for `forceModel` outside a
+markdown file, and the guard needs a second logged-in account; the fake-CLI
+tests below drive all three through a real `doStream`.
+
+### Tests
+
+`test/task-model.test.ts` (the reference shapes, the guard both ways and every
+refusal, the claims with their parent check and exact-before-wrapped rule, a
+resumed child's record, the TTL, `explicitTaskModelApplies`),
+`test/task-model-stream.test.ts` (an explicit model and variant beating
+`forceModel` and `reasoningEffort` while the sibling task keeps them, a request
+opencode did not honour changing nothing, a resumed child, the guard refusing
+before dispatch, `subagentDispatchCrossGroup`, the form asking only about the
+unnamed tasks), `test/proxy-mcp.test.ts` (the gate, the strip, the input check),
+`test/subagent-dispatch.test.ts` (the exclusion) and the PR's own forwarding
+tests in `test/proxy-task.test.ts`. @taylormitchell's commit was cherry-picked
+with authorship kept and is credited in `docs/credits.md`.

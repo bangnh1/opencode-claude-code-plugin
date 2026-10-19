@@ -225,6 +225,7 @@ import {
   applyBackgroundSubagentSupport,
   applyTaskModelSupport,
   liveTaskSupportsBackground,
+  liveTaskSupportsModel,
   setProxyDeadlineGuard,
   TASK_BATCH_TOOL_NAME,
   taskBatchChildToolCallId,
@@ -312,6 +313,13 @@ import {
   type SubagentChoice,
   type SubagentDispatchStep,
 } from "./subagent-dispatch.js"
+import {
+  claimExplicitTaskModel,
+  explicitTaskModelApplies,
+  explicitTaskModelFor,
+  hasExplicitTaskModelCandidate,
+  type ExplicitTaskModel,
+} from "./task-model.js"
 import { createTurnState } from "./turn-state.js"
 import { watchTurnAbort } from "./turn-abort.js"
 import { createLineHandler } from "./stream-parser.js"
@@ -547,6 +555,30 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
   }
 
   /**
+   * The model the parent named for THIS session in its own `task` call, or
+   * undefined (h #g254). The same two lookups as `resolveDispatchChoice`, and
+   * the same reason for the order: a held record first, and the parent fetched
+   * only for a child whose agent and first message match a recorded request.
+   */
+  private async resolveExplicitTaskModel(
+    options: LanguageModelV3CallOptions,
+    affinity: string,
+  ): Promise<ExplicitTaskModel | undefined> {
+    if (affinity === "default") return undefined
+    const held = explicitTaskModelFor(affinity)
+    if (held) return held
+    const agent = this.getOpencodeAgent(options)
+    const prompt = firstUserText(options.prompt)
+    if (!hasExplicitTaskModelCandidate(agent, prompt)) return undefined
+    return claimExplicitTaskModel({
+      sessionId: affinity,
+      agent,
+      prompt,
+      parentSessionId: await fetchSessionParentId(affinity),
+    })
+  }
+
+  /**
    * Whether the ExitPlanMode approval bridge is live for this turn: the
    * operator opted in AND opencode's registry actually has the `question`
    * tool. Without the registry entry the emitted tool-call would render as
@@ -752,6 +784,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     sessionKeyForCalls: string,
     interceptCompress: boolean,
     callerSessionId?: string,
+    sourceAccount?: string,
   ): Promise<ProxyMcpServer> {
     return ensureProxyServer(
       this.config,
@@ -759,6 +792,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       sessionKeyForCalls,
       interceptCompress,
       callerSessionId,
+      sourceAccount,
     )
   }
 
@@ -1270,9 +1304,21 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // A default install pays one `Map.get` and one scan of an empty array:
     // `hasCandidateClaim` can only be true once a dispatch has actually been
     // released, and `fetchSessionParentId` is reached only behind it.
-    const dispatchChoice = compactionMode
+    //
+    // Ahead of it, the model the parent named for this child in its own `task`
+    // call (h #g254), while the child still runs on exactly that model. It is
+    // the newest and most specific decision about this child, so it beats a
+    // choice the child held from an earlier dispatch form, and below it beats
+    // the agent's own rewrites, which is opencode's order for a per-call model.
+    // Same cost on a default install: nothing is ever recorded there.
+    const explicitTaskModel = compactionMode
       ? undefined
-      : await this.resolveDispatchChoice(options, affinity)
+      : await this.resolveExplicitTaskModel(options, affinity)
+    const explicitModelApplies = explicitTaskModelApplies(explicitTaskModel, this.modelId)
+    const dispatchChoice =
+      compactionMode || explicitModelApplies
+        ? undefined
+        : await this.resolveDispatchChoice(options, affinity)
     // Use a separate session key for compaction so its short-lived spawn
     // never collides with the main conversation's claude process.
     // A fallback attempt replaces the model NAME and nothing else, which is
@@ -1289,23 +1335,32 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     const dispatchModelId = dispatchChoice?.model
       ? qualifyModelName(dispatchChoice.model, this.modelId)
       : null
+    // An explicit per-call model is the id opencode already spawned this child
+    // on, so it is kept as is: `forceModel` and `defaultSubagentModel` would
+    // otherwise rewrite a choice the operator made in the conversation.
     const effectiveModelId = compactionMode
       ? this.resolveCompactionModel()
       : (attempt?.modelOverride ??
         dispatchModelId ??
-        resolveAgentModel(
-          this.getOpencodeAgent(options),
-          this.modelId,
-        ))
+        (explicitModelApplies
+          ? this.modelId
+          : resolveAgentModel(
+              this.getOpencodeAgent(options),
+              this.modelId,
+            )))
     if (attempt) attempt.modelId = effectiveModelId
     // Compaction skips request/agent effort overrides; other calls key on it.
+    // A `#variant` the parent named reaches this request as its reasoning
+    // effort, and is kept over the agent's declared one for the same reason.
     const reasoningEffort = compactionMode
       ? undefined
       : ((dispatchChoice?.effort ??
-          resolveAgentEffort(
-            this.getOpencodeAgent(options),
-            this.getReasoningEffort(options.providerOptions),
-          )) as ReasoningEffort | undefined)
+          (explicitModelApplies && explicitTaskModel?.variant
+            ? this.getReasoningEffort(options.providerOptions)
+            : resolveAgentEffort(
+                this.getOpencodeAgent(options),
+                this.getReasoningEffort(options.providerOptions),
+              ))) as ReasoningEffort | undefined)
     // Compaction keeps the CLI's own cache default, exactly as it skips
     // effort: its spawn is short-lived and its cost belongs to no agent.
     const promptCacheTtl = compactionMode
@@ -3071,7 +3126,18 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 backgroundSubagentsSupported,
                 hostDialect,
               )
-              enrichedProxy = applyTaskModelSupport(enrichedProxy, hostDialect)
+              // A per-call `model` is the host's to take too (h #g254): read
+              // off the same schema, stripped where it cannot be honoured.
+              const taskModelSupported = liveTaskSupportsModel(
+                liveToolInfo.taskParameters,
+                hostDialect,
+              )
+              enrichedProxy = applyTaskModelSupport(enrichedProxy, taskModelSupported)
+              log.info("task model gate", {
+                supported: taskModelSupported,
+                registryResolved: liveToolInfo.resolved,
+                hostApi: hostDialect,
+              })
               // The doctor answers without a turn, so the gate has to be
               // remembered here rather than recomputed there.
               recordBackgroundSubagentGate({
@@ -3162,6 +3228,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                 sk,
                 pluginCompressEnabled,
                 affinity,
+                sourceAccount,
               )
             }
 

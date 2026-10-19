@@ -11,7 +11,7 @@
  */
 import type { ClaudeCodeConfig } from "./types.js"
 import { shouldStripContextReminders } from "./message-builder.js"
-import { accountConfigDirPath } from "./accounts.js"
+import { accountConfigDirPath, DEFAULT_ACCOUNT, normalizeAccountName } from "./accounts.js"
 import type { FailoverSpawn } from "./account-failover.js"
 import { isPlanModeQuestionActive } from "./plan-mode-question.js"
 import { bridgeOpencodeMcp, type RuntimeMcpStatus } from "./mcp-bridge.js"
@@ -32,6 +32,7 @@ import {
   resolveMcpProxyToolDefs,
   DEFAULT_PROXY_TOOLS,
   TASK_BATCH_TOOL_NAME,
+  taskBatchTasks,
   type McpProxyToolResolution,
   type ModelToolEntry,
   type ProxyMcpServer,
@@ -42,6 +43,8 @@ import {
 import { queuePendingProxyCall } from "./proxy-broker.js"
 import { log } from "./logger.js"
 import type { AgentCliCaps } from "./agent-models.js"
+import { accountProviderMap } from "./account-groups.js"
+import { noteExplicitTaskModels, taskModelAccountRefusal } from "./task-model.js"
 import {
   cliSupportsMaxTurns,
   detectCliSupportsFlag,
@@ -449,6 +452,10 @@ export async function ensureProxyServer(
   // collect or cancel can refuse a task that is not this conversation's.
   // Undefined outside a real opencode turn (direct AI-SDK use, tests).
   callerSessionId?: string,
+  // The account this conversation runs on, which the `accountGroups` guard on
+  // a per-call `model` compares against (h #g254). The provider's own account
+  // when not given.
+  sourceAccount?: string,
 ): Promise<ProxyMcpServer> {
   const timeoutOverrides = config.proxyToolTimeoutMs
   const interceptors = new Map<string, ProxyToolInterceptor>()
@@ -496,8 +503,35 @@ export async function ensureProxyServer(
       ? (toolName: string, input: Record<string, unknown>) =>
           admitBackgroundDispatch(toolName, input, cap)
       : undefined
-  const srv = await createProxyMcpServer(tools, timeoutOverrides, interceptors, { admit })
+  // A per-call `model` on another account's provider moves the subagent, and
+  // the task text it is handed, to that account (h #g254). Built only with
+  // `accountGroups` set on a multi-account install, so every other server has
+  // no guard to ask.
+  const accountProviders = accountProviderMap(config.failoverAccounts)
+  const groups = config.accountGroups ?? null
+  const caller = normalizeAccountName(sourceAccount ?? config.account ?? DEFAULT_ACCOUNT)
+  const taskModelGuard =
+    groups && accountProviders.size > 0
+      ? (model: string) =>
+          taskModelAccountRefusal({
+            model,
+            sourceAccount: caller,
+            providers: accountProviders,
+            groups,
+            crossGroup: config.subagentDispatchCrossGroup === true,
+          })
+      : undefined
+  const srv = await createProxyMcpServer(tools, timeoutOverrides, interceptors, {
+    admit,
+    taskModelGuard,
+  })
   srv.calls.on("call", (call: ProxyToolCall) => {
+    // Noted before it is queued, so the record exists before the child's
+    // first turn can start (h #g254). Only a task that names a model is.
+    if (call.toolName === "task") noteExplicitTaskModels(callerSessionId, [call.input])
+    else if (call.toolName === TASK_BATCH_TOOL_NAME) {
+      noteExplicitTaskModels(callerSessionId, taskBatchTasks(call.input))
+    }
     queuePendingProxyCall(sessionKeyForCalls, call, timeoutOverrides)
   })
   return srv

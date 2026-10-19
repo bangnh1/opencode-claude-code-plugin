@@ -43,6 +43,8 @@ The rules, in order:
 | `model: <provider>/<id>` | exactly that, account and all (untouched) |
 | anything opencode ships (`explore`, `general`, `compaction`) | untouched |
 
+On opencode 2, a model you name for one dispatch in the conversation beats every row: see [A model you name in the conversation](#a-model-you-name-in-the-conversation-opencode-2).
+
 **`defaultSubagentModel` is unset by default and nothing is overridden without it.** That is deliberate: this feature rewrites what the model picker said would run, so an existing setup that upgrades the plugin has to behave exactly as it did before. Built-ins are excluded for the same reason, since forcing Opus onto a cheap exploration agent would be an expensive surprise nobody asked for. An unknown model id is refused and the original kept, rather than spawning the CLI with a `--model` it will reject.
 
 Two things worth knowing. The overridden model is part of the Claude session key, so a subagent forced to Opus never shares a `claude` process with a Fable parent in the same directory. And opencode still prices the turn against the model *it* routed, so a cost readout attributes the work to the caller's model, not the one that actually ran.
@@ -57,7 +59,7 @@ reasoningEffort: high
 
 That beats whatever effort the call arrived with. It has to, because opencode resolves one effort for a session and a subagent inherits it, which is wrong in the expensive direction: a caller who picked `max` for their own turn otherwise hands `max` to every worker it dispatches, and a mechanical lane burns a weekly cap at the costliest setting available. Model and effort together are what a turn costs, so both belong with the agent rather than with whoever happened to dispatch it.
 
-An agent that declares nothing keeps the inherited effort, so this changes nothing until a file asks for it. An unrecognised level is refused and the inherited one kept, since the CLI rejects a level it does not know. Compaction is exempt: its summary always gets the full budget.
+An agent that declares nothing keeps the inherited effort, so this changes nothing until a file asks for it. An unrecognised level is refused and the inherited one kept, since the CLI rejects a level it does not know. Compaction is exempt: its summary always gets the full budget. On opencode 2, a variant you name for one subagent in the conversation beats it (see [A model you name in the conversation](#a-model-you-name-in-the-conversation-opencode-2)).
 
 ## The prompt cache an agent writes
 
@@ -98,6 +100,17 @@ maxBudgetUsd: 0.5
 ```
 
 Or once, for every subagent that declares nothing, as `defaultSubagentMaxTurns` and `defaultSubagentMaxBudgetUsd` in the provider options. `maxTurns` counts API round trips per message and works on any agent; `maxBudgetUsd` counts over the whole `claude` process and restarts on a resume, so it is honoured on `mode: subagent` agents only and refused, with a warning, on a main agent. Both are headless only. What each one counts, and the conversation-wide `maxBudgetUsd` provider option, are on [Budgets and caps](../configuration/budgets.md).
+
+## A model you name in the conversation (opencode 2)
+
+On opencode 2, Claude can pass a `model` when it dispatches a subagent, so "run the reviewer on Sonnet" reaches opencode's own `subagent` tool as `claude-code/claude-sonnet-5-5`. On a multi-account install the reference names the account too, as in `claude-code-work/claude-sonnet-5-5@work`, and a `#high` (or any other variant) picks a variant. Claude is told to set it only when you asked, and only with an id you gave it or one the conversation already used. opencode 1's `task` tool has no such field, so there it is not offered at all. Contributed by [@taylormitchell](https://github.com/taylormitchell) (PR #123).
+
+A model named this way is the most specific decision about that subagent, so it wins:
+
+- **Over `forceModel` and `defaultSubagentModel`**, and a `#variant` over the agent's `reasoningEffort`. That is opencode's own order: the model you name, then the agent's, then the caller's. Name a model without a variant and the agent's effort still applies.
+- **Over the dispatch form** below. A task that names its model is left out of the form's questions, and a dispatch whose every task names one raises no form. A child resumed with a named model runs on it, whatever an earlier form chose for it.
+
+Two things it never does. It never moves work across `accountGroups`: a model on an account outside the conversation's group is refused before anything starts, exactly as the form never offers that account, unless `subagentDispatchCrossGroup` is set. And a model on a provider that is not one of this plugin's accounts is opencode's own routing: that subagent runs there, under opencode's permissions, not through this plugin.
 
 ## Choosing per dispatch, not per file
 

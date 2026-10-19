@@ -1068,7 +1068,7 @@ test("Task proxy schema includes the optional V2 model override", () => {
   ])
   assert.equal(properties.background.type, "boolean")
   assert.equal(properties.model.type, "string")
-  assert.match(String(properties.model.description), /only when the user explicitly/)
+  assert.match(String(properties.model.description), /NEVER set this unless the user explicitly asked/)
   assert.deepEqual(task.inputSchema.required, [
     "description",
     "prompt",

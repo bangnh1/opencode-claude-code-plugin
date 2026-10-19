@@ -408,8 +408,11 @@ const MAX_SESSION_CHOICES = 512
  * An exact match always wins over a wrapped one (`claimDispatchChoice` looks
  * for one first), so a host that forwards the prompt verbatim behaves exactly
  * as it did before.
+ *
+ * Exported for `src/task-model.ts`, whose explicit-model claims find their
+ * child by the same rule: two copies of a measured match would drift.
  */
-function promptMatchesClaim(claimPrompt: string, childPrompt: string): boolean {
+export function promptMatchesClaim(claimPrompt: string, childPrompt: string): boolean {
   if (childPrompt === claimPrompt) return true
   // An empty task prompt would make every child a match; it is also never a
   // real dispatch, so it is refused rather than widened.
@@ -628,7 +631,14 @@ export async function resolveDispatchAccountSpawn(input: {
 // Reading a dispatch out of the calls the drain is holding
 // ---------------------------------------------------------------------------
 
-/** Pull the tasks out of the `task` / `task_batch` calls a drain is holding. */
+/**
+ * Pull the tasks out of the `task` / `task_batch` calls a drain is holding.
+ *
+ * A task that names its own `model` (opencode 2's per-call model, h #g254) is
+ * left out: the operator already chose, in the conversation, and a form about
+ * it would either overrule that choice or be overruled by it. A dispatch whose
+ * every task names one therefore raises no form at all.
+ */
 export function dispatchTasksFromCalls(
   calls: ReadonlyArray<{
     toolCallId: string
@@ -640,16 +650,20 @@ export function dispatchTasksFromCalls(
   const out: DispatchTask[] = []
   for (const call of calls) {
     if (call.toolName === "task") {
-      out.push(taskFromInput(call.toolCallId, null, call.input))
+      if (!namesOwnModel(call.input)) out.push(taskFromInput(call.toolCallId, null, call.input))
       continue
     }
     if (call.toolName === "task_batch") {
       for (const [index, task] of batchTasks(call.input).entries()) {
-        out.push(taskFromInput(call.toolCallId, index, task))
+        if (!namesOwnModel(task)) out.push(taskFromInput(call.toolCallId, index, task))
       }
     }
   }
   return out
+}
+
+function namesOwnModel(input: Record<string, unknown>): boolean {
+  return typeof input.model === "string" && input.model.trim() !== ""
 }
 
 function taskFromInput(

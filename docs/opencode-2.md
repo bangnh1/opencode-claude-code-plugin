@@ -34,6 +34,7 @@ opencode 2 gives a plugin no way to ask whether a session is busy and no toast o
 
 Differences from 1.x:
 
+- **A subagent can be given its own model in the conversation.** opencode 2's `subagent` tool takes a `model`, so "run the reviewer on Sonnet" reaches it, and the plugin keeps that choice over an agent's `forceModel`, its `reasoningEffort` (for a named variant) and the dispatch form. opencode 1's `task` tool has no such field. See [A model you name in the conversation](configuration/subagents.md#a-model-you-name-in-the-conversation-opencode-2).
 - **No todo panel.** opencode 2 has no `todowrite` tool, so Claude's task list is not mirrored into one, and the sidebar's progress bar is always the time estimate, never a share of todos done.
 - **`bridgeMcpOauthTokens` finds nothing.** opencode 2 keeps MCP OAuth tokens in its database, and the plugin API can activate a stored credential but not read one, so a server you signed into through opencode still reports `needs-auth` to the Claude CLI. See [MCP bridge](configuration/mcp.md).
 - **Claude's `EnterPlanMode`, `ExitPlanMode` and `NotebookEdit` calls get no tool row.** opencode 2 has no tools of those names and rejects an unknown one, so the plugin leaves the row out. The call itself still runs.

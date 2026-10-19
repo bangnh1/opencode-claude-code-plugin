@@ -19,6 +19,7 @@ import {
   forgetDispatchChoicesForSession,
   forgetSessionChoice,
 } from "./subagent-dispatch.js"
+import { forgetExplicitTaskModel } from "./task-model.js"
 import { clearCompression } from "./compression-store.js"
 import { clearBackgroundTasks } from "./background-tasks.js"
 import { forgetForkFingerprint, moveForkFingerprint } from "./session-fork.js"
@@ -687,6 +688,8 @@ export function deleteActiveProcessesForSession(sessionID: string): string[] {
   // on disk now, so the delete has to reach the file too (h #g228).
   forgetSessionChoice(sessionID)
   forgetDispatchChoicesForSession(sessionID)
+  // Likewise the model its parent named for it in a `task` call (h #g254).
+  forgetExplicitTaskModel(sessionID)
   return released
 }
 
