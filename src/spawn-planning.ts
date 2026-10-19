@@ -11,7 +11,12 @@
  */
 import type { ClaudeCodeConfig } from "./types.js"
 import { shouldStripContextReminders } from "./message-builder.js"
-import { accountConfigDirPath, DEFAULT_ACCOUNT, normalizeAccountName } from "./accounts.js"
+import {
+  accountConfigDirPath,
+  accountModelSuffix,
+  DEFAULT_ACCOUNT,
+  normalizeAccountName,
+} from "./accounts.js"
 import type { FailoverSpawn } from "./account-failover.js"
 import { isPlanModeQuestionActive } from "./plan-mode-question.js"
 import { bridgeOpencodeMcp, type RuntimeMcpStatus } from "./mcp-bridge.js"
@@ -42,9 +47,13 @@ import {
 } from "./proxy-mcp.js"
 import { queuePendingProxyCall } from "./proxy-broker.js"
 import { log } from "./logger.js"
-import type { AgentCliCaps } from "./agent-models.js"
+import { isRegisteredModelName, type AgentCliCaps } from "./agent-models.js"
 import { accountProviderMap } from "./account-groups.js"
-import { noteExplicitTaskModels, taskModelAccountRefusal } from "./task-model.js"
+import {
+  completeTaskModelReference,
+  noteExplicitTaskModels,
+  taskModelAccountRefusal,
+} from "./task-model.js"
 import {
   cliSupportsMaxTurns,
   detectCliSupportsFlag,
@@ -521,9 +530,30 @@ export async function ensureProxyServer(
             crossGroup: config.subagentDispatchCrossGroup === true,
           })
       : undefined
+  // A bare model id, the form a weaker model reaches for first, completed to
+  // the reference this conversation's own provider serves it under (h #g255),
+  // so it neither fails on opencode's "Invalid model" nor leads the model to
+  // guess a provider. The marker comes from the provider's own account, not
+  // the account a failover may be running on: that provider serves only its
+  // own marker's ids.
+  const ownModelMarker = accountModelSuffix(config.account ?? DEFAULT_ACCOUNT)
+  const completeTaskModel = (model: unknown): unknown => {
+    const completed = completeTaskModelReference(model, {
+      providerID: config.provider,
+      accountMarker: ownModelMarker,
+      isRegistered: isRegisteredModelName,
+    })
+    if (completed !== model) {
+      log.info("bare task model completed to this conversation's own provider", {
+        model: completed,
+      })
+    }
+    return completed
+  }
   const srv = await createProxyMcpServer(tools, timeoutOverrides, interceptors, {
     admit,
     taskModelGuard,
+    completeTaskModel,
   })
   srv.calls.on("call", (call: ProxyToolCall) => {
     // Noted before it is queued, so the record exists before the child's

@@ -697,13 +697,13 @@ the opencode schema requires it. Markdown fallback reads top-level scalar fields
 
 On opencode 2 the user can choose a subagent's model in the message itself, with no
 configuration: the proxied `task` (and each `task_batch.tasks` item) takes an optional
-`model`, forwarded unchanged to opencode's own `subagent` tool, which resolves it by
-exact id against the models opencode has. opencode 1's `task` has no such field, so the
-plugin leaves it out there; on 1.x point the user at `forceModel`, `defaultSubagentModel`
-or `subagentDispatch: "ask"` instead. (PR #123, h #g254.)
+`model`, forwarded to opencode's own `subagent` tool, which resolves it by exact id
+against the models opencode has. opencode 1's `task` has no such field, so the plugin
+leaves it out there; on 1.x point the user at `forceModel`, `defaultSubagentModel` or
+`subagentDispatch: "ask"` instead. (PR #123, h #g254, h #g255.)
 
-The value is opencode's `providerID/modelID`, plus `#low`, `#medium`, `#high`, `#xhigh`
-or `#max` for a reasoning variant (every model has them except `claude-haiku-4-5`):
+opencode's form is `providerID/modelID`, plus `#low`, `#medium`, `#high`, `#xhigh` or
+`#max` for a reasoning variant (every model has them except `claude-haiku-4-5`):
 
 | Install | Reference |
 |---|---|
@@ -711,18 +711,26 @@ or `#max` for a reasoning variant (every model has them except `claude-haiku-4-5
 | `accounts`, the default account | `claude-code-default/claude-sonnet-5-5` |
 | `accounts`, another account | `claude-code-<account>/claude-sonnet-5-5@<account>` |
 
-Tell the user to give the exact reference: "Run the reviewer subagent on
-`claude-code/claude-sonnet-5-5#high`." Two references in one request ("review it on
-`claude-code/claude-opus-5-5` and on `claude-code/claude-sonnet-5-5`, in parallel")
-become one `task_batch` with a model per task. A model named in words is a guess, and
-it depends on the model doing the dispatching. Measured on opencode 2.0.31 with "a
-general subagent on Sonnet 5.5" and "on claude-sonnet-5-5": Opus 5.5 passed
-`claude-code/claude-sonnet-5-5` first time; Haiku 4.5 tried `claude-sonnet-5-5`,
-`anthropic/claude-sonnet-5-5` and `claude-sonnet-5.5` first. opencode refused each
-(`Invalid model "…"`, `Model "…" is not available`) and started no subagent for it. A
-guessed provider that IS in the user's opencode config would be accepted, though: an
+A bare model id (`claude-sonnet-5-5`, `claude-sonnet-5-5#high`) is completed to the
+reference this conversation's own provider serves (the first column's provider and
+marker) before opencode sees it, so the subagent stays on the conversation's account.
+Only an id the plugin registers is completed, and only with no `@` marker or the
+provider's own; a full reference, another account's marker and an unknown id reach
+opencode as written. Use the full reference only for another account or provider.
+
+Tell the user to name the model by id: "Run the reviewer subagent on
+`claude-sonnet-5-5#high`." Two ids in one request ("review it on `claude-opus-5-5` and
+on `claude-sonnet-5-5`, in parallel") become one `task_batch` with a model per task. A
+model named in words is a guess, and it depends on the model doing the dispatching.
+Measured on opencode 2.0.31 with "a general subagent on Sonnet 5.5" and "on
+claude-sonnet-5-5": Opus 5.5 passed `claude-code/claude-sonnet-5-5` first time; Haiku
+4.5 passed a bare `claude-sonnet-5-5` first both times, and before bare ids were
+completed went on to `anthropic/claude-sonnet-5-5` and `claude-sonnet-5.5`, each refused
+by opencode (`Invalid model "…"`, `Model "…" is not available`) with no subagent
+started. With the completion both of Haiku's requests ran on the first call. A guessed
+provider that IS in the user's opencode config would be accepted, though: an
 `anthropic` provider serving that id would run the subagent there, outside this plugin
-and billed to that provider. That is the reason to insist on the exact reference.
+and billed to that provider. That is the reason to have the user name the model.
 
 What the plugin adds on top of forwarding:
 
@@ -741,8 +749,9 @@ Claude is told to set `model` only when the user asked for one. If it ever sets 
 unasked, that subagent runs on it, under the same rules.
 
 Verify: the subagent's sidebar row shows the model it really spawned with, its tool row
-shows the `model` passed (none there means opencode picked the model as usual), and
-`plugin.log` has `explicit task model claimed by its child session`. Every spawn logs
+shows the `model` opencode received (none there means opencode picked the model as
+usual), and `plugin.log` has `bare task model completed to this conversation's own
+provider` for a completion and `explicit task model claimed by its child session`. Every spawn logs
 `task model gate` with `supported`, which is false on a 1.x host.
 
 ### Ask before each subagent dispatch
@@ -1249,7 +1258,8 @@ Useful log lines to search for (redact payloads): `spawning new claude process`,
 `bridged opencode skills into claude`, `interrupt sent for aborted turn`, `btw:`,
 `rendering opencode-side tool result as text`, `proxy-mcp tool call received`,
 `evicting idle claude process`, `evicting LRU claude process`, `background subagent gate`,
-`task model gate`, `explicit task model claimed by its child session`, `task model refused`,
+`task model gate`, `bare task model completed`, `explicit task model claimed by its child session`,
+`task model refused`,
 `proxy call still waiting`, `fast mode` warnings.
 
 Version requirements. The first four are flag gates in `src/cli-version.ts`; the last two
@@ -1440,8 +1450,8 @@ Prefer the doctor: it needs no logging change and no restart.
 | `Subagent failed (task_id …): Tool execution aborted` while the child finished fine | Bug fixed in 0.15.1 | Upgrade |
 | A `subtask: true` command's subagent output is "lost" | Bug fixed in 0.15.4 | Upgrade |
 | Two subagents run one after another | The CLI serialises MCP calls | Plugin 0.17.0+; the model must use `mcp__opencode_proxy__task_batch` |
-| On opencode 2, a subagent the user asked for on a particular model ran on another | Claude passed no `model` (the subagent's tool row shows none), most often because the model was named in words and the dispatching model did not turn it into a reference; or the plugin is older than 0.60.0, whose `task` tool had no `model` | Have the user name the exact reference (`claude-code/claude-sonnet-5-5`, see "One subagent on a model the user names"). If the tool row does carry a `model` and the sidebar row shows another model, that is a bug: ask for `/claude-code-doctor bundle` |
-| `Invalid model "…"` or `Model "…" is not available` on a subagent row, on opencode 2 | Claude passed a reference opencode does not have, usually a guess at a model named in words | Nothing ran: opencode refused it before starting anything, and Claude normally tries again. The exact reference avoids the guessing |
+| On opencode 2, a subagent the user asked for on a particular model ran on another | Claude passed no `model` (the subagent's tool row shows none), most often because the model was named in words and the dispatching model did not turn it into a reference; or the plugin is older than 0.60.0, whose `task` tool had no `model` | Have the user name the model by id (`claude-sonnet-5-5`, completed to this conversation's own account) or by full reference for another account; see "One subagent on a model the user names". If the tool row does carry a `model` and the sidebar row shows another model, that is a bug: ask for `/claude-code-doctor bundle` |
+| `Invalid model "…"` or `Model "…" is not available` on a subagent row, on opencode 2 | Claude passed a reference opencode does not have, usually a guess at a model named in words | Nothing ran: opencode refused it before starting anything, and Claude normally tries again. A bare id the plugin registers is completed instead of refused, so on a current plugin this is a misspelt id, another account's marker without its provider, or a guessed provider; an older plugin refused every bare id. Naming the model by id or full reference avoids the guessing |
 | A dispatch refused with `… which is outside this conversation's account group, so no tasks were started` | The `model` sits on a plugin account in another `accountGroups` group | Working as designed. Name a model on an account in this conversation's group, or set `subagentDispatchCrossGroup: true` only if the user wants groups crossed |
 | On opencode 1, Claude says its task tool cannot take a model, or a dispatch fails with "This opencode's task tool takes no per-call `model`" | opencode 1's `task` has no `model` field | Not available on 1.x. Use an agent's `forceModel`, `defaultSubagentModel`, or `subagentDispatch: "ask"` |
 | Esc does not stop Claude; aborted turns keep running | Plugin older than 0.16.0 | Upgrade |

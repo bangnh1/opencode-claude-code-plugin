@@ -9,9 +9,11 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { accountProviderMap } from "../src/account-groups.js"
+import { isRegisteredModelName } from "../src/agent-models.js"
 import {
   _resetTaskModelForTests,
   claimExplicitTaskModel,
+  completeTaskModelReference,
   explicitTaskModelApplies,
   explicitTaskModelFor,
   forgetExplicitTaskModel,
@@ -56,6 +58,56 @@ test("anything that is not a reference parses to null, for opencode to reject it
   ]) {
     assert.equal(parseTaskModelReference(value), null, JSON.stringify(value))
   }
+})
+
+test("a bare model id is completed to this conversation's own provider and account (h #g255)", () => {
+  const single = { providerID: "claude-code", isRegistered: isRegisteredModelName }
+  assert.equal(completeTaskModelReference("claude-sonnet-5-5", single), "claude-code/claude-sonnet-5-5")
+  assert.equal(completeTaskModelReference(" claude-sonnet-5-5#high ", single), "claude-code/claude-sonnet-5-5#high")
+  assert.equal(
+    completeTaskModelReference("claude-opus-5-5-fast", single),
+    "claude-code/claude-opus-5-5-fast",
+    "a fast id is a registered id like any other",
+  )
+
+  // The default account of a multi-account install serves its ids unmarked.
+  const defaultAccount = { providerID: "claude-code-default", isRegistered: isRegisteredModelName }
+  assert.equal(completeTaskModelReference("claude-sonnet-5-5", defaultAccount), "claude-code-default/claude-sonnet-5-5")
+
+  const work = { providerID: "claude-code-work", accountMarker: "work", isRegistered: isRegisteredModelName }
+  assert.equal(completeTaskModelReference("claude-sonnet-5-5", work), "claude-code-work/claude-sonnet-5-5@work")
+  assert.equal(
+    completeTaskModelReference("claude-sonnet-5-5@work#max", work),
+    "claude-code-work/claude-sonnet-5-5@work#max",
+    "the conversation's own marker is the same reading",
+  )
+})
+
+test("only that one reading is completed; everything else reaches opencode as written", () => {
+  const work = { providerID: "claude-code-work", accountMarker: "work", isRegistered: isRegisteredModelName }
+  for (const value of [
+    "claude-code/claude-sonnet-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "openrouter/anthropic/claude-sonnet-4.5",
+    "claude-sonnet-5-5@private",
+    "claude-sonnet-5-5@",
+    "claude-sonnet-5.5",
+    "gpt-5",
+    "claude-sonnet-5-5#",
+    "claude-sonnet-5-5#high#max",
+    "",
+    "   ",
+  ]) {
+    assert.equal(completeTaskModelReference(value, work), value, `"${value}" is left alone`)
+  }
+  for (const value of [undefined, null, 42, { id: "claude-sonnet-5-5" }]) {
+    assert.equal(completeTaskModelReference(value, work), value)
+  }
+  assert.equal(
+    completeTaskModelReference("claude-sonnet-5-5@work", { providerID: "claude-code-default", isRegistered: isRegisteredModelName }),
+    "claude-sonnet-5-5@work",
+    "the default account has no marker, so any marker names another account",
+  )
 })
 
 test("the account guard refuses a model on an account in another group, and nothing else", () => {

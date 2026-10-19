@@ -100,14 +100,6 @@ them ran in this directory.
   note's own, as shipped in v0.57.0, or `18/10/2026 01:20`. Maintainer: "not sure". Stays as shipped
   until they decide; the note (`formatLocalMinute`) and the sidebar (`formatResetClock`) would change
   together, so it is one decision, not two.
-- 2026-10-19: what, if anything, the plugin does about a guessed provider in a per-call subagent
-  `model` (h #g254). Measured on opencode 2.0.31: Haiku 4.5, asked for a subagent "on
-  claude-sonnet-5-5", passed `anthropic/claude-sonnet-5-5` among its guesses. opencode refused it
-  here, but on an install with an `anthropic` provider serving that id the subagent would run there,
-  outside the plugin and billed to that provider. Options: leave it documented (as now); complete a
-  bare id to the conversation's own provider and account before forwarding (both Haiku runs passed a
-  bare id first, so this would have made each a first-try success); or tighten the field description.
-  Raised by the assistant, not the maintainer; waiting on their call.
 
 ## Open from you
 
@@ -158,6 +150,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (branch `bare-task-model`, h #g255): the guessed-provider decision. Asked what the
+  plugin should do after Haiku 4.5 guessed `anthropic/claude-sonnet-5-5` for a subagent model, the
+  maintainer chose "Complete bare ids" and "Release v0.60.1" for it with the docs and skill change. A bare
+  registered id is now completed to the conversation's own provider and account before the account guard;
+  a full reference, a foreign `@` marker and an unknown id reach opencode as written. Live on opencode
+  2.0.31: Haiku's two requests ran on the first call (two and four calls before).
 - 2026-10-19: **done** (h #g254): "document this also and make sure the skill is aware", after v0.60.0.
   The subagents page now says how to name the model (a table of the three reference shapes, two
   example prompts, how to check it took), the symptoms page and the skill's Troubleshooting carry

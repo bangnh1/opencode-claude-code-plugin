@@ -946,6 +946,25 @@ function taskSchemaOffersModel(def: ProxyToolDef): boolean {
 }
 
 /**
+ * Every per-call `model` of a `task` / `task_batch` call, rewritten in place by
+ * `complete` (h #g255), so the account check below, the queued call and the
+ * reference opencode receives all carry the same value. Only where the def
+ * offers `model`: on a host whose task takes none, the value is left for
+ * `taskModelInputError` to refuse.
+ */
+export function completeTaskModels(
+  def: ProxyToolDef,
+  input: Record<string, unknown>,
+  complete?: (model: unknown) => unknown,
+): void {
+  if (!complete || !taskSchemaOffersModel(def)) return
+  const tasks = def.name === TASK_BATCH_TOOL_NAME ? taskBatchTasks(input) : [input]
+  for (const task of tasks) {
+    if (task.model !== undefined) task.model = complete(task.model)
+  }
+}
+
+/**
  * Why a `task` / `task_batch` call's per-call `model` cannot go to opencode, or
  * null (h #g254). The first refusal answers the whole call, which then starts
  * none of its tasks.
@@ -1224,6 +1243,13 @@ export async function createProxyMcpServer(
      * (h #g254), so a server without groups set has none.
      */
     taskModelGuard?: (model: string) => string | null
+    /**
+     * Rewrites each per-call `model` before the checks, returning it unchanged
+     * when there is nothing to do. Completes a bare model id to this
+     * conversation's own provider (h #g255); a server without it forwards
+     * every `model` exactly as the model wrote it.
+     */
+    completeTaskModel?: (model: unknown) => unknown
   } = {},
 ): Promise<ProxyMcpServer> {
   const calls = new EventEmitter()
@@ -1444,6 +1470,8 @@ export async function createProxyMcpServer(
         if (toolName === "task" || toolName === TASK_BATCH_TOOL_NAME) {
           // Before interceptors, `admit` and the broker, like the batch check
           // above: a refused model starts none of a batch's tasks (h #g254).
+          // Completed first, so the guard judges the reference that is sent.
+          completeTaskModels(tool, input, options.completeTaskModel)
           const problem = taskModelInputError(tool, input, options.taskModelGuard)
           if (problem) {
             writeToolCallResult(res, requestId, { kind: "error", message: problem })

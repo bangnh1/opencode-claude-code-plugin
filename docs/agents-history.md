@@ -7344,3 +7344,82 @@ symptoms page and the skill. The skill's per-call model paragraph moved out of
 Whether the plugin should also do something about a guessed provider (complete a
 bare id to the conversation's own provider, or tighten the description) was left
 to the maintainer.
+
+## A bare subagent model id completed to the conversation's own provider (2026-10-19)
+
+h #g255. The measurement in (h #g254)'s last section showed Haiku 4.5 passing a
+bare `claude-sonnet-5-5` first, twice, and guessing a provider after opencode
+refused it. Asked what the plugin should do (complete bare ids, tighten the field
+description, or leave it documented), the maintainer chose "Complete bare ids",
+and a patch release "Release v0.60.1" for it together with the docs and skill
+change. The field description was deliberately left as it was: tightening it
+was the other option, and was not chosen.
+
+### The rule
+
+`completeTaskModelReference` (`src/task-model.ts`, pure, the registry check
+injected) turns a value with no `/` into `<provider>/<id>[@<marker>][#variant]`,
+where the provider is the conversation's own (`config.provider`: `claude-code`,
+`claude-code-default` or `claude-code-<account>`) and the marker that provider's
+own account's (`accountModelSuffix(config.account)`, none on the default
+account). It refuses, returning the value unchanged, in four cases, each for a
+reason:
+
+- a value with `/`: it is a reference already, the user's or Claude's to make;
+- an id carrying ANOTHER account's `@` marker: that names another account, and
+  completing it to this one would silently move the subagent back, so it is
+  left for opencode to refuse and Claude to retry with the full reference (which
+  the `accountGroups` guard then judges);
+- an id `isRegisteredModelName` does not know (a misspelling, a dotted
+  `claude-sonnet-5.5`, another vendor's `gpt-5`): completing it would turn
+  opencode's helpful "Use providerID/modelID" into "not available", which is
+  worse guidance for a model that meant another provider;
+- a malformed variant (`#` with nothing after it, two `#`).
+
+`isRegisteredModelName` is the check `qualifyModelName` already made inline,
+exported so a name `forceModel` accepts and a name the completion accepts cannot
+drift. `qualifyModelName` itself was not reused: it strips any marker it is
+given and reattaches the caller's, which for a per-call model would override an
+account Claude was asked for.
+
+The marker is the PROVIDER's own, never a failover's: `ensureProxyServer` may be
+running on another account after a switch (`sourceAccount`), but the provider
+the conversation is on serves only its own marker's ids, and a mixed reference
+(`claude-code-default/claude-sonnet-5-5@work`) would be refused.
+
+`completeTaskModels` (`src/proxy-mcp.ts`) applies it in place to a `task`'s and
+every `task_batch` item's `model`, through the new `completeTaskModel` server
+option, BEFORE `taskModelInputError`: the account guard, the recorded claim, the
+queued call and the tool row opencode stores all carry the completed value, so
+`explicitTaskModelApplies` compares like with like. On a host whose `task`
+offers no `model` it does nothing, and the value is refused as before. Each
+completion logs `bare task model completed to this conversation's own provider`
+at INFO.
+
+### Live, opencode 2.0.31, the branch build
+
+The same two Haiku 4.5 requests as (h #g254): one subagent call each, carrying
+`claude-code/claude-sonnet-5-5`, one `bare task model completed` and one
+`explicit task model claimed by its child session` line each, one child each on
+`--model claude-sonnet-5-5`, about 22 seconds per turn. On v0.60.0 the same
+requests took two calls and four, the second of them the `anthropic/` guess.
+
+### Tests
+
+`test/task-model.test.ts` (the completion on all three provider shapes and with
+a variant, and every value it must leave alone), `test/proxy-mcp.test.ts` (the
+guard asked about the completed value, a queued call and each batch item
+carrying it, a full reference forwarded as written, and a host without `model`
+never completing), `test/task-model-stream.test.ts` (a bare id with a variant
+reaching opencode completed and its child keeping it over `forceModel` and
+`reasoningEffort`, and on another account the completion carrying that
+account's marker past `accountGroups`).
+
+One full-suite run on the branch failed `a CLI that dies mid-call ends the turn
+as an error` in `test/process-lifecycle.test.ts`, at a load average near 20.
+The test's fake sends a `task` call and exits 30 ms later, and passes only when
+that exit is observed before the step drains. Under loads of 34 to 54 it failed
+on master too (1 of 8 runs, against 4 of 8 on the branch, interleaved where it
+could be); the code in that window is one synchronous call that returns at once
+for a call without `model`. Read as load, and left to CI's unloaded runners to
+confirm.
