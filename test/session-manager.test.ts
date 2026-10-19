@@ -23,6 +23,7 @@ import {
   retainStderr,
   scheduleIdleProcessEviction,
   noteTurnStarted,
+  noteInitLine,
   noteTurnLine,
   isTurnInFlight,
   awaitTurnIdle,
@@ -338,6 +339,17 @@ test("a turn is in flight from the envelope write until the terminal result line
   noteTurnLine(ap, JSON.stringify({ type: "result", subtype: "success" }))
   assert.equal(isTurnInFlight(ap), false)
   assert.equal(await idle, true)
+})
+
+test("a child's first system/init line marks it past its MCP servers, and nothing else does (h #g256)", () => {
+  const { ap } = fakeTurnProcess()
+  assert.equal(ap.initSeen, undefined)
+  noteInitLine(ap, JSON.stringify({ type: "system", subtype: "hook_started", hook_name: "init" }))
+  noteInitLine(ap, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "\"init\"" }] } }))
+  noteInitLine(ap, "not json \"init\"")
+  assert.equal(ap.initSeen, undefined, "a line that merely mentions init does not count")
+  noteInitLine(ap, JSON.stringify({ type: "system", subtype: "init", session_id: "s" }))
+  assert.equal(ap.initSeen, true)
 })
 
 test("interruptTurn writes an interrupt control request and waits for the result", async () => {

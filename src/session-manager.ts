@@ -156,6 +156,16 @@ export interface ActiveProcess {
   turnInFlight?: boolean
   turnIdleWaiters?: Array<() => void>
   /**
+   * True once the child has written its first `system`/`init` line, whether or
+   * not a turn was listening. Claude Code writes it only after every MCP server
+   * has connected or hit `MCP_TIMEOUT` (measured on 2.1.293: a server answering
+   * at 8 s held it to 8.8 s), so until then a silent child may simply be
+   * waiting on a server, and the start watchdog gives it that wait (h #g256).
+   * A respawn is a new child and starts without it. Never set on the
+   * interactive shim, whose start watchdog does not respawn.
+   */
+  initSeen?: boolean
+  /**
    * Tail of what the child last wrote to stderr, capped at
    * `STDERR_RETAIN_BYTES` with the newest bytes kept. Often the only record
    * of why a child died when it closed without emitting a terminal `result`
@@ -439,6 +449,25 @@ function isTerminalResultLine(line: string): boolean {
   } catch {
     return false
   }
+}
+
+/** Same pre-filter for the CLI's `system`/`init` line. */
+function isSystemInitLine(line: string): boolean {
+  if (!line.includes('"init"')) return false
+  try {
+    const parsed = JSON.parse(line) as { type?: string; subtype?: string }
+    return parsed.type === "system" && parsed.subtype === "init"
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Feed every CLI stdout line here too. Only the first `init` matters: it says
+ * the child got past its MCP servers (see `ActiveProcess.initSeen`).
+ */
+export function noteInitLine(ap: ActiveProcess, line: string): void {
+  if (!ap.initSeen && isSystemInitLine(line)) ap.initSeen = true
 }
 
 function settleTurn(ap: ActiveProcess): void {
@@ -1112,6 +1141,7 @@ export function spawnClaudeProcess(
   rl.on("line", (line: string) => {
     if (dispatchSideQuestionResponse(ap, line)) return
     noteTurnLine(ap, line)
+    noteInitLine(ap, line)
     if (lineEmitter.listenerCount("line") === 0) {
       bufferUnattendedLine(ap, line)
       return

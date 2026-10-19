@@ -21,6 +21,7 @@ import {
   getActiveProcess,
   getClaudeSessionId,
   isTurnInFlight,
+  killAllActiveProcesses,
   noteTurnStarted,
   respawnActiveProcess,
   setClaudeSessionId,
@@ -33,6 +34,7 @@ import {
 import { EventEmitter } from "node:events"
 import type { ChildProcess } from "node:child_process"
 import { createClaudeCode } from "../src/index.js"
+import { START_WATCHDOG_INIT_MARGIN_MS, startWatchdogDelayMs } from "../src/turn-controller.js"
 
 test("unattended output is capped by line count and UTF-8 bytes, including oversized single lines", () => {
   const active: ActiveProcess = { proc: {} as ChildProcess, lineEmitter: new EventEmitter() }
@@ -363,4 +365,126 @@ test("an aborted turn is not reported as a crash", async () => {
   )
   const finish = parts.find((part) => part.type === "finish") as any
   if (finish) assert.notEqual(finish.finishReason.unified, "error")
+})
+
+// ---- The start watchdog before a child's `system`/`init` (h #g256) --------
+//
+// Claude Code writes `system`/`init` only after every MCP server connected or
+// hit `MCP_TIMEOUT` (measured on 2.1.293), and the plugin gives every spawn a
+// 120 s `MCP_TIMEOUT`. A 90 s watchdog therefore killed healthy children that
+// were still waiting on a server: after a wake from sleep, every spawn for
+// three minutes, twice each.
+
+test("the start watchdog waits out the MCP timeout plus a margin until a child's init", () => {
+  assert.equal(START_WATCHDOG_INIT_MARGIN_MS, 30_000)
+  assert.equal(startWatchdogDelayMs(90_000, true, 120_000), 150_000, "the default spawn")
+  assert.equal(startWatchdogDelayMs(90_000, false, 120_000), 90_000, "after init, or a reused process")
+  assert.equal(startWatchdogDelayMs(300_000, true, 120_000), 300_000, "a longer configured delay still wins")
+  assert.equal(startWatchdogDelayMs(90_000, true, 30_000), 90_000, "the CLI's own 30 s needs no extra time")
+  assert.equal(startWatchdogDelayMs(1_000, true, 1), 30_001)
+})
+
+/**
+ * One doStream turn against a fake CLI that is slow to start. `late-init`
+ * writes nothing at all for `initDelayMs` after the envelope (a child still
+ * waiting on an MCP server), then answers. `silent-after-init` writes its
+ * `init` at once and then nothing, and answers only when respawned with
+ * `--resume`. Every spawn is recorded with its time and whether it resumed.
+ */
+async function streamSlowStartTurn(mode: "late-init" | "silent-after-init", initDelayMs = 0) {
+  const cwd = mkdtempSync(join(tmpdir(), "opencode-slow-start-"))
+  const cliPath = join(cwd, "fake-claude.cjs")
+  const eventsPath = join(cwd, "spawns.jsonl")
+  writeFileSync(
+    cliPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs")
+const readline = require("node:readline")
+if (process.argv.includes("--version")) {
+  process.stdout.write("2.1.258\\n")
+  process.exit(0)
+}
+if (process.argv.includes("--help")) {
+  process.stdout.write("Usage: claude [options]\\n")
+  process.exit(0)
+}
+const resumed = process.argv.includes("--resume")
+fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ at: Date.now(), resumed }) + "\\n")
+const emit = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
+const init = () => emit({ type: "system", subtype: "init", session_id: "fake-slow-start" })
+function answer(text) {
+  init()
+  emit({ type: "assistant", session_id: "fake-slow-start", message: { role: "assistant", content: [{ type: "text", text }] } })
+  emit({ type: "result", subtype: "success", session_id: "fake-slow-start", is_error: false, result: text, duration_ms: 1, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 } })
+}
+readline.createInterface({ input: process.stdin }).on("line", () => {
+  if (${JSON.stringify(mode)} === "late-init") {
+    setTimeout(() => answer("Answered after the MCP wait."), ${initDelayMs})
+    return
+  }
+  if (resumed) answer("Answered by the respawn.")
+  else init()
+})
+`,
+  )
+  chmodSync(cliPath, 0o755)
+
+  const previous = {
+    watchdog: process.env.CLAUDE_CODE_START_WATCHDOG_MS,
+    mcpTimeout: process.env.MCP_TIMEOUT,
+  }
+  // A one-second configured delay, and an MCP timeout so short that the
+  // margin alone decides the pre-init delay: 30.001 s, far past this test.
+  process.env.CLAUDE_CODE_START_WATCHDOG_MS = "1000"
+  process.env.MCP_TIMEOUT = "1"
+  try {
+    const model = createClaudeCode({
+      cliPath,
+      cwd,
+      bridgeOpencodeMcp: false,
+      proxyOpencodeMcpTools: false,
+      proxyTools: [],
+    }).languageModel(`claude-test-slow-start-${mode}`)
+    const response = await model.doStream({
+      prompt: [{ role: "user", content: [{ type: "text", text: "Answer briefly." }] }],
+      tools: [{ type: "function", name: "bash", description: "Run a command", inputSchema: { type: "object", properties: {} } }],
+    } as any)
+    const parts: any[] = []
+    for await (const part of response.stream) parts.push(part)
+    const spawns = readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    return { parts, spawns }
+  } finally {
+    // These fakes wait on stdin for good; left running they hold the file open.
+    killAllActiveProcesses()
+    if (previous.watchdog === undefined) delete process.env.CLAUDE_CODE_START_WATCHDOG_MS
+    else process.env.CLAUDE_CODE_START_WATCHDOG_MS = previous.watchdog
+    if (previous.mcpTimeout === undefined) delete process.env.MCP_TIMEOUT
+    else process.env.MCP_TIMEOUT = previous.mcpTimeout
+    rmSync(cwd, { recursive: true, force: true })
+  }
+}
+
+test("a child still waiting on its MCP servers is not respawned before its init", { timeout: 30_000 }, async () => {
+  // Silent for 2.5 configured delays: the old watchdog respawned it at 1 s,
+  // the respawn waited again, and the turn ended as an error at 2 s.
+  const { parts, spawns } = await streamSlowStartTurn("late-init", 2_500)
+  assert.equal(spawns.length, 1, "spawned once, never respawned")
+  assert.deepEqual(parts.filter((part) => part.type === "error"), [])
+  assert.ok(
+    parts.some((part) => part.type === "text-delta" && String(part.delta).includes("Answered after the MCP wait.")),
+    `expected the answer, got ${JSON.stringify(parts.map((part) => part.type))}`,
+  )
+  assert.notEqual(parts.find((part) => part.type === "finish")?.finishReason.unified, "error")
+})
+
+test("after its init a silent child is respawned one configured delay later", { timeout: 30_000 }, async () => {
+  const { parts, spawns } = await streamSlowStartTurn("silent-after-init")
+  assert.equal(spawns.length, 2, "the silent child was respawned once")
+  assert.equal(spawns[0].resumed, false)
+  assert.equal(spawns[1].resumed, true, "the respawn resumes the conversation")
+  const waited = spawns[1].at - spawns[0].at
+  assert.ok(waited >= 900, `respawned after ${waited} ms, before the configured delay`)
+  assert.ok(waited < 15_000, `respawned after ${waited} ms: the pre-init delay was not given up at init`)
+  assert.ok(parts.some((part) => part.type === "text-delta" && String(part.delta).includes("Answered by the respawn.")))
+  assert.deepEqual(parts.filter((part) => part.type === "error"), [])
 })

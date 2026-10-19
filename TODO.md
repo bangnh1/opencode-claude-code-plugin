@@ -112,7 +112,8 @@ raised, so they survive context compaction; removed when answered, done or dropp
   "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
   three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
-  release, maintainer: "defer". Still parked until an instruction names it.
+  release, maintainer: "defer". Still parked until an instruction names it. 2026-10-19, maintainer:
+  "defer the til message". Still parked.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -130,12 +131,6 @@ raised, so they survive context compaction; removed when answered, done or dropp
   35 s to get ready. So the stall scales with the parent session's size. Whether opencode or dcp's
   message transform burns it (needs a large session with dcp disabled): maintainer, 2026-10-09: "later".
 
-- 2026-10-19: the start-watchdog fix. The reused-process start watchdog fires at 90 s while every spawn
-  may wait up to 120 s for its MCP servers (`MCP_TIMEOUT`, h #g235); after a wake from sleep on 2026-10-17 it
-  killed every spawn for about three minutes. Maintainer, 2026-10-17: "go forward with the recommended"
-  (do it as its own small PR; the row is in the vault note's research-pass table). Not built yet. Asked on
-  2026-10-19 whether to build it now or later.
-
 ## Parked
 
 - 2026-10-08: switching the daily driver to opencode 2. Maintainer: "ill stay with 1 for now will
@@ -152,6 +147,10 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (branch `start-watchdog-init`, h #g256): the start-watchdog fix, after "defer the til
+  message do the recommended for the rest". Measured first on 2.1.293: `system`/`init` waits for every MCP
+  server to connect or hit `MCP_TIMEOUT`. A child that has not written `init` now gets at least its
+  `MCP_TIMEOUT` plus 30 s (150 s by default) before the first fire, then the configured 90 s from `init`.
 - 2026-10-19: **done** (h #g246): the reset notation, parked on 2026-10-18 with "not sure". Shown both
   side by side, the maintainer chose "Keep year first": a reset on another day stays `2026-10-21 14:00`
   (narrowest `10-21 14:00`), not `21/10/2026 14:00`, in the sidebar and every note. No code change.
