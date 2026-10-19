@@ -7718,3 +7718,81 @@ restart`, three matched messages each), where master started B over.
 Shipped as v0.60.2 on 2026-10-20 (PR #127, PR #128 and PR #129 together), with a
 GitHub Release; the publish was verified from the Publish step's tail and the
 version document's shasum.
+
+## The CLI's todo tools are gated by model, and dcp's opencode 2 form measured (2026-10-20)
+
+h #g259. Two backlog checks from TODO.md, after the maintainer answered "2 do"
+(the backlog) and "1 defer" (the `#til` post) on 2026-10-20.
+
+### No todo tool on most of the catalog
+
+Recorded 2026-10-17: `TaskCreate`, `TaskUpdate` and `TaskList` never reached a
+headless main conversation, although `--disallowedTools` did not name them. The
+note said Claude Code 2.1.300; the binary on this machine is 2.1.293 (the
+versions directory holds 2.1.280, 2.1.288 and 2.1.293), so that is what was read
+and measured, and it is also what this very session runs on, with the same
+absence in its own tool list.
+
+Read out of the 2.1.293 binary. `TaskCreate`'s `isEnabled` is `VZ()`, which is
+`HR() && YW()`; `TodoWrite`'s is `!HR() && YW()`. So exactly one family is
+offered, `HR()` chooses it (`CLAUDE_CODE_ENABLE_TASKS` false picks `TodoWrite`,
+anything else the `Task*` four), and `YW()` decides whether there is one at
+all. `YW()` is true for an opt-in (`todoToolsOptIn`, set when any of
+`TodoWrite`, `TaskCreate`, `TaskGet`, `TaskUpdate`, `TaskList` is named in
+`--tools` or `--allowedTools`), for an unknown main-loop model, for a Bedrock
+`application-inference-profile`, for a canonical model id in a fixed set
+(`claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`, `claude-3-5-sonnet`,
+`claude-3-5-haiku`, `claude-3-7-sonnet`, `claude-opus-4-0`, `-4-1`, `-4-5`,
+`-4-6`, `-4-7`, `claude-sonnet-4-0`, `-4-5`, `-4-6`, `claude-haiku-4-5`), and
+otherwise only for `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. The gate and the env var
+are in 2.1.280 and 2.1.288 as well.
+
+Measured off the `system`/`init` tool list of `claude -p /cost` (zero turns, $0)
+in a scratch cwd with the plugin's hygiene vars:
+
+| Spawn | Todo tools in `init` |
+|---|---|
+| `--model claude-opus-5-5` | none |
+| `--model claude-haiku-5-5` | none |
+| `--model claude-opus-4-7` | `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` |
+| `--model claude-haiku-4-5` | the same four |
+| Opus 5.5, `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` | the same four |
+| Opus 5.5, `--allowedTools TaskCreate` | the same four |
+| Opus 5.5, `CLAUDE_CODE_ENABLE_TODO_TOOLS=1 CLAUDE_CODE_ENABLE_TASKS=0` | `TodoWrite` |
+
+Live through opencode 1.19.3, this worktree's build under scratch XDG dirs
+(real `HOME` for the login, the plugin log redirected with
+`OPENCODE_CLAUDE_CODE_LOG_DIR`), Haiku 5.5, a prompt asking for three todo items
+with the first completed: without the env var the model answered `NO TOOL` and
+`GET /session/{id}/todo` was `[]`; with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in
+opencode's environment it called `TaskCreate` and `TaskUpdate`, the ledger
+(h #g85) translated them, and the list held `alpha` completed, `beta` and
+`gamma` pending. So the ledger and the sidebar's todo fraction (h #g246) have
+only ever worked on the 4.x and older models, and an operator brings them back
+on the rest with the env var, which every spawn inherits (`claudeSpawnEnv`
+starts from `process.env`). That run also wrote the usage note: the default
+account stood at 93% of its 7-day window.
+
+Nothing in the code changed. Whether the plugin should set the variable
+itself, or offer an option for it, is the maintainer's call (TODO.md, Open from
+you): the CLI turned the tools off for those models on purpose, and the env var
+already works.
+
+### dcp's `compact` form on opencode 2
+
+(h #g258) stripped dcp's opencode 2 reference form from the resume digest off
+dcp 3.2.0's source alone. Measured now on opencode 2.0.31 with dcp 3.2.0, a
+private password-protected `serve` under scratch dirs, a fake `claude` and the
+same probe-only dump of the recorded and compared prompts: a plain session A
+(two prompts) and a session B (two prompts, the second reverted through
+`POST /api/session/{id}/revert/stage {messageID}` plus `.../revert/commit`,
+then a third), a server restart, one more prompt each. dcp's V2 path does write
+the compact form, a last line `@N@` on user and assistant text alike, and the
+undo renumbered it exactly as on V1: B's third message went out as `@4@` before
+the restart and `@3@` after it. On this branch both A and B resumed their own
+Claude session (`resuming the claude session from before the restart`, three
+matched messages each); on v0.60.1 A resumed and B was refused as
+`conversation-changed` and replayed as text (`no-sibling-recorded`). The V2
+routes used: `POST /api/session` takes `model: {id, providerID}`,
+`POST /api/session/{id}/prompt {text}` returns once recorded, and
+`POST /api/experimental/session/{id}/wait` returns when the session is idle.

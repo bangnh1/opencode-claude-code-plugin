@@ -97,8 +97,9 @@ const DCP_MESSAGE_ID_TAG = /<dcp-message-id(?:\s[^>]*)?>[^<]*<\/dcp-message-id>/
 /**
  * The same reference in dcp's `compact` form, which its opencode 2 path uses:
  * a last line of `@12@`, `@b3@` or `@blocked@`, optionally followed by
- * ` [<priority>]`. Read off dcp 3.2.0's own source (`formatMessageIdTag`),
- * not measured live.
+ * ` [<priority>]`. Read off dcp 3.2.0's own source (`formatMessageIdTag`) and
+ * measured on opencode 2.0.31: after an undo a message went out as `@4@`
+ * before a restart and `@3@` after it (h #g259).
  */
 const DCP_COMPACT_REF_LINE = /^@(?:\d+|b\d+|blocked)@(?: \[[^\]\n]*\])?$/
 
