@@ -7422,4 +7422,7 @@ that exit is observed before the step drains. Under loads of 34 to 54 it failed
 on master too (1 of 8 runs, against 4 of 8 on the branch, interleaved where it
 could be); the code in that window is one synchronous call that returns at once
 for a call without `model`. Read as load, and left to CI's unloaded runners to
-confirm.
+confirm, which passed it: 1855 of 1855 on Linux, and Windows green, for PR #126.
+Shipped as v0.60.1 (PR #126) together with the docs and skill commit `28a0c56`,
+with a GitHub Release; the publish was verified from the Publish step's tail and
+the version document's shasum.

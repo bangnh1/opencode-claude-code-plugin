@@ -150,7 +150,7 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-19: **done** (branch `bare-task-model`, h #g255): the guessed-provider decision. Asked what the
+- 2026-10-19: **done** (v0.60.1, PR #126, h #g255): the guessed-provider decision. Asked what the
   plugin should do after Haiku 4.5 guessed `anthropic/claude-sonnet-5-5` for a subagent model, the
   maintainer chose "Complete bare ids" and "Release v0.60.1" for it with the docs and skill change. A bare
   registered id is now completed to the conversation's own provider and account before the account guard;
@@ -161,7 +161,7 @@ raised, so they survive context compaction; removed when answered, done or dropp
   example prompts, how to check it took), the symptoms page and the skill's Troubleshooting carry
   four rows, the sidebar and tool-proxy guides point at it, and the skill's paragraph became its own
   recipe. The "Sonnet in words" claim was measured first: Opus 5.5 got the reference right, Haiku
-  4.5 guessed. Docs pushed to master; the skill change reaches npm installs with the next release.
+  4.5 guessed. Docs pushed to master as `28a0c56`; the skill change shipped to npm in v0.60.1.
 - 2026-10-19: **done** (v0.60.0, PR #125, h #g254): PR #123 from @taylormitchell, after "this PR
   ... whatsup with it? also why is there a workflow warning?". The maintainer chose "Approve its CI runs, 1 and
   assimilate it and improve on it and credit the user and close it" and "Fix it now" for the warning. Done: the
