@@ -1,6 +1,16 @@
 import assert from "node:assert/strict"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
-import { claudeSpawnEnv, cliEffortLevel } from "../src/session-manager.js"
+import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
+import {
+  claudeSpawnEnv,
+  cliEffortLevel,
+  killAllActiveProcesses,
+  todoToolsEnv,
+} from "../src/session-manager.js"
+import { createClaudeCode } from "../src/index.js"
 import {
   CLI_HYGIENE_ENV_VARS,
   cliHygieneEnv,
@@ -235,3 +245,106 @@ test("the interactive transport also respects a hygiene var the user set", () =>
     assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1")
   })
 })
+
+test("enableTodoTools turns the CLI's todo tools on, filling a gap only (h #g260)", () => {
+  withEnv({ CLAUDE_CODE_ENABLE_TODO_TOOLS: undefined }, () => {
+    assert.deepEqual(todoToolsEnv(true), { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" })
+    assert.equal(claudeSpawnEnv({ enableTodoTools: true }).CLAUDE_CODE_ENABLE_TODO_TOOLS, "1")
+    // Off, which is the default: the variable is absent and the CLI's own
+    // per-model choice stands.
+    assert.deepEqual(todoToolsEnv(false), {})
+    assert.equal("CLAUDE_CODE_ENABLE_TODO_TOOLS" in claudeSpawnEnv(), false)
+    assert.equal("CLAUDE_CODE_ENABLE_TODO_TOOLS" in claudeSpawnEnv({ enableTodoTools: false }), false)
+  })
+  // A value already in opencode's environment is the operator's, `0` included.
+  for (const value of ["0", "1", ""]) {
+    withEnv({ CLAUDE_CODE_ENABLE_TODO_TOOLS: value }, () => {
+      assert.deepEqual(todoToolsEnv(true), {})
+      assert.equal(claudeSpawnEnv({ enableTodoTools: true }).CLAUDE_CODE_ENABLE_TODO_TOOLS, value)
+    })
+  }
+})
+
+// The fake CLI is a shebang script made executable by its file mode, which
+// means nothing on Windows (.github/windows-skipped-tests.txt).
+const POSIX_ONLY = process.platform === "win32" ? "the fake-CLI harness is POSIX-only" : false
+
+test("enableTodoTools reaches a real spawn, and never a compaction spawn (h #g260)", { skip: POSIX_ONLY, timeout: 30_000 }, async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "opencode-todo-tools-"))
+  const cliPath = join(cwd, "fake-claude.cjs")
+  writeFileSync(cliPath, `#!/usr/bin/env node
+const readline = require("node:readline")
+if (process.argv.includes("--version")) {
+  console.log("2.1.293")
+  process.exit(0)
+}
+const emit = (message) => console.log(JSON.stringify(message))
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const envelope = JSON.parse(line)
+  if (envelope.type !== "user") return
+  emit({ type: "assistant", session_id: String(process.pid), message: {
+    role: "assistant", stop_reason: "end_turn",
+    content: [{ type: "text", text: "todo=" + (process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? "unset") }],
+  } })
+  emit({ type: "result", subtype: "success", session_id: String(process.pid),
+    is_error: false, usage: { input_tokens: 1, output_tokens: 1 } })
+})
+`, { mode: 0o755 })
+
+  const answer = async (enableTodoTools: boolean | undefined, session: string, agent = "build") => {
+    const provider = createClaudeCode({
+      cwd, cliPath, bridgeOpencodeMcp: false, proxyOpencodeMcpTools: false,
+      proxyTools: [], interactive: false, autoContinueIncompleteTurns: false,
+      ...(enableTodoTools === undefined ? {} : { enableTodoTools }),
+    })
+    const options: LanguageModelV3CallOptions = {
+      tools: [{ type: "function", name: "read", inputSchema: { type: "object" } }],
+      providerOptions: { "claude-code": { opencodeSessionID: session, opencodeAgent: agent } },
+      prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+    }
+    const { stream } = await provider.languageModel("claude-haiku-4-5").doStream(options)
+    let text = ""
+    for await (const part of stream) {
+      if (part.type === "error") throw part.error
+      if (part.type === "text-delta") text += part.delta
+    }
+    return text
+  }
+
+  try {
+    await withEnvAsync({ CLAUDE_CODE_ENABLE_TODO_TOOLS: undefined }, async () => {
+      assert.equal(await answer(true, "todo-on"), "todo=1")
+      assert.equal(await answer(undefined, "todo-default"), "todo=unset")
+      assert.equal(await answer(false, "todo-off"), "todo=unset")
+      // A compaction spawn runs no tools, so it never asks for them.
+      assert.match(await answer(true, "todo-compaction", "compaction"), /todo=unset/)
+    })
+    // The operator's own value decides, even with the option on.
+    await withEnvAsync({ CLAUDE_CODE_ENABLE_TODO_TOOLS: "0" }, async () => {
+      assert.equal(await answer(true, "todo-shell"), "todo=0")
+    })
+  } finally {
+    killAllActiveProcesses()
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+async function withEnvAsync(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const previous: Record<string, string | undefined> = {}
+  for (const key of Object.keys(vars)) {
+    previous[key] = process.env[key]
+    if (vars[key] === undefined) delete process.env[key]
+    else process.env[key] = vars[key]
+  }
+  try {
+    await fn()
+  } finally {
+    for (const key of Object.keys(vars)) {
+      if (previous[key] === undefined) delete process.env[key]
+      else process.env[key] = previous[key]
+    }
+  }
+}

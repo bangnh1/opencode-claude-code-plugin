@@ -65,6 +65,8 @@ export interface ActiveProcess {
   effort?: ReasoningEffort
   /** Prompt cache TTL the process was spawned with, so a respawn keeps it. */
   promptCacheTtl?: string
+  /** Whether the child was spawned with `enableTodoTools`, so a respawn keeps it. */
+  enableTodoTools?: boolean
   /** When the child was spawned, so `/claude-code-doctor` can report its age. */
   startedAt?: number
   /**
@@ -328,6 +330,8 @@ export function claudeSpawnEnv(opts?: {
    * environment is untouched.
    */
   configDir?: string
+  /** The `enableTodoTools` provider option; see `todoToolsEnv`. */
+  enableTodoTools?: boolean
 }): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -370,6 +374,8 @@ export function claudeSpawnEnv(opts?: {
     env.CLAUDE_CONFIG_DIR = opts.configDir
   }
 
+  Object.assign(env, todoToolsEnv(opts?.enableTodoTools === true))
+
   // Force subscription auth: with an API key in the env, Claude Code bills
   // pay-as-you-go (Console) instead of the logged-in plan's usage limits.
   // Opt-in via `ignoreAnthropicApiKey`.
@@ -389,6 +395,21 @@ export function claudeSpawnEnv(opts?: {
   }
 
   return env
+}
+
+/**
+ * `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` when the operator asked for it with
+ * `enableTodoTools`, else nothing. Claude Code offers its todo tools
+ * (`TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`) only to a fixed list of
+ * older models plus anything this variable turns on, measured on 2.1.280 to
+ * 2.1.293 (h #g259), so on Opus 5.5 or Fable no todo reaches the ledger
+ * (`src/todo-ledger.ts`) without it. Fills a gap only, like `cliHygieneEnv`:
+ * a value already in opencode's environment, `0` included, is the operator's
+ * and decides.
+ */
+export function todoToolsEnv(enabled: boolean): Record<string, string> {
+  if (!enabled || process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS !== undefined) return {}
+  return { CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" }
 }
 
 function touch(key: string): void {
@@ -1095,6 +1116,7 @@ export function spawnClaudeProcess(
   effort?: ReasoningEffort,
   promptCacheTtl?: string,
   configDir?: string,
+  enableTodoTools?: boolean,
 ): ActiveProcess {
   evictIfNeeded()
   log.info("spawning new claude process", {
@@ -1105,6 +1127,7 @@ export function spawnClaudeProcess(
     effort,
     promptCacheTtl,
     configDir,
+    ...(enableTodoTools ? { enableTodoTools } : {}),
   })
 
   // Never `shell: true`. On Windows the plan resolves `claude` to a real file
@@ -1115,7 +1138,7 @@ export function spawnClaudeProcess(
   const proc = spawn(plan.file, plan.args, {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
-    env: claudeSpawnEnv({ ignoreAnthropicApiKey, effort, promptCacheTtl, configDir }),
+    env: claudeSpawnEnv({ ignoreAnthropicApiKey, effort, promptCacheTtl, configDir, enableTodoTools }),
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   })
 
@@ -1129,6 +1152,7 @@ export function spawnClaudeProcess(
     systemPromptFile,
     effort,
     promptCacheTtl,
+    enableTodoTools,
     startedAt: Date.now(),
     cliPath,
     cliArgs: [...cliArgs],
@@ -1366,6 +1390,7 @@ export function respawnActiveProcess(
     old.effort,
     old.promptCacheTtl,
     old.configDir,
+    old.enableTodoTools,
   )
   // The replacement reuses the old child's `cliArgs`, so it reuses its MCP
   // config: `mcpHash` rides along above and the server names it names have

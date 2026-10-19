@@ -98,14 +98,8 @@ raised, so they survive context compaction; removed when answered, done or dropp
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it. 2026-10-19, maintainer:
   "defer the til message". Still parked. 2026-10-20, maintainer, releasing v0.60.2: "do the recommended
-  dont send anything in til". Not sent; still parked. 2026-10-20, maintainer: "1 defer". Still parked.
-
-- 2026-10-20: the CLI's todo tools on the newer models (h #g259). Claude Code offers `TaskCreate` and its
-  family only to Claude 3.x, Opus 4.0 to 4.7, Sonnet 4.0 to 4.6 and Haiku 4.5, so on Opus 4.8, Opus 5/5.5,
-  Sonnet 5/5.5, Fable and Haiku 5.5 no todos reach opencode and the sidebar never shows a todo fraction.
-  `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in opencode's environment brings them back (measured live, documented).
-  Decide: leave it to the env var (as now), add an off-by-default option that sets it on every spawn, or
-  set it by default. The CLI turned the tools off for those models deliberately.
+  dont send anything in til". Not sent; still parked. 2026-10-20, maintainer: "1 defer". Still parked. 2026-10-20, maintainer: "1 not
+  yet". Still parked.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -139,6 +133,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-20: **done** (branch `todo-tools-option`, h #g260): the todo-tools decision, after "2 do the
+  recommended" and "update skill and docs as well". New provider option `enableTodoTools` (off by
+  default) sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` on every turn spawn, both transports, never compaction,
+  and never over a value already in opencode's environment. Doctor row, options table, the subagents
+  page, symptoms, sidebar guide and skill updated.
 - 2026-10-20: **done** (branch `backlog-todo-dcp`, h #g259): the two backlog checks, after "2 do". The
   todo tools are gated by MODEL in Claude Code (2.1.280 to 2.1.293; 2.1.300 is not on this machine): off for
   Opus 4.8 and every 5.x model, back with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, measured off `init` and live
