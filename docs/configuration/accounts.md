@@ -101,7 +101,9 @@ account and resend your message, or wait for the window to reset.
 
 The reset time is in **your** time zone, to the minute, and is left out when Claude Code did not report one. With no other account configured the second half instead reads *"Wait for the window to reset, or enable extra usage on the account."* You get this line on every limited turn, not just the first one in an opencode session.
 
-The turn also **finishes as an error**, not as a reply. Nothing was served, so filing it as a (very short) answer was wrong: opencode's own retry and failure handling never ran, and the account-block case below has always finished this way.
+The turn also **finishes as an error**, not as a reply. Nothing was served, so filing it as a (very short) answer was wrong: opencode's own retry and failure handling never ran, and the account-block case below has always finished this way. A `doGenerate` caller (opencode does not use one today) gets the same error finish, `usage_limit`, with no line, since its text is a return value.
+
+The account the line names is the one the turn actually ran on. That is the provider's own account, unless an earlier failover moved this conversation to another one: then it is that other account, and it is never offered as somewhere to go.
 
 Nothing moves on its own unless you opt into [automatic failover](#automatic-failover): switching account means picking a model from another account's provider in opencode's model list and sending your message again. That carries the conversation across too, exactly as the [failover switch](#account-failover) below does: see [switching account by hand](#switching-account-by-hand).
 
@@ -196,6 +198,8 @@ What a pick does, in full:
   When the copy cannot be made (there is no transcript to carry, or something that is not a plain file sits at the target path), the switch falls back to the replay: a fresh Claude session on the target, the thread rebuilt from opencode's history, and a note telling it to carry on. That costs input tokens on the new account, and anything the CLI held but opencode did not is gone. Which of the two happened is one NOTICE line in the log, `carried this conversation's claude transcript to the other account` or `replaying this conversation as text on the other account` with the reason.
 
   What was measured (Claude Code 2.1.288) is the file layout: a copied transcript resumes under another config dir with its context intact, the CLI resolves a session by filename, and it appends to the copy without touching the original. What has not been verified live is a *different* Anthropic login answering a conversation the other one produced. If that ever fails, the turn errors, the CLI's own "No conversation found" handling drops the session id, and the next turn replays.
+- **It says which way the conversation arrived.** The turn that continues on the picked account starts with one `▌ **account failover:**` line naming the account that failed and the one it moved to, and ending either *"The conversation continues where it stopped."* (the transcript was carried) or *"The conversation is replayed into a fresh Claude session there."* (it was not). For an account that could not serve, the line names the reason instead of *"is out of usage"*.
+- **After an earlier move, it names the account that failed.** When an earlier pick already moved the conversation from `work` to `personal` and `personal` then runs out too, the form says `personal` is out of usage and offers neither `personal` nor `work` (still out). Picking another account moves the conversation on from there.
 - **Per-profile MCP servers do not come along.** A server configured only in the limited account's Claude profile is simply absent on the target.
 - **`stop`, dismissing the form, or any answer that is not one of the offered accounts** ends the turn the way a limited turn ends without the form.
 
@@ -225,7 +229,7 @@ continues where it stopped.
 - **The conversation.** Carried across with the transcript copy and `--resume` when it can be, replayed into a fresh Claude session when it cannot, exactly as for a pick; the note's last sentence says which. Work the failed account already did in that turn stays done and is not re-run by the plugin. A carried transcript holds it, and the next account is told to continue rather than start over; a replay holds only what opencode has, so anything Claude Code did inside the failed turn is not in it.
 - **Where it applies.** Both transports. `doGenerate` callers too; a turn that moved carries no `▌ **account failover:**` line in the returned text. A child session (a subagent) switches itself, because there is no question to put in front of anyone, and its parent then follows through the same override. Never a compaction turn, whose answer is a stored summary and which [fails outright](../guides/compaction-and-thinking.md#when-compaction-hits-a-usage-limit) instead, and never a title request, which the plugin answers without starting `claude` at all.
 - **With a [model fallback chain](./options.md).** An available account is taken first, as with the form; the chain gets a usage limit only when no account is left.
-- **Stopping the turn stops the walk**, and so does cancelling the stream the turn returned: either one stops the attempt in flight the way a stop always does, and no further account is started or switched to.
+- **Stopping the turn stops the walk**, and so does cancelling the stream the turn returned: either one stops the attempt in flight the way a stop always does, and no further account is started or switched to. (Cancelling the stream stops a turn in every mode, not only this one.)
 
 The switch path is the one measured live for the form; the automatic walk itself is verified with a scripted `claude` only.
 
@@ -239,4 +243,4 @@ was revoked). Log in again with `CLAUDE_CONFIG_DIR=~/.claude-work claude auth lo
 then resend your message. Or pick a model from the "personal" account and resend.
 ```
 
-The last sentence appears only when another account is configured. With `"accountFailover": "ask"` it is replaced by the switch form, and with `"auto"` the turn moves to the next account on its own and its note names the reason instead; either way the switch then lasts until opencode restarts, so restart after logging in again to move back.
+The account and the login command are the ones the turn ran on: after an earlier failover moved the conversation, that is the account it moved to, not the provider's own. The last sentence appears only when another account is configured. With `"accountFailover": "ask"` it is replaced by the switch form, and with `"auto"` the turn moves to the next account on its own and its note names the reason instead; either way the switch then lasts until opencode restarts, so restart after logging in again to move back.

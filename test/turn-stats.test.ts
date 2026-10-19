@@ -5,6 +5,9 @@
  * Usage: npx tsx --test test/turn-stats.test.ts
  */
 import assert from "node:assert/strict"
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
 import {
   ACCOUNT_BLOCK_MARKER,
@@ -22,6 +25,7 @@ import {
 } from "../src/cli-events.js"
 import { BUDGET_MARKER } from "../src/budget-ledger.js"
 import { createClaudeCode } from "../src/index.js"
+import { killAllActiveProcesses, sessionKey, setClaudeSessionId } from "../src/session-manager.js"
 import { filterSideQuestionHistory } from "../src/message-builder.js"
 import { CONVERSATION_REWOUND_MARKER } from "../src/conversation-gap.js"
 import { MODEL_FALLBACK_MARKER } from "../src/model-fallback.js"
@@ -34,6 +38,7 @@ import {
   formatTokens,
   formatTurnStatsBlock,
   formatTurnStatsLine,
+  footerCostUsd,
   turnStatsLogPayload,
 } from "../src/turn-stats.js"
 import type { ClaudeStreamMessage } from "../src/types.js"
@@ -200,4 +205,99 @@ test("turnStats is off unless the provider option asks for it", () => {
     (createClaudeCode({ turnStats: true })("claude-sonnet-5") as any).config.turnStats,
     true,
   )
+})
+
+// ---- The footer's cost is this turn's, not the session's (h #g257) ---------
+
+test("the footer prints what the result added, and nothing it cannot price", () => {
+  assert.equal(footerCostUsd(undefined, false), undefined)
+  assert.equal(footerCostUsd({ deltaUsd: 0.007, noBaseline: false }, true), 0.007)
+  // A session that started in this process: its first total is its own cost.
+  assert.equal(footerCostUsd({ deltaUsd: 0.033, noBaseline: true }, false), 0.033)
+  // A resumed one: `--resume` restored the running total, so it may hold
+  // every earlier turn of the conversation.
+  assert.equal(footerCostUsd({ deltaUsd: 0.5, noBaseline: true }, true), undefined)
+})
+
+// The fake CLI is a shebang script made executable with chmod, which means
+// nothing on Windows (.github/windows-skipped-tests.txt).
+const POSIX_ONLY = process.platform === "win32" ? "the fake-CLI harness is POSIX-only" : false
+
+/**
+ * Two turns on one reused process against a fake CLI whose `total_cost_usd`
+ * is cumulative, as a headless CLI's is. `resumeFirst` gives the key a Claude
+ * session id first, so the spawn carries `--resume`, the way a turn after an
+ * opencode restart does.
+ */
+async function footersOverTwoTurns(totals: number[], sessionId: string, resumeFirst: boolean) {
+  const cwd = mkdtempSync(join(tmpdir(), "opencode-turn-cost-"))
+  const cliPath = join(cwd, "fake-claude.cjs")
+  writeFileSync(
+    cliPath,
+    `#!/usr/bin/env node
+const readline = require("node:readline")
+if (process.argv.includes("--version")) { process.stdout.write("2.1.258\\n"); process.exit(0) }
+if (process.argv.includes("--help")) { process.stdout.write("Usage: claude [options]\\n"); process.exit(0) }
+const totals = ${JSON.stringify(totals)}
+const session = ${JSON.stringify(sessionId)}
+let turn = 0
+const emit = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
+readline.createInterface({ input: process.stdin }).on("line", () => {
+  const total = totals[Math.min(turn, totals.length - 1)]
+  turn += 1
+  emit({ type: "system", subtype: "init", session_id: session })
+  emit({ type: "assistant", session_id: session, message: { role: "assistant", content: [{ type: "text", text: "answer " + turn }] } })
+  emit({ type: "result", subtype: "success", session_id: session, is_error: false, result: "answer " + turn, total_cost_usd: total, duration_ms: 1200, num_turns: 1, usage: { input_tokens: 10, output_tokens: 5 } })
+})
+`,
+  )
+  chmodSync(cliPath, 0o755)
+  const modelId = `claude-test-turn-cost-${sessionId}`
+  const tools = [{ type: "function", name: "read", description: "Read a file", inputSchema: { type: "object", properties: {} } }]
+  const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] })
+  const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] })
+  try {
+    if (resumeFirst) {
+      setClaudeSessionId(sessionKey(cwd, `${modelId}::tools::default::context=["claude-code",null]`), sessionId)
+    }
+    const model = createClaudeCode({
+      cliPath,
+      cwd,
+      turnStats: true,
+      bridgeOpencodeMcp: false,
+      proxyOpencodeMcpTools: false,
+      proxyTools: [],
+    }).languageModel(modelId)
+    const footerOf = async (prompt: any[]) => {
+      const parts: any[] = []
+      for await (const part of (await model.doStream({ prompt, tools } as any)).stream) parts.push(part)
+      return parts
+        .filter((part) => part.type === "text-delta" && String(part.delta).includes(TURN_STATS_MARKER))
+        .map((part) => String(part.delta).trim())
+        .join("")
+    }
+    const history = [user("earlier"), assistant("earlier answer")]
+    const first = await footerOf([...history, user("first")])
+    const second = await footerOf([...history, user("first"), assistant("answer 1"), user("second")])
+    return { first, second }
+  } finally {
+    killAllActiveProcesses()
+    rmSync(cwd, { recursive: true, force: true })
+  }
+}
+
+test("a reused process's second footer prints that turn's cost, not the running total", { skip: POSIX_ONLY, timeout: 30_000 }, async () => {
+  // The measured cumulative sequence (h #g245).
+  const { first, second } = await footersOverTwoTurns([0.0330759, 0.0400318], "turn-cost-a", false)
+  assert.match(first, /\$0\.0331/)
+  assert.match(second, /\$0\.0070 ·/, second)
+  assert.doesNotMatch(second, /\$0\.0400/, "the running total is what the footer printed before")
+})
+
+test("a resumed session's first footer leaves out a cost it cannot know, and prices the next turn", { skip: POSIX_ONLY, timeout: 30_000 }, async () => {
+  const { first, second } = await footersOverTwoTurns([0.5, 0.55], "turn-cost-b", true)
+  assert.ok(first.startsWith(TURN_STATS_MARKER), first)
+  assert.doesNotMatch(first, /\$/, "the restored total may include every earlier turn")
+  assert.match(first, /1\.2 s/, "the rest of the footer is still there")
+  assert.match(second, /\$0\.0500 ·/, second)
 })

@@ -1022,11 +1022,27 @@ test("the failover note is a ▌ line naming both accounts", () => {
     sourceAccount: "appical",
     target: "work",
     resetsAt: 1_700_000_000,
+    carried: false,
   })
   assert.ok(note.trimStart().startsWith(FAILOVER_MARKER))
   assert.match(note, /"appical" is out of usage/)
   assert.match(note, /continues on "work"/)
   assert.match(note, /2023-11-14/)
+  assert.match(note, /replayed into a fresh Claude session/)
+})
+
+test("the form's switch note says whether the conversation was carried, and names a block as one (h #g257)", () => {
+  const carried = formatFailoverNote({ sourceAccount: "appical", target: "work", carried: true })
+  assert.match(carried, /continues where it stopped/)
+  assert.doesNotMatch(carried, /replayed/, "a carried conversation is not replayed")
+  const blocked = formatFailoverNote({
+    sourceAccount: "appical",
+    target: "work",
+    reason: "has an expired login",
+    carried: true,
+  })
+  assert.match(blocked, /"appical" has an expired login, so this conversation continues on "work"/)
+  assert.doesNotMatch(blocked, /out of usage/)
 })
 
 // ---------------------------------------------------------------------------
@@ -1895,6 +1911,9 @@ test("the switch carries the conversation when the transcript is there, instead 
     const body = textOf(second)
     assert.ok(body.trimStart().startsWith(FAILOVER_MARKER))
     assert.match(body, /carried on/)
+    // The note says what happened: until h #g257 it said "replayed" here too.
+    assert.match(body, /The conversation continues where it stopped/)
+    assert.doesNotMatch(body, /replayed/)
   } finally {
     deleteActiveProcess(sk)
     _resetAccountOverrides()
@@ -1922,9 +1941,10 @@ test("crossAccountResume false keeps the replay even with the transcript right t
     assert.ok(call)
     plantTranscript("appical", fake.cwd, "limited-session")
 
-    await drain(
+    const second = await drain(
       await model.doStream({ prompt: switchAnswerPrompt(call), tools: TOOLS } as any),
     )
+    assert.match(textOf(second), /replayed into a fresh Claude session there/)
 
     const failoverSpawn = fake.spawns()[1]
     assert.match(failoverSpawn.stdin, /<conversation_history>/)
@@ -2768,5 +2788,131 @@ test("auto: cancelling the returned stream stops the walk, and no other account 
         .some((control: any) => accountOf(control) === "appical" && /"interrupt"/.test(control.line)),
       JSON.stringify(fake.controls()),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR #115's leftovers, each a test first (h #g257)
+// ---------------------------------------------------------------------------
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** `prompt`, then the form's call and opencode's answer naming `label`. */
+function formAnswerPrompt(prompt: any[], call: any, label: string) {
+  const input = JSON.parse(call.input)
+  return [
+    ...prompt,
+    {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: call.toolCallId, toolName: "question", input }],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: "question",
+          output: { type: "text", value: opencodeAnswer(input.questions[0].question, label) },
+        },
+      ],
+    },
+  ]
+}
+
+test("off and ask: a limited doGenerate turn finishes as an error, not as an answer", async () => {
+  for (const mode of ["off", "ask"] as const) {
+    await withScriptedAccounts({ appical: "limit", default: "ok" }, async (fake) => {
+      const model = await buildFailoverModel(fake, ["default", "appical"], mode)
+      const result = await model.doGenerate({ prompt: autoPrompt, tools: TOOLS } as any)
+      assert.deepEqual(fake.spawns().map(accountOf), ["appical"], mode)
+      assert.equal(result.finishReason.unified, "error", mode)
+      assert.equal(result.finishReason.raw, "usage_limit", mode)
+    })
+  }
+})
+
+test("off and ask: cancelling the returned stream stops the turn in flight", async () => {
+  for (const mode of ["off", "ask"] as const) {
+    await withScriptedAccounts({ appical: "slow-limit", default: "ok" }, async (fake) => {
+      const model = await buildFailoverModel(fake, ["default", "appical"], mode)
+      const response = await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any)
+      const reader = response.stream.getReader()
+      assert.equal((await reader.read()).value?.type, "stream-start")
+      for (let waited = 0; fake.spawns().length === 0 && waited < 3000; waited += 10) await pause(10)
+      await reader.cancel("the caller went away")
+      await pause(700)
+      // The cancel reached the CLI: it was interrupted like any stopped turn,
+      // not left to run the request to its end and bill it.
+      assert.ok(
+        fake
+          .controls()
+          .some((control: any) => accountOf(control) === "appical" && /"interrupt"/.test(control.line)),
+        `${mode}: ${JSON.stringify(fake.controls())}`,
+      )
+    })
+  }
+})
+
+test("ask after an override: the form names the account that failed and does not offer it, and a pick keeps routing from the provider", async () => {
+  await withScriptedAccounts({ alpha: "limit", beta: "ok" }, async (fake) => {
+    // appical, the provider's own account, is already out: its work runs on alpha.
+    setAccountOverride("appical", "alpha")
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "ask")
+    const first = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["alpha"])
+
+    const call = first.find((part) => part.type === "tool-call")
+    assert.ok(call, textOf(first))
+    const question = JSON.parse(call.input).questions[0]
+    assert.match(question.question, /"alpha" is out of usage/)
+    assert.deepEqual(
+      question.options.map((option: any) => option.label),
+      ["beta", "stop"],
+      "neither the account that just failed nor the one already out is offered",
+    )
+    assert.match(question.options[0].description, /configured only in "alpha"/)
+    // The limit is remembered under the account that hit it.
+    assert.ok(recallAccountLimit("alpha").resetsAt !== undefined)
+    assert.equal(recallAccountLimit("appical").resetsAt, undefined)
+
+    const second = await drain(
+      await model.doStream({ prompt: formAnswerPrompt(autoPrompt, call, "beta"), tools: TOOLS } as any),
+    )
+    assert.deepEqual(fake.spawns().map(accountOf), ["alpha", "beta"])
+    assert.match(textOf(second), /answered by beta/)
+    assert.match(textOf(second), /"alpha" is out of usage, so this conversation continues on "beta"/)
+    // Keyed on the provider's account, which is where every turn resolves from.
+    assert.equal(resolveAccountOverride("appical"), "beta")
+  })
+})
+
+test("off after an override: an expired login on the account that ran names that account's login", async () => {
+  await withScriptedAccounts({ alpha: "block", beta: "ok" }, async (fake) => {
+    setAccountOverride("appical", "alpha")
+    const model = await buildFailoverModel(fake, ["appical", "alpha", "beta"], "off")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["alpha"])
+    const body = textOf(parts)
+    assert.match(body, /the Claude account "alpha" is not logged in/)
+    assert.match(body, /CLAUDE_CONFIG_DIR=\S*\.claude-alpha claude auth login/)
+    assert.doesNotMatch(body, /\.claude-appical/)
+    assert.match(body, /pick a model from the "beta" account/, "the account that just failed is not offered")
+    assert.equal(finishesOf(parts)[0].finishReason.raw, "authentication_failed")
+  })
+})
+
+test("auto: a chain that ends on a second expired login names the second account's login", async () => {
+  await withScriptedAccounts({ appical: "block", alpha: "block" }, async (fake) => {
+    const model = await buildFailoverModel(fake, ["appical", "alpha"], "auto")
+    const parts = await drain(await model.doStream({ prompt: autoPrompt, tools: TOOLS } as any))
+    assert.deepEqual(fake.spawns().map(accountOf), ["appical", "alpha"])
+    const body = textOf(parts)
+    assert.match(body, /the Claude account "alpha" is not logged in/)
+    assert.match(body, /CLAUDE_CONFIG_DIR=\S*\.claude-alpha claude auth login/)
+    assert.doesNotMatch(body, /\.claude-appical claude auth login/)
+    const finishes = finishesOf(parts)
+    assert.equal(finishes.length, 1)
+    assert.equal(finishes[0].finishReason.unified, "error")
   })
 })

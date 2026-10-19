@@ -1,3 +1,4 @@
+import type { ResultCost } from "./budget-ledger.js"
 import type { ClaudeStreamMessage } from "./types.js"
 
 /**
@@ -60,6 +61,28 @@ export function extractTurnStats(msg: ClaudeStreamMessage): TurnStats {
   if (msg.modelUsage && typeof msg.modelUsage === "object") stats.modelUsage = msg.modelUsage
   if (Array.isArray(msg.permission_denials)) stats.permissionDenials = msg.permission_denials
   return stats
+}
+
+/**
+ * The cost a footer prints: what this `result` added, never the Claude
+ * session's running total, which is what a headless `total_cost_usd` is
+ * (measured: $0.0331, $0.0400, $0.0470 over three messages, h #g245). Before
+ * this every footer after a process's first printed that running total beside
+ * the turn's own token counts (h #g257).
+ *
+ * The one turn it cannot price is the first result of a RESUMED session with no
+ * earlier total in this process, after an opencode restart say: `--resume`
+ * restores the CLI's running total, so that figure may include every earlier
+ * turn of the conversation. It is left out rather than guessed; the INFO line
+ * still carries the CLI's own total.
+ */
+export function footerCostUsd(
+  cost: ResultCost | undefined,
+  resumedSession: boolean,
+): number | undefined {
+  if (!cost) return undefined
+  if (cost.noBaseline && resumedSession) return undefined
+  return cost.deltaUsd
 }
 
 /** Dollars, at the precision the number actually carries information at. */

@@ -147,6 +147,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (branch `turn-cost-and-failover`, h #g257): the `turnStats` cost and PR #115's five
+  leftovers, after "do the recommended for the rest". The footer prints the turn's delta (a resumed session's
+  first footer leaves the cost out); a limited `doGenerate` turn errors in every mode; a stream cancel stops
+  the turn in every mode; after a chain of overrides the form, the notes and the remembered limit name the
+  account that ran and never offer it; the form's switch note says carried or replayed. Not live: needs a
+  second limited login.
 - 2026-10-19: **done** (branch `start-watchdog-init`, h #g256): the start-watchdog fix, after "defer the til
   message do the recommended for the rest". Measured first on 2.1.293: `system`/`init` waits for every MCP
   server to connect or hit `MCP_TIMEOUT`. A child that has not written `init` now gets at least its

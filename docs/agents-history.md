@@ -7514,3 +7514,97 @@ logged `claude process still silent after respawn; ending turn` at 180 s and
 ended the turn on `Claude process produced no output after the envelope write
 (start watchdog timeout).`; this branch answered `ok` at 103.5 s and finished
 `stop`.
+
+## The `turnStats` footer prints the turn's cost, and PR #115's five leftovers (2026-10-19)
+
+h #g257. On 2026-10-19 the maintainer asked "what is still left now?", was given
+the backlog with a suggested order (the start-watchdog fix, then "the `turnStats`
+cost and the five failover edge cases as one small batch", then the
+restart-resume refusal), and answered "defer the til message do the recommended
+for the rest". This is the second of the three: one PR, each item a test first.
+
+### The `turnStats` cost
+
+Found by lane D2 on 2026-10-17 (h #g245): a headless `result`'s `total_cost_usd`
+is the Claude session's running total (measured: $0.0331, $0.0400, $0.0470 over
+three messages), so every footer after a reused process's first printed the
+session's spend so far beside that turn's own token counts. The fix shape
+recorded then was "print the turn's delta, the ledger's `costDelta` already
+computes it".
+
+It does, but `costDelta` MOVES the session's baseline as it reads, so it may be
+called once per `result`: called by the ledger and again for the footer, the
+second call returns 0. So `takeResultCost` (the old body, now also saying
+whether a baseline existed) is called once in the parser and shared:
+`recordResultCost` returns what it took, and with no budget set a footer-only
+install calls `takeResultCost` itself. `costDelta` stays as its thin wrapper.
+
+The one figure that cannot be priced is the first result of a RESUMED session
+with no earlier total in this process: an opencode restart's first turn
+(`resumeAfterRestart`), or a fork. `--resume` restores the CLI's running total
+(h #g245), so that number may hold every earlier turn; whether every resume
+restores it was not measured, and nothing in the frame distinguishes the two.
+`footerCostUsd` leaves the cost out of that one footer rather than guess; the
+next turn on the same process has a baseline. A session that STARTED in this
+process has no baseline either, and there the total is exactly its first
+turn's cost, which is why the rule asks whether the process was spawned with
+`--resume`. The INFO line keeps the CLI's `costUsd` and adds `turnCostUsd`
+(allowlisted as money for the bundle); `providerMetadata` keeps the CLI's total.
+
+Red first: through a real `doStream` against a fake CLI with a cumulative
+total over two turns on one process, the old code's second footer printed
+`$0.0400` (the running total) and a resumed session's first printed `$0.5000`.
+
+### PR #115's leftovers
+
+Recorded in the vault backlog when PR #115 (`accountFailover: "auto"`,
+@broskees, h #g236) merged, each "small and each is a test first". Each was
+reproduced as a failing fake-CLI test against the unchanged code first; eight
+tests failed there, and the ninth, the `"auto"` login-command check, passed,
+which is what a "verify" item should do.
+
+1. **With `"off"` or `"ask"` a limited `doGenerate` turn finished `stop`.** The
+   `usage_limit` finish for a turn with no note was gated on `accountRun`, which
+   only `"auto"` has. The gate is gone: a limited `doGenerate` turn finishes
+   `{unified: "error", raw: "usage_limit"}` in every mode. Every branch that
+   takes the turn otherwise (the form, the model chain, a compaction failure)
+   returns or sets `resultFailure` first, so nothing else moves.
+2. **A stream `cancel()` did not stop a non-auto turn.** The turn's own
+   `cancel()` is empty, and only `"auto"` wrapped the stream. `stopOnCancel` now
+   does it for every mode, with the same combined signal, so a cancel takes the
+   turn's ordinary abort path and the CLI gets an `interrupt`. One thing changed
+   for `"auto"` too: its `cancel()` no longer cancels the attempt's own stream.
+   The turn's abort path still writes on its way out (the grace timer's
+   `closeHandler` enqueues a `finish` unguarded), and a write to a cancelled
+   stream throws from a timer where nothing catches it. The inner stream is now
+   left open and unread instead; its parts go to a queue nobody drains.
+3. **After a chain of overrides the form named the original account and
+   offered the account that had just failed.** Overrides resolve ONE hop from
+   the provider's own account (`resolveFailoverSpawn`), so the account a turn
+   runs on can differ from the account the form was keyed on. Three things now
+   follow the account that ran (`limitAccount = spawnedAccount` in every mode;
+   before, only `"auto"`): the remembered limit, every note and the form's
+   question, and the config dir an account-block note's login command names.
+   `failoverAccounts` never contains it. The pick itself is still stored under
+   the provider's own account (`pending.sourceAccount`), because that is the
+   key every turn resolves from; keying it on the failed account would leave
+   the provider pointing at the account that just failed. The answer carries
+   `failedAccount` only when it differs, so a form without a chain answers
+   byte-identically to before.
+4. **The form's switch note said "replayed" when the conversation was carried.**
+   It was written before the transcript carry ran, with fixed wording from
+   before the carry existed ("Claude cannot resume a session across accounts").
+   It is written after the carry now, as the `"auto"` note already was, with the
+   same two endings, and it names a block's reason instead of "is out of usage"
+   (a form opened on an expired login said the account was out of usage).
+5. **The account-block login command after a chained `"auto"` switch.** Already
+   right for `"auto"`: a chain ending on a second expired login names the
+   second account's `CLAUDE_CONFIG_DIR`, pinned by a test now. The same check
+   for `"off"` after an override failed, and is item 3's config-dir half.
+
+Also changed on the way: the stop answer's error part named the provider's
+account and said "is out of usage", which a stop after an expired login is not.
+It names the account that ran and says it "cannot serve this turn".
+
+Not measured live: every leftover needs a second limited or expired login,
+which this machine does not have (TODO.md, Parked).

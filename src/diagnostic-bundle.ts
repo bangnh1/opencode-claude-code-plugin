@@ -231,6 +231,7 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   waitedMs: "duration",
 
   costUsd: "money",
+  turnCostUsd: "money",
 
   // enums: a fixed vocabulary this package or the CLI defines
   apiKeySource: "enum",
