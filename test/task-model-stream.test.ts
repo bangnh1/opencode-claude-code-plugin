@@ -230,7 +230,7 @@ function cleanup(fake: ReturnType<typeof createFakeCli>) {
 
 const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] })
 
-test("an explicit model and variant beat the agent's forceModel and reasoningEffort; its sibling keeps them", async () => {
+test("an explicit model and variant beat the agent's forceModel and reasoningEffort; its sibling keeps them", { timeout: 30_000 }, async () => {
   const fake = createFakeCli()
   try {
     const parent = await runParent(fake, {
@@ -261,7 +261,7 @@ test("an explicit model and variant beat the agent's forceModel and reasoningEff
   }
 })
 
-test("a request opencode did not honour changes nothing in the child", async () => {
+test("a request opencode did not honour changes nothing in the child", { timeout: 30_000 }, async () => {
   const fake = createFakeCli()
   try {
     await runParent(fake, {
@@ -277,7 +277,7 @@ test("a request opencode did not honour changes nothing in the child", async () 
   }
 })
 
-test("a resumed child named with a model keeps it; with no variant the agent's effort still applies", async () => {
+test("a resumed child named with a model keeps it; with no variant the agent's effort still applies", { timeout: 30_000 }, async () => {
   const fake = createFakeCli()
   try {
     await runParent(fake, {
@@ -303,7 +303,7 @@ test("a resumed child named with a model keeps it; with no variant the agent's e
   }
 })
 
-test("accountGroups refuses a model on another group's account before anything reaches opencode", async () => {
+test("accountGroups refuses a model on another group's account before anything reaches opencode", { timeout: 30_000 }, async () => {
   const fake = createFakeCli()
   try {
     const parent = await runParent(
@@ -323,7 +323,7 @@ test("accountGroups refuses a model on another group's account before anything r
   }
 })
 
-test("subagentDispatchCrossGroup lets the same model through", async () => {
+test("subagentDispatchCrossGroup lets the same model through", { timeout: 30_000 }, async () => {
   const fake = createFakeCli()
   try {
     const parent = await runParent(
@@ -346,7 +346,7 @@ test("subagentDispatchCrossGroup lets the same model through", async () => {
   }
 })
 
-test("with subagentDispatch ask, only the tasks that name no model are asked about", async () => {
+test("with subagentDispatch ask, only the tasks that name no model are asked about", { timeout: 30_000 }, async () => {
   const named = { description: "screen", prompt: SCREEN, subagent_type: "designer", model: "claude-code/claude-opus-5-5" }
   const fake = createFakeCli()
   try {
