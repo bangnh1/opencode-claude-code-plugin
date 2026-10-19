@@ -7294,4 +7294,9 @@ before dispatch, `subagentDispatchCrossGroup`, the form asking only about the
 unnamed tasks), `test/proxy-mcp.test.ts` (the gate, the strip, the input check),
 `test/subagent-dispatch.test.ts` (the exclusion) and the PR's own forwarding
 tests in `test/proxy-task.test.ts`. @taylormitchell's commit was cherry-picked
-with authorship kept and is credited in `docs/credits.md`.
+with authorship kept and is credited in `docs/credits.md`. Shipped as v0.60.0
+(PR #125), with a GitHub Release; the publish was verified from the Publish
+step's tail and the version document's shasum, and #123 was closed with a credit
+comment. The new fake-CLI test file is on `.github/windows-skipped-tests.txt`
+like every other one: its first Windows run hung 42 minutes before it was listed,
+and each of its tests now carries a 30-second timeout so a hang fails instead.

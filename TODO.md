@@ -150,15 +150,15 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-19: **done** (branch `task-model-override`, h #g254): PR #123 from @taylormitchell, after "this PR
+- 2026-10-19: **done** (v0.60.0, PR #125, h #g254): PR #123 from @taylormitchell, after "this PR
   ... whatsup with it? also why is there a workflow warning?". The maintainer chose "Approve its CI runs, 1 and
   assimilate it and improve on it and credit the user and close it" and "Fix it now" for the warning. Done: the
   PR's two CI runs approved (both green); the Docs workflow moved to Node 24 actions (`c473741`, deployed, no
   warning left); Taylor's commit cherry-picked with authorship kept; on top, the `accountGroups` guard on a
   per-call model, an explicit model and variant beating `forceModel` / `defaultSubagentModel` /
   `reasoningEffort` in the child, the dispatch form leaving named tasks out, the V1 gate read off the live
-  schema; docs, SKILL.md, credits; measured live on opencode 2.0.31 against v0.59.0. Close #123 with credit once
-  merged.
+  schema; docs, SKILL.md, credits; measured live on opencode 2.0.31 against v0.59.0. #123 closed with a credit
+  comment.
 - 2026-10-18: **done** (v0.59.0, PR #124, h #g253): opencode 1/2 parity, after "are all functionalities now for
   opencode v1 and v2 on par?". The answer was not quite: five differences on opencode 2 (`/btw` after the turn, no
   todo panel, `bridgeMcpOauthTokens` finds nothing, the proxy deadline guard never keeps a call, warnings never
