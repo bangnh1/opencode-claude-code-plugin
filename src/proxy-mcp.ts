@@ -828,6 +828,18 @@ export const TASK_INPUT_PROPERTIES = {
     type: "string",
     description: "The type of specialized agent to use for this task",
   },
+  // After the agent type, where opencode 2's own `subagent` tool puts it
+  // (after `prompt`): first in the list it was the field the model read first.
+  // Stripped on a host whose `task` has no such field (`applyTaskModelSupport`).
+  model: {
+    type: "string",
+    description:
+      "NEVER set this unless the user explicitly asked for a particular model" +
+      " or variant for this subagent. The exact opencode model reference," +
+      " providerID/modelID, or providerID/modelID#variant to pick a variant." +
+      " Use only an id the user gave you or one this conversation already" +
+      " used; never guess one. Omit it and opencode picks the model as usual.",
+  },
   task_id: {
     type: "string",
     description:
@@ -861,6 +873,113 @@ export const TASK_INPUT_PROPERTIES = {
 export const TASK_INPUT_PROPERTIES_NO_BACKGROUND = Object.fromEntries(
   Object.entries(TASK_INPUT_PROPERTIES).filter(([name]) => name !== "background"),
 )
+
+/**
+ * Whether opencode's `task` tool takes a per-call `model` (h #g254). The same
+ * reading as `liveTaskSupportsBackground`, and for the same reasons: a 1.x host
+ * is asked through its own advertised schema, never assumed (1.19.0's `task`
+ * has no such field), and V2 is answered without the registry, because its
+ * `subagent` tool carries `model` unconditionally (read out of 2.0.22 and
+ * 2.0.31) while the client shim reports `parameters: {}` for every V2 tool.
+ */
+export function liveTaskSupportsModel(
+  taskParameters: Record<string, unknown> | undefined,
+  dialect: "v1" | "v2" = "v1",
+): boolean {
+  if (dialect === "v2") return true
+  const properties = taskParameters?.properties
+  if (!properties || typeof properties !== "object") return false
+  return "model" in (properties as Record<string, unknown>)
+}
+
+/**
+ * `model` stripped from the `task` schema and from every `task_batch` item when
+ * the host cannot take it. Left advertised there, the model could set a field
+ * opencode would reject or ignore; stripped, the proxy also refuses one that is
+ * set anyway, before anything is queued (`createProxyMcpServer`).
+ */
+export function applyTaskModelSupport(
+  tools: ProxyToolDef[],
+  supported: boolean,
+): ProxyToolDef[] {
+  if (supported) return tools
+  const withoutModel = (schema: Record<string, unknown>) => {
+    const properties = schema?.properties
+    if (!properties || typeof properties !== "object") return schema
+    return {
+      ...schema,
+      properties: Object.fromEntries(
+        Object.entries(properties as Record<string, unknown>).filter(([name]) => name !== "model"),
+      ),
+    }
+  }
+  return tools.map((tool) => {
+    if (tool.name === "task") return { ...tool, inputSchema: withoutModel(tool.inputSchema) }
+    if (tool.name !== TASK_BATCH_TOOL_NAME) return tool
+    const properties = tool.inputSchema.properties as Record<string, unknown> | undefined
+    const tasks = properties?.tasks as Record<string, unknown> | undefined
+    if (!tasks?.items || typeof tasks.items !== "object") return tool
+    return {
+      ...tool,
+      inputSchema: {
+        ...tool.inputSchema,
+        properties: {
+          ...properties,
+          tasks: { ...tasks, items: withoutModel(tasks.items as Record<string, unknown>) },
+        },
+      },
+    }
+  })
+}
+
+/** Whether this `task` def, or each item of this `task_batch` def, offers `model`. */
+function taskSchemaOffersModel(def: ProxyToolDef): boolean {
+  const properties = def.inputSchema.properties as Record<string, unknown> | undefined
+  const schema =
+    def.name === TASK_BATCH_TOOL_NAME
+      ? ((properties?.tasks as Record<string, unknown> | undefined)?.items as
+          | Record<string, unknown>
+          | undefined)
+      : def.inputSchema
+  const fields = schema?.properties
+  return !!fields && typeof fields === "object" && "model" in (fields as Record<string, unknown>)
+}
+
+/**
+ * Why a `task` / `task_batch` call's per-call `model` cannot go to opencode, or
+ * null (h #g254). The first refusal answers the whole call, which then starts
+ * none of its tasks.
+ *
+ * A def without the field is a host whose `task` cannot take it, so a `model`
+ * the model set anyway is refused here instead of being dropped or rejected
+ * by opencode half-way through a batch. `guard` is the `accountGroups` check.
+ */
+export function taskModelInputError(
+  def: ProxyToolDef,
+  input: Record<string, unknown>,
+  guard?: (model: string) => string | null,
+): string | null {
+  const tasks = def.name === TASK_BATCH_TOOL_NAME ? taskBatchTasks(input) : [input]
+  const offered = taskSchemaOffersModel(def)
+  for (const task of tasks) {
+    if (task.model === undefined) continue
+    if (!offered) {
+      return (
+        "This opencode's task tool takes no per-call `model` (opencode 1.x has" +
+        " none), so no tasks were started. Omit `model`."
+      )
+    }
+    if (typeof task.model !== "string") {
+      return (
+        "`model` must be a string, providerID/modelID or" +
+        " providerID/modelID#variant, so no tasks were started."
+      )
+    }
+    const refusal = guard?.(task.model)
+    if (refusal) return refusal
+  }
+  return null
+}
 
 export const DEFAULT_PROXY_TOOLS: ProxyToolDef[] = [
   {
@@ -1098,6 +1217,13 @@ export async function createProxyMcpServer(
       toolName: string,
       input: Record<string, unknown>,
     ) => Promise<ProxyToolResult | null>
+    /**
+     * Asked about every per-call `model` a `task` / `task_batch` names, after
+     * the schema and type checks. A string refuses the whole call before it is
+     * queued; null lets it through. The `accountGroups` guard is the one user
+     * (h #g254), so a server without groups set has none.
+     */
+    taskModelGuard?: (model: string) => string | null
   } = {},
 ): Promise<ProxyMcpServer> {
   const calls = new EventEmitter()
@@ -1288,7 +1414,8 @@ export async function createProxyMcpServer(
         const toolName = String(params.name ?? "")
         const input = (params.arguments ?? {}) as Record<string, unknown>
 
-        if (!tools.some((t) => t.name === toolName)) {
+        const tool = tools.find((t) => t.name === toolName)
+        if (!tool) {
           // tools/call failures MUST be MCP results with isError, never
           // JSON-RPC error envelopes: Claude CLI validates every tools/call
           // response against the MCP result schema and rejects JSON-RPC
@@ -1309,6 +1436,16 @@ export async function createProxyMcpServer(
           if (problem) {
             // Same rule as the unknown-tool path: an MCP result with isError,
             // never a JSON-RPC error envelope.
+            writeToolCallResult(res, requestId, { kind: "error", message: problem })
+            return
+          }
+        }
+
+        if (toolName === "task" || toolName === TASK_BATCH_TOOL_NAME) {
+          // Before interceptors, `admit` and the broker, like the batch check
+          // above: a refused model starts none of a batch's tasks (h #g254).
+          const problem = taskModelInputError(tool, input, options.taskModelGuard)
+          if (problem) {
             writeToolCallResult(res, requestId, { kind: "error", message: problem })
             return
           }

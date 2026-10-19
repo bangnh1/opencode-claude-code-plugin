@@ -169,6 +169,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "subagent dispatch answer was not recognised; dispatching with the defaults",
   "subagent dispatch answer was not recognised; keeping the default",
   "subagent dispatch form was dismissed; dispatching with the defaults",
+  "task model refused: its account is in another account group",
   "task_batch resolving with child results missing",
   "the interactive transport has not been measured on this Claude Code version; it reads the TUI's screen and transcript, which a new release can change. If a turn hangs or a dialog is not handled, run /claude-code-doctor bundle and report it",
   "the interactive turn did not take a forwarded user message",
