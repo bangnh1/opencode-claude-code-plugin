@@ -129,6 +129,13 @@ raised, so they survive context compaction; removed when answered, done or dropp
   +1 s, `claude` ready +3.2 s, first tool call +10 s; in the ~1,600-message session the same spawn took
   35 s to get ready. So the stall scales with the parent session's size. Whether opencode or dcp's
   message transform burns it (needs a large session with dcp disabled): maintainer, 2026-10-09: "later".
+
+- 2026-10-19: the start-watchdog fix. The reused-process start watchdog fires at 90 s while every spawn
+  may wait up to 120 s for its MCP servers (`MCP_TIMEOUT`, h #g235); after a wake from sleep on 2026-10-17 it
+  killed every spawn for about three minutes. Maintainer, 2026-10-17: "go forward with the recommended"
+  (do it as its own small PR; the row is in the vault note's research-pass table). Not built yet. Asked on
+  2026-10-19 whether to build it now or later.
+
 ## Parked
 
 - 2026-10-08: switching the daily driver to opencode 2. Maintainer: "ill stay with 1 for now will
