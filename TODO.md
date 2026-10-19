@@ -72,16 +72,6 @@
 Feature ideas live in the vault note `opencode-claude-code-plugin/Future Features.md`; this list is
 checks and suspected defects found in passing.
 
-- 2026-10-19: dcp's `compact` reference form on opencode 2 (`@4@` as a message's last line) is left out of the
-  resume digest from dcp 3.2.0's source only (h #g258). Check it live on 2.0.31: two prompts, the second undone,
-  a third, a restart, a fourth, and confirm the fourth resumes. Needs V2's revert route.
-- 2026-10-17: no todo tool reached this headless main conversation on Claude Code 2.1.300 (`TaskCreate`,
-  `TaskUpdate`, `TaskList` absent from the model's tool list and not found by `ToolSearch`), although the
-  spawn's `--disallowedTools` was only `Bash Edit MultiEdit Write WebFetch Agent AskUserQuestion`. The todo
-  ledger (h #g85) and the sidebar's todo fraction (h #g246) both read `TaskCreate` off the stream, so check
-  whether 2.1.300 still offers it in `--print` mode and under what gate; if it is gone, the fraction is only
-  reachable through opencode's own `todowrite` on 1.x.
-
 ## Deferred decisions
 
 Only decisions about this plugin belong here. Items about the global opencode config
@@ -108,7 +98,14 @@ raised, so they survive context compaction; removed when answered, done or dropp
   condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
   release, maintainer: "defer". Still parked until an instruction names it. 2026-10-19, maintainer:
   "defer the til message". Still parked. 2026-10-20, maintainer, releasing v0.60.2: "do the recommended
-  dont send anything in til". Not sent; still parked.
+  dont send anything in til". Not sent; still parked. 2026-10-20, maintainer: "1 defer". Still parked.
+
+- 2026-10-20: the CLI's todo tools on the newer models (h #g259). Claude Code offers `TaskCreate` and its
+  family only to Claude 3.x, Opus 4.0 to 4.7, Sonnet 4.0 to 4.6 and Haiku 4.5, so on Opus 4.8, Opus 5/5.5,
+  Sonnet 5/5.5, Fable and Haiku 5.5 no todos reach opencode and the sidebar never shows a todo fraction.
+  `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in opencode's environment brings them back (measured live, documented).
+  Decide: leave it to the env var (as now), add an off-by-default option that sets it on every spawn, or
+  set it by default. The CLI turned the tools off for those models deliberately.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
@@ -142,6 +139,11 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-20: **done** (branch `backlog-todo-dcp`, h #g259): the two backlog checks, after "2 do". The
+  todo tools are gated by MODEL in Claude Code (2.1.280 to 2.1.293; 2.1.300 is not on this machine): off for
+  Opus 4.8 and every 5.x model, back with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, measured off `init` and live
+  through opencode 1.19.3; documented, code unchanged. dcp's `compact` form measured on opencode 2.0.31: an
+  undo renumbers it across a restart (`@4@` to `@3@`), v0.60.1 replayed and this build resumed.
 - 2026-10-19: **done** (v0.60.2, PR #129, h #g258): `resumeAfterRestart` refused as
   `conversation-changed`, recorded 2026-10-17. Reproduced live on opencode 1.19.3 + dcp 3.2.0 with a fake
   `claude`: an undo makes dcp renumber every later message after a restart (`m0004` became `m0003`), and its tag
