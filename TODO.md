@@ -96,11 +96,6 @@ Only decisions about this plugin belong here. Items about the global opencode co
 `opencode/Open items.md`; they were recorded here only because the sessions that raised
 them ran in this directory.
 
-- 2026-10-18: the sidebar's notation for a reset on another day: `2026-10-18 01:20`, the usage-limit
-  note's own, as shipped in v0.57.0, or `18/10/2026 01:20`. Maintainer: "not sure". Stays as shipped
-  until they decide; the note (`formatLocalMinute`) and the sidebar (`formatResetClock`) would change
-  together, so it is one decision, not two.
-
 ## Open from you
 
 
@@ -150,6 +145,9 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (h #g246): the reset notation, parked on 2026-10-18 with "not sure". Shown both
+  side by side, the maintainer chose "Keep year first": a reset on another day stays `2026-10-21 14:00`
+  (narrowest `10-21 14:00`), not `21/10/2026 14:00`, in the sidebar and every note. No code change.
 - 2026-10-19: **done** (v0.60.1, PR #126, h #g255): the guessed-provider decision. Asked what the
   plugin should do after Haiku 4.5 guessed `anthropic/claude-sonnet-5-5` for a subagent model, the
   maintainer chose "Complete bare ids" and "Release v0.60.1" for it with the docs and skill change. A bare

@@ -6504,7 +6504,14 @@ cell counts behind each:
   EVERY line, so the column reads alike: the word goes, then the year
   (`10-18 01:20`). A reset today stays `resets 18:00`. What the maintainer had
   seen was `appical · 5h ok · resets Oct 18 01:…`, the line's own `…` at 37
-  cells, which is what "so it fits fully" was about.
+  cells, which is what "so it fits fully" was about. Asked on 2026-10-18 whether
+  to keep year first or switch to the request's day-first `18/10/2026 01:20`, the
+  maintainer answered "not sure", and it was parked in TODO.md. Asked again on
+  2026-10-19 with both side by side (`2026-10-21 14:00` and `21/10/2026 14:00`,
+  narrowest `10-21 14:00` and `21/10 14:00`), and told that `05/11/2026` is 5
+  November to a day-first reader and 11 May to a US one, they chose "Keep year
+  first". The sidebar, both usage notes, the doctor and the stale-build note
+  keep `formatLocalMinute`'s notation.
 
 The sidebar is 42 columns whatever the terminal (`f(i,"width",42)`, read off
 the 1.19.0 binary for this), so none of it is a narrow-pane effect. Re-run on
