@@ -100,6 +100,14 @@ them ran in this directory.
   note's own, as shipped in v0.57.0, or `18/10/2026 01:20`. Maintainer: "not sure". Stays as shipped
   until they decide; the note (`formatLocalMinute`) and the sidebar (`formatResetClock`) would change
   together, so it is one decision, not two.
+- 2026-10-19: what, if anything, the plugin does about a guessed provider in a per-call subagent
+  `model` (h #g254). Measured on opencode 2.0.31: Haiku 4.5, asked for a subagent "on
+  claude-sonnet-5-5", passed `anthropic/claude-sonnet-5-5` among its guesses. opencode refused it
+  here, but on an install with an `anthropic` provider serving that id the subagent would run there,
+  outside the plugin and billed to that provider. Options: leave it documented (as now); complete a
+  bare id to the conversation's own provider and account before forwarding (both Haiku runs passed a
+  bare id first, so this would have made each a first-try success); or tighten the field description.
+  Raised by the assistant, not the maintainer; waiting on their call.
 
 ## Open from you
 
@@ -150,6 +158,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-19: **done** (h #g254): "document this also and make sure the skill is aware", after v0.60.0.
+  The subagents page now says how to name the model (a table of the three reference shapes, two
+  example prompts, how to check it took), the symptoms page and the skill's Troubleshooting carry
+  four rows, the sidebar and tool-proxy guides point at it, and the skill's paragraph became its own
+  recipe. The "Sonnet in words" claim was measured first: Opus 5.5 got the reference right, Haiku
+  4.5 guessed. Docs pushed to master; the skill change reaches npm installs with the next release.
 - 2026-10-19: **done** (v0.60.0, PR #125, h #g254): PR #123 from @taylormitchell, after "this PR
   ... whatsup with it? also why is there a workflow warning?". The maintainer chose "Approve its CI runs, 1 and
   assimilate it and improve on it and credit the user and close it" and "Fix it now" for the warning. Done: the

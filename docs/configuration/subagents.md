@@ -103,14 +103,36 @@ Or once, for every subagent that declares nothing, as `defaultSubagentMaxTurns` 
 
 ## A model you name in the conversation (opencode 2)
 
-On opencode 2, Claude can pass a `model` when it dispatches a subagent, so "run the reviewer on Sonnet" reaches opencode's own `subagent` tool as `claude-code/claude-sonnet-5-5`. On a multi-account install the reference names the account too, as in `claude-code-work/claude-sonnet-5-5@work`, and a `#high` (or any other variant) picks a variant. Claude is told to set it only when you asked, and only with an id you gave it or one the conversation already used. opencode 1's `task` tool has no such field, so there it is not offered at all. Contributed by [@taylormitchell](https://github.com/taylormitchell) (PR #123).
+On opencode 2 you can pick a subagent's model in the message that asks for it. Claude passes the model along with the dispatch, as the `model` of opencode's own `subagent` tool, and opencode starts that subagent on it. There is nothing to configure. opencode 1's `task` tool has no such field, so there use an agent's [`forceModel`](#subagents-your-account-their-model) or the [dispatch form](#choosing-per-dispatch-not-per-file) instead. Contributed by [@taylormitchell](https://github.com/taylormitchell) (PR #123).
+
+**Name the model by its exact reference**, the same `provider/model` you would write as `model` in your opencode config:
+
+| Your install | Reference |
+|---|---|
+| No `accounts` | `claude-code/claude-sonnet-5-5` |
+| `accounts`, on the default account | `claude-code-default/claude-sonnet-5-5` |
+| `accounts`, on another account | `claude-code-work/claude-sonnet-5-5@work` |
+
+Add `#low`, `#medium`, `#high`, `#xhigh` or `#max` to pick a reasoning variant, as in `claude-code/claude-sonnet-5-5#high`. Every model has them except Haiku 4.5. Two messages that work:
+
+> Run the reviewer subagent on `claude-code/claude-sonnet-5-5#high` and summarise what it finds.
+
+> Review this diff twice in parallel, once on `claude-code/claude-opus-5-5` and once on `claude-code/claude-sonnet-5-5`, and tell me where they disagree.
+
+The second becomes one `task_batch` with a model on each task, so both reviews run at the same time.
+
+**Named in words, it depends on the model.** Measured on opencode 2.0.31, asking for a general subagent "on Sonnet 5.5" and "on claude-sonnet-5-5": Opus 5.5 passed `claude-code/claude-sonnet-5-5` on the first try both times. Haiku 4.5 guessed first: two tries for "Sonnet 5.5" and four for the bare id, passing `claude-sonnet-5-5`, `anthropic/claude-sonnet-5-5` and `claude-sonnet-5.5` before `claude-code/claude-sonnet-5-5`. opencode refused every wrong guess with its own error (*Invalid model "…"* or *Model "…" is not available*) and started no subagent for it, so nothing ran on the wrong model. Each guess is still a call spent, and the `anthropic/` one shows the real risk: opencode resolves a reference against every provider in your config, so had a provider called `anthropic` been configured there with that model, the subagent would have run on it, outside this plugin and billed to that provider. The exact reference rules both out.
+
+**Checking it took.** The subagent's row in the [sidebar](../guides/subagents-sidebar.md) shows the model and effort it really spawned with, and its tool row shows the `model` Claude passed. No `model` on the tool row means Claude did not pass one, and opencode picked the model as usual. With [logging](logging.md) on, `explicit task model claimed by its child session` names the subagent's session and its model.
 
 A model named this way is the most specific decision about that subagent, so it wins:
 
 - **Over `forceModel` and `defaultSubagentModel`**, and a `#variant` over the agent's `reasoningEffort`. That is opencode's own order: the model you name, then the agent's, then the caller's. Name a model without a variant and the agent's effort still applies.
 - **Over the dispatch form** below. A task that names its model is left out of the form's questions, and a dispatch whose every task names one raises no form. A child resumed with a named model runs on it, whatever an earlier form chose for it.
 
-Two things it never does. It never moves work across `accountGroups`: a model on an account outside the conversation's group is refused before anything starts, exactly as the form never offers that account, unless `subagentDispatchCrossGroup` is set. And a model on a provider that is not one of this plugin's accounts is opencode's own routing: that subagent runs there, under opencode's permissions, not through this plugin.
+Two things it never does. It never moves work across `accountGroups`: a model on an account outside the conversation's group is refused before anything starts, exactly as the form never offers that account, unless `subagentDispatchCrossGroup` is set. And it never routes a model on another provider through this plugin: that is opencode's own routing, so that subagent runs there, under opencode's permissions and that provider's billing.
+
+Claude is told to set a model only when you ask for one. If it ever sets one you did not ask for, the subagent runs on that model, under the same two rules.
 
 ## Choosing per dispatch, not per file
 

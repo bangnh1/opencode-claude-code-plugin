@@ -7300,3 +7300,47 @@ step's tail and the version document's shasum, and #123 was closed with a credit
 comment. The new fake-CLI test file is on `.github/windows-skipped-tests.txt`
 like every other one: its first Windows run hung 42 minutes before it was listed,
 and each of its tests now carries a 30-second timeout so a hang fails instead.
+
+### A model named in words, measured after the release (2026-10-19)
+
+After v0.60.0 the maintainer asked to "document this also and make sure the
+skill is aware". Reading the shipped docs against the shipped field description
+found a claim nobody had measured: the subagents page said "run the reviewer on
+Sonnet" reaches opencode as `claude-code/claude-sonnet-5-5`, while the field
+description tells Claude "Use only an id the user gave you ... never guess one".
+Four turns on opencode 2.0.31 with the shipped v0.60.0 `dist`, scratch XDG dirs,
+a general subagent asked to reply HELLOPROBE:
+
+| Parent | Asked "on ..." | `model` values passed, in order | Child ran on |
+|---|---|---|---|
+| Opus 5.5 | Sonnet 5.5 | `claude-code/claude-sonnet-5-5` | `claude-sonnet-5-5` |
+| Opus 5.5 | claude-sonnet-5-5 | `claude-code/claude-sonnet-5-5` | `claude-sonnet-5-5` |
+| Haiku 4.5 | Sonnet 5.5 | `claude-sonnet-5-5`, `claude-code/claude-sonnet-5-5` | `claude-sonnet-5-5` |
+| Haiku 4.5 | claude-sonnet-5-5 | `claude-sonnet-5-5`, `anthropic/claude-sonnet-5-5`, `claude-sonnet-5.5`, `claude-code/claude-sonnet-5-5` | `claude-sonnet-5-5` |
+
+opencode refused every wrong value itself, before any child started: `Invalid
+model "claude-sonnet-5-5". Use "providerID/modelID" or
+"providerID/modelID#variant".` for a reference without a provider or with a
+dotted id, and `Model "anthropic/claude-sonnet-5-5" is not available. Use the
+models tool to see what is available.` for an unknown provider. One child per
+turn, four children in all, every one spawned with `--model claude-sonnet-5-5`;
+the four turns cost at most $0.85 of plan usage. So the description does not
+stop a model guessing, Opus's guesses were right, and a wrong guess costs a call
+rather than a wrong model.
+
+The one guess that matters is a provider: opencode resolves a reference against
+every provider it has, so the `anthropic/` guess would have been accepted on an
+install with an `anthropic` provider serving that id, and that subagent would
+have run outside this plugin and billed there. Nothing in the plugin checks a
+non-plugin provider, deliberately (that is opencode's routing). The docs and the
+skill now tell users to name the exact reference, with a table of the three
+shapes (`claude-code/<model>`; `claude-code-default/<model>` on the default
+account of a multi-account install, which takes no `@` marker; and
+`claude-code-<account>/<model>@<account>`), two example prompts, how to check a
+subagent took the model (its sidebar row, its tool row's `model`, `explicit task
+model claimed by its child session`), and four troubleshooting rows on both the
+symptoms page and the skill. The skill's per-call model paragraph moved out of
+"How a proxied call ends", where it had been appended, into a recipe of its own.
+Whether the plugin should also do something about a guessed provider (complete a
+bare id to the conversation's own provider, or tighten the description) was left
+to the maintainer.

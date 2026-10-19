@@ -85,7 +85,7 @@ which resets at 2026-10-17 18:00.
 
 **Where you see it.** The [sidebar](../guides/subagents-sidebar.md) shows one line per configured account from its first draw: the current reading (`work · 5h 76% · resets 18:00`, the reset time in its own colour), or the account's plan tier and `no reading yet` until its first turn reports (`home · Max 20x · no reading yet`). [`/claude-code-doctor`](../guides/doctor.md) lists every reading with the thresholds already announced.
 
-**Limits.** Claude Code only reports a reading when its view changes, so a long-lived Claude process may say nothing for several turns; the last reading stands until a newer one or its reset. An account with plenty of headroom is reported without a number, which the sidebar shows as `ok` and which never counts as zero. The [interactive transport](./transports.md) gets no reading at all: the only thing it records is a limit reply, which the sidebar shows as `limited` with the reset Claude Code named.
+**Limits.** Claude Code only reports a reading when its view changes, so a long-lived Claude process may say nothing for several turns; the last reading stands until a newer one or its reset. An account with plenty of headroom is reported without a number, which the sidebar shows as `ok` and which never counts as zero. The [interactive transport](../guides/interactive-transport.md) gets no reading at all: the only thing it records is a limit reply, which the sidebar shows as `limited` with the reset Claude Code named.
 
 The readings live in `$XDG_STATE_HOME/opencode-claude-code-plugin/account-usage.json` (`0600`): account names, window names, numbers and times, nothing else.
 
