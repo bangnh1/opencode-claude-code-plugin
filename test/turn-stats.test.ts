@@ -219,6 +219,10 @@ test("the footer prints what the result added, and nothing it cannot price", () 
   assert.equal(footerCostUsd({ deltaUsd: 0.5, noBaseline: true }, true), undefined)
 })
 
+// The fake CLI is a shebang script made executable with chmod, which means
+// nothing on Windows (.github/windows-skipped-tests.txt).
+const POSIX_ONLY = process.platform === "win32" ? "the fake-CLI harness is POSIX-only" : false
+
 /**
  * Two turns on one reused process against a fake CLI whose `total_cost_usd`
  * is cumulative, as a headless CLI's is. `resumeFirst` gives the key a Claude
@@ -282,7 +286,7 @@ readline.createInterface({ input: process.stdin }).on("line", () => {
   }
 }
 
-test("a reused process's second footer prints that turn's cost, not the running total", { timeout: 30_000 }, async () => {
+test("a reused process's second footer prints that turn's cost, not the running total", { skip: POSIX_ONLY, timeout: 30_000 }, async () => {
   // The measured cumulative sequence (h #g245).
   const { first, second } = await footersOverTwoTurns([0.0330759, 0.0400318], "turn-cost-a", false)
   assert.match(first, /\$0\.0331/)
@@ -290,7 +294,7 @@ test("a reused process's second footer prints that turn's cost, not the running 
   assert.doesNotMatch(second, /\$0\.0400/, "the running total is what the footer printed before")
 })
 
-test("a resumed session's first footer leaves out a cost it cannot know, and prices the next turn", { timeout: 30_000 }, async () => {
+test("a resumed session's first footer leaves out a cost it cannot know, and prices the next turn", { skip: POSIX_ONLY, timeout: 30_000 }, async () => {
   const { first, second } = await footersOverTwoTurns([0.5, 0.55], "turn-cost-b", true)
   assert.ok(first.startsWith(TURN_STATS_MARKER), first)
   assert.doesNotMatch(first, /\$/, "the restored total may include every earlier turn")
