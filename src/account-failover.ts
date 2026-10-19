@@ -728,7 +728,12 @@ export interface AutoFailoverRun {
 }
 
 interface PendingFailoverQuestion {
+  /** The provider's own account: the key the override a pick sets is stored under. */
   sourceAccount: string
+  /** The account that failed, which the question and the switch note name (h #g257). */
+  failedAccount?: string
+  /** `describeAccountBlock`, when that account was blocked rather than limited. */
+  reason?: string
   candidates: string[]
   resetsAt?: number
   /** The question as asked, needed to read opencode's answer sentence. */
@@ -760,7 +765,15 @@ function describeReset(resetsAt: number | undefined): string | undefined {
 export function createAccountFailoverQuestionCall(
   sessionKey: string,
   input: {
+    /** The provider's own account, under which a pick's override is stored. */
     sourceAccount: string
+    /**
+     * The account this turn ran on and that failed, when an override had
+     * already moved the conversation off `sourceAccount`. The question names
+     * it; it defaults to `sourceAccount`, which is the account that ran
+     * whenever no override did (h #g257).
+     */
+    failedAccount?: string
     candidates: readonly string[]
     resetsAt?: number
     window?: string
@@ -781,14 +794,15 @@ export function createAccountFailoverQuestionCall(
     .slice(2, 10)}`,
 ): QuestionToolCall {
   const source = normalizeAccountName(input.sourceAccount || DEFAULT_ACCOUNT)
+  const failed = normalizeAccountName(input.failedAccount || source)
   const candidates = input.candidates.map((c) => normalizeAccountName(c))
   const resets = describeReset(input.resetsAt)
   const until = resets ?? "opencode restarts"
 
   const question = input.reason
-    ? `The Claude account "${source}" ${input.reason}. Continue this task on another configured account? Leaving this unanswered waits, at no cost.`
+    ? `The Claude account "${failed}" ${input.reason}. Continue this task on another configured account? Leaving this unanswered waits, at no cost.`
     : [
-        `The Claude account "${source}" is out of usage`,
+        `The Claude account "${failed}" is out of usage`,
         input.window ? ` in ${input.window}` : "",
         resets ? `, which resets at ${resets}` : "",
         ". Continue this task on another configured account? Leaving this unanswered waits, at no cost.",
@@ -796,6 +810,9 @@ export function createAccountFailoverQuestionCall(
 
   pendingQuestions.set(pendingKey(sessionKey, toolCallId), {
     sourceAccount: source,
+    // Only after a chain of overrides; otherwise the two are one account.
+    ...(failed !== source ? { failedAccount: failed } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
     candidates: [...candidates],
     resetsAt: input.resetsAt,
     question,
@@ -813,8 +830,8 @@ export function createAccountFailoverQuestionCall(
             ...candidates.map((candidate) => ({
               label: candidate,
               description: input.carryTranscript === false
-                ? `Run on "${candidate}" until ${until}. The conversation is replayed as a fresh Claude session, and any MCP server configured only in "${source}"'s Claude profile will be missing.`
-                : `Run on "${candidate}" until ${until}. The conversation continues where it stopped if its Claude transcript can be carried across, and is replayed as a fresh Claude session if it cannot; either way, any MCP server configured only in "${source}"'s Claude profile will be missing.`,
+                ? `Run on "${candidate}" until ${until}. The conversation is replayed as a fresh Claude session, and any MCP server configured only in "${failed}"'s Claude profile will be missing.`
+                : `Run on "${candidate}" until ${until}. The conversation continues where it stopped if its Claude transcript can be carried across, and is replayed as a fresh Claude session if it cannot; either way, any MCP server configured only in "${failed}"'s Claude profile will be missing.`,
             })),
             {
               label: STOP_ANSWER,
@@ -831,7 +848,17 @@ export function createAccountFailoverQuestionCall(
 }
 
 export type AccountFailoverAnswer =
-  | { kind: "switch"; target: string; sourceAccount: string; resetsAt?: number }
+  | {
+      kind: "switch"
+      target: string
+      /** Where the override is stored: the provider's own account. */
+      sourceAccount: string
+      /** The account that failed, named in the switch note (h #g257). */
+      failedAccount?: string
+      /** `describeAccountBlock`, when it was blocked rather than limited. */
+      reason?: string
+      resetsAt?: number
+    }
   | { kind: "stop"; reason: string }
 
 function isDenied(output: unknown): output is { reason?: unknown } {
@@ -877,6 +904,8 @@ function classify(
     kind: "switch",
     target,
     sourceAccount: pending.sourceAccount,
+    ...(pending.failedAccount ? { failedAccount: pending.failedAccount } : {}),
+    ...(pending.reason ? { reason: pending.reason } : {}),
     resetsAt: pending.resetsAt,
   }
 }
@@ -897,7 +926,7 @@ export function consumeAccountFailoverAnswer(
    * to Claude as stray text (measured 2026-09-23). Only the newest message is
    * read with it, so an old answer further up the history never fires again.
    */
-  fallback?: { sourceAccount: string; candidates: readonly string[] },
+  fallback?: { sourceAccount: string; failedAccount?: string; candidates: readonly string[] },
 ): AccountFailoverAnswer | null {
   for (let i = prompt.length - 1; i >= 0; i--) {
     const msg = prompt[i]
@@ -928,6 +957,9 @@ export function consumeAccountFailoverAnswer(
       return classify(
         {
           sourceAccount: normalizeAccountName(fallback.sourceAccount || DEFAULT_ACCOUNT),
+          ...(fallback.failedAccount
+            ? { failedAccount: normalizeAccountName(fallback.failedAccount) }
+            : {}),
           candidates: fallback.candidates.map((c) => normalizeAccountName(c)),
         },
         orphan,
@@ -941,17 +973,32 @@ export function consumeAccountFailoverAnswer(
 // Transcript handling
 // ---------------------------------------------------------------------------
 
+/**
+ * The note the form's switch leaves at the top of the turn it moved. It says
+ * which of the two ways the conversation arrived, as the automatic switch's
+ * does: carried across and continued, or replayed into a fresh session
+ * (h #g218). Until (h #g257) it always said "replayed", which stopped being
+ * true when the carry shipped, and always said "out of usage", which a form
+ * opened on an expired login is not.
+ */
 export function formatFailoverNote(input: {
+  /** The account that failed. */
   sourceAccount: string
   target: string
   resetsAt?: number
+  /** `describeAccountBlock`, when the account was blocked rather than limited. */
+  reason?: string
+  carried: boolean
 }): string {
   const resets = describeReset(input.resetsAt)
-  return `\n${FAILOVER_MARKER} "${input.sourceAccount}" is out of usage, so this conversation continues on "${
-    input.target
-  }" ${
+  const arrival = input.carried
+    ? "The conversation continues where it stopped."
+    : "The conversation is replayed into a fresh Claude session there."
+  return `\n${FAILOVER_MARKER} "${input.sourceAccount}" ${
+    input.reason ?? "is out of usage"
+  }, so this conversation continues on "${input.target}" ${
     resets ? `until ${resets}` : "until opencode restarts"
-  }. Claude cannot resume a session across accounts, so the thread is being replayed into a fresh one.\n`
+  }. ${arrival}\n`
 }
 
 /**

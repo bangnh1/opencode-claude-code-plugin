@@ -31,10 +31,16 @@ import {
 } from "./account-failover.js"
 import {
   extractTurnStats,
+  footerCostUsd,
   formatTurnStatsBlock,
   turnStatsLogPayload,
 } from "./turn-stats.js"
-import { recordResultCost, takeBudgetNote, type TurnBudget } from "./budget-ledger.js"
+import {
+  recordResultCost,
+  takeBudgetNote,
+  takeResultCost,
+  type TurnBudget,
+} from "./budget-ledger.js"
 import { noteTurnOutput } from "./turn-history.js"
 import { formatAskUserQuestion, isAskUserQuestionTool } from "./ask-user-question.js"
 import { createExitPlanModeQuestionCall } from "./plan-mode-question.js"
@@ -1131,8 +1137,14 @@ export function createLineHandler(
         // for an abandoned turn was still billed. Every result counts, a
         // failed or refused one included, because the money is spent either
         // way. A headless total is the Claude session's running total, so the
-        // ledger takes the difference from the last one it saw (h #g245).
-        if (ctx.budget) recordResultCost(ctx.budget, msg.session_id, msg.total_cost_usd)
+        // ledger takes the difference from the last one it saw (h #g245), and
+        // the `turnStats` footer prints that same difference (h #g257). Taken
+        // once here: the baseline moves with every read.
+        const resultCost = ctx.budget
+          ? recordResultCost(ctx.budget, msg.session_id, msg.total_cost_usd)
+          : ctx.config.turnStats && typeof msg.total_cost_usd === "number"
+            ? takeResultCost(msg.session_id, msg.total_cost_usd, !ctx.interactive)
+            : undefined
 
         if (deliverPendingCompletions(state)) {
           // Finish the abandoned turn before submitting its late result.
@@ -1326,13 +1338,20 @@ export function createLineHandler(
           isError: msg.is_error,
           subtype: msg.subtype,
           ...turnStatsLogPayload(turnStats),
+          turnCostUsd: resultCost?.deltaUsd,
         })
 
         // Never on a compaction turn (the footer would be appended to
         // what opencode stores as the summary) and never on a failed
         // one (the error is the thing to read, not the bill).
         if (ctx.config.turnStats && !ctx.compactionMode && !msg.is_error && !failure) {
-          const footer = formatTurnStatsBlock(turnStats)
+          const footer = formatTurnStatsBlock({
+            ...turnStats,
+            costUsd: footerCostUsd(
+              resultCost,
+              state.activeProcess?.cliArgs?.includes("--resume") === true,
+            ),
+          })
           if (footer) {
             state.controller.enqueue({
               type: "text-delta",

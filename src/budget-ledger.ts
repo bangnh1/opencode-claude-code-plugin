@@ -129,8 +129,36 @@ export function costDelta(
   totalCostUsd: number,
   cumulative: boolean,
 ): number {
-  if (!Number.isFinite(totalCostUsd) || totalCostUsd <= 0) return 0
-  if (!cumulative || !claudeSessionId) return totalCostUsd
+  return takeResultCost(claudeSessionId, totalCostUsd, cumulative).deltaUsd
+}
+
+/** What one `result` frame cost on its own; see `takeResultCost`. */
+export interface ResultCost {
+  deltaUsd: number
+  /**
+   * True when `deltaUsd` is a cumulative total that nothing earlier in this
+   * process gave a baseline for. That is exactly right for a session that
+   * started in this process, and may include the session's earlier turns when
+   * it was resumed, because `--resume` restores the CLI's running total
+   * (measured, h #g245). Only a caller that knows whether the process resumed
+   * can tell the two apart; the ledger counts it in full either way.
+   */
+  noBaseline: boolean
+}
+
+/**
+ * `costDelta` with its baseline answer kept. Moves the session's baseline, so
+ * call it ONCE per `result` frame: the budget ledger and the `turnStats`
+ * footer share one call (h #g257).
+ */
+export function takeResultCost(
+  claudeSessionId: string | undefined,
+  totalCostUsd: number,
+  cumulative: boolean,
+): ResultCost {
+  if (!Number.isFinite(totalCostUsd) || totalCostUsd <= 0) return { deltaUsd: 0, noBaseline: false }
+  if (!cumulative) return { deltaUsd: totalCostUsd, noBaseline: false }
+  if (!claudeSessionId) return { deltaUsd: totalCostUsd, noBaseline: true }
   const previous = lastTotals.get(claudeSessionId)
   lastTotals.delete(claudeSessionId)
   lastTotals.set(claudeSessionId, totalCostUsd)
@@ -139,8 +167,11 @@ export function costDelta(
     if (oldest.done) break
     lastTotals.delete(oldest.value)
   }
-  if (previous === undefined || totalCostUsd < previous) return totalCostUsd
-  return totalCostUsd - previous
+  if (previous === undefined) return { deltaUsd: totalCostUsd, noBaseline: true }
+  // Lower than the last total: the session id now names a conversation whose
+  // running total started over, so this total is the new spend.
+  if (totalCostUsd < previous) return { deltaUsd: totalCostUsd, noBaseline: false }
+  return { deltaUsd: totalCostUsd - previous, noBaseline: false }
 }
 
 /** Add one result's spend to a session's own total. */
@@ -266,14 +297,20 @@ export interface TurnBudget {
   cumulative: boolean
 }
 
-/** Record one `result` frame's spend against its session. Never throws. */
+/**
+ * Record one `result` frame's spend against its session, and return it so the
+ * `turnStats` footer reads the same figure (`takeResultCost` moves the
+ * baseline). Never throws.
+ */
 export function recordResultCost(
   budget: TurnBudget,
   claudeSessionId: string | undefined,
   totalCostUsd: unknown,
-): void {
-  if (typeof totalCostUsd !== "number") return
-  recordSessionCost(budget.session, costDelta(claudeSessionId, totalCostUsd, budget.cumulative))
+): ResultCost | undefined {
+  if (typeof totalCostUsd !== "number") return undefined
+  const cost = takeResultCost(claudeSessionId, totalCostUsd, budget.cumulative)
+  recordSessionCost(budget.session, cost.deltaUsd)
+  return cost
 }
 
 /** The warn note a `result` frame should write now, or null. */
