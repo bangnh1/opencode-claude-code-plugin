@@ -70,6 +70,51 @@ export function parseTaskModelReference(value: unknown): TaskModelReference | nu
 }
 
 /**
+ * A bare model id completed to the reference this conversation's own provider
+ * serves it under, or the value exactly as given (h #g255).
+ *
+ * opencode 2 refuses a bare id outright (`Invalid model "claude-sonnet-5-5"`).
+ * Measured on 2.0.31, Haiku 4.5 passed a bare id first both times it was asked
+ * for a model, and then guessed a provider, `anthropic/claude-sonnet-5-5` among
+ * them, which opencode would accept wherever such a provider is configured and
+ * run outside this plugin. A bare id has one reading that cannot move the
+ * subagent anywhere, this conversation's own provider and account, which is the
+ * reading `forceModel` gives a model name. Only that reading is completed:
+ *
+ *   - a value with a `/` is already a reference, and is left alone;
+ *   - an id carrying ANOTHER account's `@` marker asked for that account, so it
+ *     is left for opencode to refuse rather than moved back to this one;
+ *   - an id the plugin does not register is left alone too, so opencode's own
+ *     "Use providerID/modelID" error still reaches a model that meant another
+ *     provider's model.
+ */
+export function completeTaskModelReference(
+  value: unknown,
+  own: {
+    /** The opencode provider this conversation runs on: `claude-code` or `claude-code-<account>`. */
+    providerID: string
+    /** That provider's model-id account marker, without the `@`; absent on the default account. */
+    accountMarker?: string
+    /** Whether the plugin registers this bare model id. */
+    isRegistered: (modelId: string) => boolean
+  },
+): unknown {
+  if (typeof value !== "string") return value
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.includes("/")) return value
+  const hash = trimmed.indexOf("#")
+  const id = hash === -1 ? trimmed : trimmed.slice(0, hash)
+  const variant = hash === -1 ? undefined : trimmed.slice(hash + 1)
+  if (variant !== undefined && (!variant || variant.includes("#"))) return value
+  const at = id.indexOf("@")
+  const base = at === -1 ? id : id.slice(0, at)
+  if (at !== -1 && id.slice(at + 1) !== own.accountMarker) return value
+  if (!own.isRegistered(base)) return value
+  const modelID = own.accountMarker ? `${base}@${own.accountMarker}` : base
+  return `${own.providerID}/${modelID}${variant ? `#${variant}` : ""}`
+}
+
+/**
  * Why a per-call model may not be used from this conversation, or null.
  *
  * Only the plugin's own account providers are checked, because those are what

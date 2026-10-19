@@ -17,6 +17,7 @@ import {
   applyTaskModelSupport,
   applyBackgroundSubagentSupport,
   liveTaskSupportsModel,
+  completeTaskModels,
   taskModelInputError,
   TASK_INPUT_PROPERTIES,
   buildProxyTimeoutError,
@@ -248,6 +249,64 @@ test("a host that takes a per-call model keeps it in both schemas, and the guard
   } finally {
     await srv.close()
   }
+})
+
+test("a per-call model is completed before the guard, and the queued call carries the completed value (h #g255)", async () => {
+  const tools = applyTaskModelSupport(applyBackgroundSubagentSupport(DEFAULT_PROXY_TOOLS, true, "v2"), true)
+  const asked: string[] = []
+  const srv = await createProxyMcpServer(tools, undefined, undefined, {
+    completeTaskModel: (model) => (model === "claude-sonnet-5-5" ? "claude-code-work/claude-sonnet-5-5@work" : model),
+    taskModelGuard: (model) => {
+      asked.push(model)
+      return null
+    },
+  })
+  const queued: Record<string, unknown>[] = []
+  srv.calls.on("call", (call: ProxyToolCall) => {
+    queued.push(call.input)
+    call.resolve({ kind: "text", text: "ran" })
+  })
+  const task = { description: "Check", prompt: "Check it", subagent_type: "general" }
+  try {
+    await authedPost(srv, {
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "task", arguments: { ...task, model: "claude-sonnet-5-5" } },
+    })
+    await authedPost(srv, {
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: {
+        name: "task_batch",
+        arguments: { tasks: [{ ...task, model: "claude-sonnet-5-5" }, { ...task, model: "anthropic/claude-sonnet-5-5" }, task] },
+      },
+    })
+    assert.equal(queued[0].model, "claude-code-work/claude-sonnet-5-5@work")
+    assert.deepEqual(
+      (queued[1].tasks as Record<string, unknown>[]).map((item) => item.model ?? null),
+      ["claude-code-work/claude-sonnet-5-5@work", "anthropic/claude-sonnet-5-5", null],
+      "each batch item is completed on its own, and a full reference is forwarded as written",
+    )
+    assert.deepEqual(asked, [
+      "claude-code-work/claude-sonnet-5-5@work",
+      "claude-code-work/claude-sonnet-5-5@work",
+      "anthropic/claude-sonnet-5-5",
+    ], "the guard judges the reference that is sent, not the bare id")
+  } finally {
+    await srv.close()
+  }
+})
+
+test("a host without a per-call model never completes one: it is refused as written", () => {
+  const stripped = applyTaskModelSupport(DEFAULT_PROXY_TOOLS, false)
+  const task = stripped.find((tool) => tool.name === "task")!
+  let completed = 0
+  const input = { description: "Check", prompt: "Check it", subagent_type: "general", model: "claude-sonnet-5-5" }
+  completeTaskModels(task, input, (model) => {
+    completed++
+    return model
+  })
+  assert.equal(completed, 0)
+  assert.equal(input.model, "claude-sonnet-5-5")
+  assert.match(String(taskModelInputError(task, input)), /takes no per-call `model`/)
 })
 
 // Regression for the 2026-07-04 "malformed result that failed schema

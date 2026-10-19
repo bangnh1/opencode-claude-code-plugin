@@ -382,3 +382,37 @@ test("with subagentDispatch ask, only the tasks that name no model are asked abo
     cleanup(mixedFake)
   }
 })
+
+test("a bare model id is completed to this conversation's own provider, and its child keeps it (h #g255)", { timeout: 30_000 }, async () => {
+  const fake = createFakeCli()
+  try {
+    const parent = await runParent(fake, {
+      name: "task",
+      arguments: { description: "parser", prompt: PARSER, subagent_type: "implementor", model: "claude-opus-5-5#high" },
+    })
+    const calls = parent.filter((part) => part.type === "tool-call").map((part) => JSON.parse(part.input))
+    assert.deepEqual(calls.map((input) => input.model), ["claude-code/claude-opus-5-5#high"], "opencode receives the completed reference")
+    assert.deepEqual(
+      await runChild(fake, { session: "ses_parser", model: "claude-opus-5-5", prompt: [user(wrapped(PARSER))], effort: "high" }),
+      { model: "claude-opus-5-5", effort: "high" },
+      "and the child it starts takes the request over the agent's forceModel and reasoningEffort",
+    )
+  } finally {
+    cleanup(fake)
+  }
+})
+
+test("on another account the completion carries that account's marker, and accountGroups lets it through", { timeout: 30_000 }, async () => {
+  const fake = createFakeCli()
+  try {
+    const parent = await runParent(
+      fake,
+      { name: "task", arguments: { description: "parser", prompt: PARSER, subagent_type: "implementor", model: "claude-opus-5-5" } },
+      { providerID: "claude-code-work", account: "work", failoverAccounts: ["default", "work"], accountGroups: { work: "job" } },
+    )
+    const calls = parent.filter((part) => part.type === "tool-call").map((part) => JSON.parse(part.input))
+    assert.deepEqual(calls.map((input) => input.model), ["claude-code-work/claude-opus-5-5@work"])
+  } finally {
+    cleanup(fake)
+  }
+})

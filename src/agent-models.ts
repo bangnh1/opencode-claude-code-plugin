@@ -208,8 +208,17 @@ export function qualifyModelName(
   referenceModelId: string,
 ): string | null {
   const base = withoutAccountMarker(wanted.trim())
-  if (!base || !Object.hasOwn(defaultModels, base)) return null
+  if (!isRegisteredModelName(base)) return null
   return `${base}${accountMarker(referenceModelId)}`
+}
+
+/**
+ * Whether the plugin registers this bare model id. The one registry check, so
+ * a name `forceModel` accepts and a name a per-call subagent `model` is
+ * completed from (h #g255) can never disagree.
+ */
+export function isRegisteredModelName(name: string): boolean {
+  return name.length > 0 && Object.hasOwn(defaultModels, name)
 }
 
 /**

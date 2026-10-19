@@ -105,7 +105,7 @@ Or once, for every subagent that declares nothing, as `defaultSubagentMaxTurns` 
 
 On opencode 2 you can pick a subagent's model in the message that asks for it. Claude passes the model along with the dispatch, as the `model` of opencode's own `subagent` tool, and opencode starts that subagent on it. There is nothing to configure. opencode 1's `task` tool has no such field, so there use an agent's [`forceModel`](#subagents-your-account-their-model) or the [dispatch form](#choosing-per-dispatch-not-per-file) instead. Contributed by [@taylormitchell](https://github.com/taylormitchell) (PR #123).
 
-**Name the model by its exact reference**, the same `provider/model` you would write as `model` in your opencode config:
+**Name the model by its id, or by its full reference.** A model id on its own, such as `claude-sonnet-5-5`, runs the subagent on this conversation's own account: the plugin completes it to the reference your provider serves before opencode sees it. To put a subagent on another account, or on another provider, give the full `provider/model` reference, the same you would write as `model` in your opencode config:
 
 | Your install | Reference |
 |---|---|
@@ -113,17 +113,19 @@ On opencode 2 you can pick a subagent's model in the message that asks for it. C
 | `accounts`, on the default account | `claude-code-default/claude-sonnet-5-5` |
 | `accounts`, on another account | `claude-code-work/claude-sonnet-5-5@work` |
 
-Add `#low`, `#medium`, `#high`, `#xhigh` or `#max` to pick a reasoning variant, as in `claude-code/claude-sonnet-5-5#high`. Every model has them except Haiku 4.5. Two messages that work:
+Add `#low`, `#medium`, `#high`, `#xhigh` or `#max` to pick a reasoning variant, as in `claude-sonnet-5-5#high`. Every model has them except Haiku 4.5. Two messages that work:
 
-> Run the reviewer subagent on `claude-code/claude-sonnet-5-5#high` and summarise what it finds.
+> Run the reviewer subagent on `claude-sonnet-5-5#high` and summarise what it finds.
 
-> Review this diff twice in parallel, once on `claude-code/claude-opus-5-5` and once on `claude-code/claude-sonnet-5-5`, and tell me where they disagree.
+> Review this diff twice in parallel, once on `claude-opus-5-5` and once on `claude-sonnet-5-5`, and tell me where they disagree.
 
 The second becomes one `task_batch` with a model on each task, so both reviews run at the same time.
 
-**Named in words, it depends on the model.** Measured on opencode 2.0.31, asking for a general subagent "on Sonnet 5.5" and "on claude-sonnet-5-5": Opus 5.5 passed `claude-code/claude-sonnet-5-5` on the first try both times. Haiku 4.5 guessed first: two tries for "Sonnet 5.5" and four for the bare id, passing `claude-sonnet-5-5`, `anthropic/claude-sonnet-5-5` and `claude-sonnet-5.5` before `claude-code/claude-sonnet-5-5`. opencode refused every wrong guess with its own error (*Invalid model "…"* or *Model "…" is not available*) and started no subagent for it, so nothing ran on the wrong model. Each guess is still a call spent, and the `anthropic/` one shows the real risk: opencode resolves a reference against every provider in your config, so had a provider called `anthropic` been configured there with that model, the subagent would have run on it, outside this plugin and billed to that provider. The exact reference rules both out.
+Only a model id this plugin registers is completed, and only one with no account marker or with this conversation's own. Anything else reaches opencode as written: a full reference, an id with another account's `@` marker (that names another account, so it is not moved back to this one), and an id the plugin does not know.
 
-**Checking it took.** The subagent's row in the [sidebar](../guides/subagents-sidebar.md) shows the model and effort it really spawned with, and its tool row shows the `model` Claude passed. No `model` on the tool row means Claude did not pass one, and opencode picked the model as usual. With [logging](logging.md) on, `explicit task model claimed by its child session` names the subagent's session and its model.
+**Named in words, it depends on the model.** Measured on opencode 2.0.31, asking for a general subagent "on Sonnet 5.5" and "on claude-sonnet-5-5": Opus 5.5 passed `claude-code/claude-sonnet-5-5` on the first try both times. Haiku 4.5 passed a bare `claude-sonnet-5-5` first both times, which opencode refuses on its own, and before the plugin completed bare ids it went on guessing: `anthropic/claude-sonnet-5-5`, then `claude-sonnet-5.5`, before `claude-code/claude-sonnet-5-5`. opencode refused every wrong guess with its own error (*Invalid model "…"* or *Model "…" is not available*) and started no subagent for it, so nothing ran on the wrong model. With the completion, both of Haiku's requests ran on the first call. The `anthropic/` guess is the one to avoid: opencode resolves a reference against every provider in your config, so had a provider called `anthropic` been configured there with that model, the subagent would have run on it, outside this plugin and billed to that provider. The completion removes the usual reason to guess; naming the model by id, or by its full reference, removes the guess.
+
+**Checking it took.** The subagent's row in the [sidebar](../guides/subagents-sidebar.md) shows the model and effort it really spawned with, and its tool row shows the `model` opencode received, completed if you named an id. No `model` on the tool row means Claude did not pass one, and opencode picked the model as usual. With [logging](logging.md) on, `bare task model completed to this conversation's own provider` shows a completion, and `explicit task model claimed by its child session` names the subagent's session and its model.
 
 A model named this way is the most specific decision about that subagent, so it wins:
 
