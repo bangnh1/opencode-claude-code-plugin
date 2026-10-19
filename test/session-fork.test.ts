@@ -223,6 +223,70 @@ test("conversationDigests ignores ids, which opencode re-keys on a fork", () => 
   )
 })
 
+/** opencode-dcp's reference as it appends one to a text part or a tool output. */
+const dcpTag = (ref: string, attributes = "") =>
+  `<dcp-message-id${attributes}>${ref}</dcp-message-id>`
+const toolResult = (value: string) =>
+  ({
+    role: "tool",
+    content: [{ type: "tool-result", toolCallId: "call_1", toolName: "bash", output: { type: "text", value } }],
+  }) as any
+
+test("conversationDigests ignores dcp's message references, which it renumbers on a restart (h #g258)", () => {
+  // The measured case: the same message as m0004 before a restart and m0003 after it.
+  assert.deepEqual(
+    conversationDigests([userText(`Third message.\n\n${dcpTag("m0004")}`)] as any),
+    conversationDigests([userText(`Third message.\n\n${dcpTag("m0003")}`)] as any),
+  )
+  // A tool output carries one too, inside the result's value.
+  assert.deepEqual(
+    conversationDigests([toolResult(`total 0\n${dcpTag("m0007")}`)] as any),
+    conversationDigests([toolResult(`total 0\n${dcpTag("m0005")}`)] as any),
+  )
+  // And the forms dcp also writes: a compressed block, a protected message, a
+  // priority attribute (its `message` compress mode), and the `compact` id
+  // format of its opencode 2 path.
+  const same = (a: string, b: string) =>
+    assert.deepEqual(
+      conversationDigests([userText(a)] as any),
+      conversationDigests([userText(b)] as any),
+      `${a} | ${b}`,
+    )
+  same(`Summary.\n\n${dcpTag("b3")}`, `Summary.\n\n${dcpTag("b1")}`)
+  same(`Keep this.\n\n${dcpTag("BLOCKED")}`, `Keep this.\n\n${dcpTag("m0002")}`)
+  same(`Old output.\n\n${dcpTag("m0009", ' priority="high"')}`, `Old output.\n\n${dcpTag("m0004", ' priority="low"')}`)
+  same("Third message.\n\n@4@", "Third message.\n\n@3@")
+  same("Old output.\n\n@9@ [high]", "Old output.\n\n@2@")
+  same("Keep this.\n\n@blocked@", "Keep this.\n\n@b2@")
+
+  // What is not a reference stays content.
+  assert.notDeepEqual(
+    conversationDigests([userText(`Third message.\n\n${dcpTag("m0004")}`)] as any),
+    conversationDigests([userText(`Edited message.\n\n${dcpTag("m0004")}`)] as any),
+  )
+  assert.notDeepEqual(
+    conversationDigests([userText("Mail me at team@")] as any),
+    conversationDigests([userText("Mail me at")] as any),
+  )
+  assert.notDeepEqual(
+    conversationDigests([userText("Line one\n@handle@ said so")] as any),
+    conversationDigests([userText("Line one")] as any),
+  )
+})
+
+test("version 1 hashes dcp's references as text, and a message without one hashes the same either way (h #g258)", () => {
+  const tagged = (ref: string) => [userText(`Third message.\n\n${dcpTag(ref)}`)] as any
+  assert.notDeepEqual(
+    conversationDigests(tagged("m0004"), { version: 1 }),
+    conversationDigests(tagged("m0003"), { version: 1 }),
+    "version 1 is what every record written before h #g258 was built with",
+  )
+  // So a record an install without dcp wrote before the upgrade is the same
+  // record after it.
+  const plain = [userText("Explain the cache."), assistantText("It stores the prefix."), toolResult("total 0")] as any
+  assert.deepEqual(conversationDigests(plain, { version: 1 }), conversationDigests(plain))
+})
+
 test("findForkParent matches a fork taken at the parent's end", () => {
   _resetForkFingerprints()
   recordForkFingerprint(keyFor("ses_parent"), PARENT_PROMPT, CLI_A)
