@@ -198,6 +198,12 @@ export interface DoctorReport {
   subagentDispatch: "ask" | "off"
   subagentDispatchCrossGroup: boolean
   turnStats: boolean
+  /**
+   * The `enableTodoTools` option, and whether opencode's environment already
+   * sets `CLAUDE_CODE_ENABLE_TODO_TOOLS` (which then decides). Never its
+   * value. Optional so a report built without it prints no row.
+   */
+  todoTools?: { option: boolean; envSet: boolean }
   anthropicApiKeyInEnv: boolean
   processes: ActiveProcessSnapshot[]
   pendingCalls: PendingProxyCallSnapshot[]
@@ -355,6 +361,15 @@ export function formatDoctorReport(report: DoctorReport): string {
     } |`,
   )
   lines.push(`| turnStats | ${report.turnStats} |`)
+  if (report.todoTools) {
+    lines.push(
+      `| enableTodoTools | ${report.todoTools.option}${
+        report.todoTools.envSet
+          ? " (CLAUDE_CODE_ENABLE_TODO_TOOLS is set in opencode's environment and decides)"
+          : ""
+      } |`,
+    )
+  }
   lines.push(`| ANTHROPIC_API_KEY in env | ${report.anthropicApiKeyInEnv ? "yes" : "no"} |`)
 
   // Only when a preset actually replaced something, the way "Last stderr"
@@ -927,6 +942,8 @@ export interface GatherDoctorOptions {
   cliPath: string
   interactive: boolean
   turnStats: boolean
+  /** The provider option; the row says whether the environment overrides it. */
+  enableTodoTools?: boolean
   fetchImpl?: typeof fetch
   /** Whatever followed `/claude-code-doctor`; `usage` asks for plan usage. */
   argument?: string
@@ -1008,6 +1025,10 @@ export async function gatherDoctorReport(
     subagentDispatch: base.subagentDispatch,
     subagentDispatchCrossGroup: base.subagentDispatchCrossGroup,
     turnStats: options.turnStats,
+    todoTools: {
+      option: options.enableTodoTools === true,
+      envSet: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS !== undefined,
+    },
     anthropicApiKeyInEnv: base.anthropicApiKeyInEnv,
     processes,
     pendingCalls: snapshotPendingProxyCalls(),

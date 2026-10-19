@@ -305,7 +305,19 @@ stub never reaches the CLI, so there is nothing there to fall back from.
 
 When Claude works through a multi-step task it emits `TaskCreate` / `TaskUpdate` calls. The plugin translates those into opencode's full-list `todowrite` so the todo panel populates. Inside a **subagent** that translation is blocked unless you say otherwise: opencode's task tool injects `todowrite: false` into the tools dict for any subagent without an explicit rule, so the plugin's synthetic emissions surface as `⚙ invalid todowrite` rows instead of todos. The built-in `general` subagent denies it by default.
 
-**Claude Code offers those tools only to some models.** Read out of Claude Code 2.1.293 and measured: Claude 3.x, Opus 4.0 to 4.7, Sonnet 4.0 to 4.6 and Haiku 4.5 get them; Opus 4.8, Opus 5 and 5.5, Sonnet 5 and 5.5, Fable and Haiku 5.5 get no todo tool at all, so no todos reach opencode, in a subagent or anywhere else. To turn them on for every model, start opencode with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in its environment; the plugin passes its environment to every `claude` it starts. Naming `TaskCreate` in Claude Code's own `--allowedTools` turns them on too.
+**Claude Code offers those tools only to some models.** Read out of Claude Code 2.1.293 and measured: Claude 3.x, Opus 4.0 to 4.7, Sonnet 4.0 to 4.6 and Haiku 4.5 get them; Opus 4.8, Opus 5 and 5.5, Sonnet 5 and 5.5, Fable and Haiku 5.5 get no todo tool at all, so no todos reach opencode, in a subagent or anywhere else. To turn them on for every model, set the provider option `enableTodoTools: true`, which starts every `claude` with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`:
+
+```jsonc
+{
+  "provider": {
+    "claude-code": {
+      "options": { "enableTodoTools": true }
+    }
+  }
+}
+```
+
+It is off by default because Claude Code turned the tools off for those models on purpose. Exporting `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` before starting opencode does the same, since every `claude` the plugin starts inherits opencode's environment, and a value set there (`0` included) wins over the option. `/claude-code-doctor` shows the option and says when the environment overrides it.
 
 Grant it per subagent definition in `opencode.json`:
 

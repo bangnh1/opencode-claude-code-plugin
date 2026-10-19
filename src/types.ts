@@ -114,6 +114,8 @@ export interface ClaudeCodeConfig {
   bridgeSkipNativeSkills?: boolean
   /** Append a one-line cost / duration / cache footer to each finished turn. */
   turnStats?: boolean
+  /** Turn Claude Code's todo tools on for every model (`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`). */
+  enableTodoTools?: boolean
   /** Branch a forked opencode session off the parent's Claude conversation. */
   forkSessions?: boolean
   /** Resume a conversation's Claude session after opencode restarts. Default true. */
@@ -651,6 +653,20 @@ export interface ClaudeCodeProviderSettings {
    * `permission_denials` always reach `providerMetadata`.
    */
   turnStats?: boolean
+
+  /**
+   * Start every `claude` with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, so the CLI
+   * offers its todo tools (`TaskCreate` and family) whatever the model.
+   * Claude Code offers them on its own only to Claude 3.x, Opus 4.0 to 4.7,
+   * Sonnet 4.0 to 4.6 and Haiku 4.5; on Opus 4.8, the 5.x models and Fable
+   * no todo list reaches opencode without this (h #g259).
+   *
+   * Off by default, because the CLI turned the tools off for those models on
+   * purpose. Fills a gap only: a `CLAUDE_CODE_ENABLE_TODO_TOOLS` already in
+   * opencode's environment, `0` included, is passed through and decides.
+   * Never on a compaction spawn, which runs no tools.
+   */
+  enableTodoTools?: boolean
 
   /**
    * When a new opencode session turns out to be a fork of one this provider

@@ -7796,3 +7796,59 @@ matched messages each); on v0.60.1 A resumed and B was refused as
 routes used: `POST /api/session` takes `model: {id, providerID}`,
 `POST /api/session/{id}/prompt {text}` returns once recorded, and
 `POST /api/experimental/session/{id}/wait` returns when the session is idle.
+
+## `enableTodoTools`: the plugin's switch for the model-gated todo tools (2026-10-20)
+
+h #g260. The follow-up (h #g259) left open. Asked whether the plugin should turn
+Claude Code's todo tools on for the models the CLI withholds them from, with
+three choices (leave it to the env var, an off-by-default option, on by
+default) and a recommendation for the option, the maintainer answered "2 do the
+recommended" and "update skill and docs as well".
+
+### What it does
+
+`enableTodoTools: true` puts `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` into the
+environment of every `claude` a turn starts: `todoToolsEnv` in
+`src/session-manager.ts`, merged by `claudeSpawnEnv`. The headless spawn passes
+it through `spawnClaudeProcess` (a new last parameter, recorded on
+`ActiveProcess.enableTodoTools` so `respawnActiveProcess` keeps it), the
+interactive spawn through `claudeSpawnEnv` inside `interactiveSpawnEnv`.
+Neither compaction spawn asks for it (the headless one passes
+`enableTodoTools && !compactionMode`, the interactive one never passed it), and
+nor does the doctor's `/cost` spawn.
+
+It fills a gap only, the rule `cliHygieneEnv` and the thinking-summary default
+already follow: a `CLAUDE_CODE_ENABLE_TODO_TOOLS` already in opencode's
+environment is the operator's and decides, `0` included. The CLI reads the
+variable as a boolean, so an operator who exported `0` gets no tools even with
+the option on, which is what they asked for.
+
+Not a session-key element, unlike effort or the cache TTL: it is provider
+config, fixed for the life of the opencode process, so no two spawns for one
+key can disagree about it.
+
+`/claude-code-doctor` gains an `enableTodoTools` row with the option's value,
+and `(CLAUDE_CODE_ENABLE_TODO_TOOLS is set in opencode's environment and
+decides)` when the variable is present. It never prints the value. The row is
+optional on `DoctorReport`, so a report built without it (every older fixture)
+prints none.
+
+### Tests
+
+`test/spawn-env.test.ts`: `todoToolsEnv` and `claudeSpawnEnv` with the option
+on, off and unset, and with the variable already set to `0`, `1` and the empty
+string; and a fake `claude` that answers with the variable's value, driven
+through a real `doStream`: `1` with the option on, unset with it off or absent,
+unset on a compaction turn with it on, and `0` when opencode's environment says
+`0`. That last test fails on the previous source (18 of 19 passed, the new one
+failed) and passes on this. `test/doctor.test.ts`: the row, the override note,
+and no row without the field.
+
+### Not re-run live
+
+The option only sets the variable, and the two halves are each measured: the
+fake-CLI test above shows the variable reaching a real spawn, and (h #g259)
+showed the variable giving Haiku 5.5 its todo tools through opencode 1.19.3,
+with opencode's todo list filling. The end-to-end run with the option itself
+was not repeated, to spend nothing on the default account, which was at 93% of
+its 7-day window.

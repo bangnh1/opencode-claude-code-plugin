@@ -1549,6 +1549,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
         cliPath,
         interactive: !!useInteractive,
         turnStats: this.config.turnStats === true,
+        enableTodoTools: this.config.enableTodoTools === true,
         ignoreAnthropicApiKey: this.config.ignoreAnthropicApiKey === true,
         // Where the plugin applies the account itself rather than through a
         // wrapper (`accountInProcess`, Windows), the `/cost` spawn needs the
@@ -3499,6 +3500,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
                     ignoreAnthropicApiKey: self.config.ignoreAnthropicApiKey,
                     effort: reasoningEffort,
                     promptCacheTtl,
+                    enableTodoTools: self.config.enableTodoTools === true,
                   }),
                 ),
               })
@@ -3636,6 +3638,8 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
               reasoningEffort,
               promptCacheTtl,
               spawnConfigDir,
+              // A compaction spawn runs no tools, so it never asks for them.
+              self.config.enableTodoTools === true && !compactionMode,
             )
             ap.mcpServers = spawnMcpServers
             state.proc = ap.proc

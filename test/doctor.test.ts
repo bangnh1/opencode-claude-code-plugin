@@ -102,6 +102,22 @@ const report: DoctorReport = {
   budgets: { warnAt: [], subagentDefaults: {}, sessions: [] },
 }
 
+test("the enableTodoTools row says when opencode's environment decides instead (h #g260)", () => {
+  // A report built without the field (an older fixture) prints no row at all.
+  assert.ok(!formatDoctorReport(report).includes("enableTodoTools"))
+  assert.ok(
+    formatDoctorReport({ ...report, todoTools: { option: true, envSet: false } }).includes(
+      "| enableTodoTools | true |",
+    ),
+  )
+  const overridden = formatDoctorReport({ ...report, todoTools: { option: false, envSet: true } })
+  assert.ok(
+    overridden.includes(
+      "| enableTodoTools | false (CLAUDE_CODE_ENABLE_TODO_TOOLS is set in opencode's environment and decides) |",
+    ),
+  )
+})
+
 test("the report names every field a bug report needs, and nothing secret", () => {
   const text = formatDoctorReport(report)
   assert.ok(text.startsWith(DOCTOR_MARKER), "must lead with the strippable marker")
