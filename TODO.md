@@ -121,12 +121,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-20: **done** (branch `todo-tools-option`, h #g260): the todo-tools decision, after "2 do the
+- 2026-10-20: **done** (v0.61.0, PR #131, h #g260): the todo-tools decision, after "2 do the
   recommended" and "update skill and docs as well". New provider option `enableTodoTools` (off by
   default) sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` on every turn spawn, both transports, never compaction,
   and never over a value already in opencode's environment. Doctor row, options table, the subagents
   page, symptoms, sidebar guide and skill updated.
-- 2026-10-20: **done** (branch `backlog-todo-dcp`, h #g259): the two backlog checks, after "2 do". The
+- 2026-10-20: **done** (v0.61.0, PR #130, h #g259): the two backlog checks, after "2 do". The
   todo tools are gated by MODEL in Claude Code (2.1.280 to 2.1.293; 2.1.300 is not on this machine): off for
   Opus 4.8 and every 5.x model, back with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`, measured off `init` and live
   through opencode 1.19.3; documented, code unchanged. dcp's `compact` form measured on opencode 2.0.31: an

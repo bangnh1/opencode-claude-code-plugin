@@ -7852,3 +7852,14 @@ showed the variable giving Haiku 5.5 its todo tools through opencode 1.19.3,
 with opencode's todo list filling. The end-to-end run with the option itself
 was not repeated, to spend nothing on the default account, which was at 93% of
 its 7-day window.
+
+Shipped as v0.61.0 on 2026-10-20 (PR #130 and PR #131 together), with a GitHub
+Release, after the maintainer's "do the recommended"; the publish was verified
+from the Publish step's tail and the version document's shasum. The release
+commit and the tag's message read `0.61.0`, not `v0.61.0`: `npm version minor`
+was run without `-m "v%s"`, so npm wrote its default bare `%s`. Earlier
+releases got their `v` from that flag (0.11.x to 0.14.x carry the bare form
+too). Rewriting it would mean force-pushing master and the tag after the
+publish had started, so it stays, and the release-flow rule in `AGENTS.md`
+now spells the flag out. The same turn dropped the `#til` announcement at the
+maintainer's request ("no til drop it"); nothing was sent.
