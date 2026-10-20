@@ -54,6 +54,9 @@
 
 ## Dropped
 
+- Dropped 2026-10-20 at the maintainer's request: the plugin announcement for Slack `#til` (channel
+  `C0BBP0PEDTM`), parked since 2026-10-16 with its draft in the maintainer's own DM. Maintainer: "no til
+  drop it". Nothing was sent, and the draft in the DM was left as it is.
 - Dropped 2026-10-07 at the maintainer's request: the GitHub fork-network detach (Support ticket
   #4818005). Maintainer: "forget the network detach also they are not going to do it i got mail".
   The repository stays a fork of unixfox/opencode-claude-code-plugin.
@@ -85,21 +88,6 @@ them ran in this directory.
 
 Questions the maintainer still owes an answer on. Written here the turn they are
 raised, so they survive context compaction; removed when answered, done or dropped.
-
-- 2026-10-16: post the plugin announcement to Slack `#til` (channel `C0BBP0PEDTM`). Draft v2 (skin
-  tone 3, bullet titles in backticks, "Sent from OpenCode using Fable 5.1" footer) is in the
-  maintainer's own DM (`D0BC16EQ664`, ts `1792076891.419639`). Maintainer: "first to me now then when
-  i say ok send it", then "we are not ok yet lets first fix the issues and address the PR open on this
-  repo". The "ok" of 2026-10-16 that released v0.55.0 was misread as this go too, the post went out
-  and the maintainer deleted it ("that was not a go for that but a go for the PRs and repo work the
-  post will be later"). It goes out only on an instruction that names the post. 2026-10-16, maintainer:
-  "defer 2 untill we are all done with all this": deferred until research pass 2's probe pass and the
-  three P1 items are built and released. 2026-10-17: all four P1 items are released in v0.56.0, so that
-  condition is met; the post still goes out only on an instruction that names it. 2026-10-17, after the
-  release, maintainer: "defer". Still parked until an instruction names it. 2026-10-19, maintainer:
-  "defer the til message". Still parked. 2026-10-20, maintainer, releasing v0.60.2: "do the recommended
-  dont send anything in til". Not sent; still parked. 2026-10-20, maintainer: "1 defer". Still parked. 2026-10-20, maintainer: "1 not
-  yet". Still parked.
 
 - 2026-10-08: subagent startup (~25 s). Maintainer: "do 1 but not fully just comment it out, 2 pin it, 3 lets
   try 1 and 2 and see if 3 is needed". Done: `slack` parked under `_parkedMcpServers` in both Claude accounts'
