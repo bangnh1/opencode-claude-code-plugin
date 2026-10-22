@@ -54,9 +54,6 @@
 
 ## Dropped
 
-- Dropped 2026-10-20 at the maintainer's request: the plugin announcement for Slack `#til` (channel
-  `C0BBP0PEDTM`), parked since 2026-10-16 with its draft in the maintainer's own DM. Maintainer: "no til
-  drop it". Nothing was sent, and the draft in the DM was left as it is.
 - Dropped 2026-10-07 at the maintainer's request: the GitHub fork-network detach (Support ticket
   #4818005). Maintainer: "forget the network detach also they are not going to do it i got mail".
   The repository stays a fork of unixfox/opencode-claude-code-plugin.
