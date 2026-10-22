@@ -8005,3 +8005,144 @@ verbatim, and reproducing it live needs two accounts in different groups, which
 would spend the second account's window to see a string the test already prints.
 The guard's fresh-start half is live on both majors (h #g226, h #g229) and
 nothing about it changed.
+
+## dcp's context-limit warning read as an operator edit (2026-10-23)
+
+h #g262. The maintainer reported "conversation rewound" firing far more often
+than they had undone or edited anything, "many more times historically across
+sessions on opencode 1". The retained log pair
+(`~/.local/share/opencode-claude-code/plugin.log` and `plugin.log.1`) holds 28
+`history-rewound` NOTICEs on 2026-10-22 alone, concentrated in two sessions of
+this repository: `ses_e9c3821c0ffezUhZvXho73Y8zD` 17 times between 13:28 and
+20:52 UTC, three of them on consecutive turns in the plan agent (13:28, 13:29,
+13:30), and `ses_e9a904de1ffeRMvYUeboOmze9L` 5 times between 21:27 and 21:42.
+Each one killed a healthy `claude` and replayed the thread as text, one of them
+at 167,673 characters.
+
+### The shape of the log said where to look
+
+`removedMessages` is ODD in all 28, and 22 of them carry
+`removedUserMessages: 1`, while `sharedMessages` climbs by two per turn within
+one session (14, 16, 18 in the plan triple; 48, 50 and 202, 204 later). A
+removed tail of one user message followed by alternating assistant and tool
+messages is what the recorded chain looks like when the FIRST mismatch is the
+newest user message of the turn before: `recordServedConversation` records the
+prompt at the `result`, so the chain ends at that message, and the next turn
+disagrees about it. Nothing about the operator's editing was needed to explain
+it.
+
+### Measured, not inferred
+
+The stored parts rule out an edit outright: the user text parts of
+`ses_e9c3821c0ffezUhZvXho73Y8zD` in `~/.local/share/opencode/opencode.db` are
+the operator's words with no injected block in them, so whatever differs is
+added per request.
+
+So the two copies were read off the Claude CLI transcripts this plugin writes,
+which hold what was really sent: a message goes out alone on its own turn, and
+on a later rewind turn the same message is rendered inside the
+`<conversation_history>` replay. The pair:
+
+- 21:25:00, as sent: `its Ivan N\n\nbtw Julian Mercer is intersting but lets
+  defer that and deal with Ivan N\nthe rest drop it\n\n<dcp-message-id>m0021</dcp-message-id>`,
+  141 characters.
+- 21:27, 21:39, 21:41 and 21:42, the same message inside the replay: 1,232
+  characters, the extra 1,091 being a `<dcp-system-reminder>` block (dcp's MAX
+  CONTEXT LIMIT warning) inserted ahead of the reference, which had also been
+  renumbered.
+
+Over 99 transcripts and 415 distinct user messages, 43 messages were seen more
+than once with their raw text differing, and what differed was:
+
+- **32 messages: `<dcp-system-reminder>` present in some copies, absent in
+  others.** The cause.
+- 15 messages: the `<dcp-message-id>` VALUE, and 1 the `@N@` compact form's
+  value. Both already ignored since (h #g258).
+- **0 messages: any opencode-authored `<system-reminder>`.**
+
+Reading the reminder's position across three replays of one thread shows the
+mechanism directly: 178 replay entries carried 17 of these blocks, 202 carried
+20, 204 carried 21. dcp keeps appending the warning to messages that are
+already in the history, one more each turn, so every message in turn gets one
+reference frame later than the frame the plugin recorded it in.
+
+### Why the two large-removal outliers are the same cause
+
+`sharedMessages: 4 / removedMessages: 173 / removedUserMessages: 15` at 20:30
+and `70 / 131 / 6` at 20:48 looked like a mid-thread prune. They are not:
+`removedUserMessages` counts every user message in the removed tail, not the
+number that changed, so ONE early mismatch reads as a large removal. dcp
+compression was checked and ruled out for both sessions: zero parts carrying a
+compressed block and zero `compress` tool calls in either, against 1,643
+`compress` calls elsewhere in the same database. The reminder sits as early as
+replay entry 15 in that thread, which is where the 13:28 verdict's
+`sharedMessages: 14` stopped.
+
+### What was changed, and what deliberately was not
+
+`DIGEST_VERSION` is 3, and `withoutDcpRefs` also removes
+`<dcp-system-reminder>` blocks. Removing a block leaves the blank line dcp put
+in front of it, and which blocks a message carries changes from turn to turn,
+so when anything was removed the result's blank-line runs are levelled and its
+ends trimmed: one copy would otherwise end in `\n\n` and the other in
+`\n\n\n\n`. That levelling is bounded and linear, unlike the leading `\s*` the
+patterns still avoid for (h #g258)'s reason, and it runs ONLY when a dcp block
+was actually removed, so a message that never met dcp hashes identically under
+versions 2 and 3 and an install without dcp keeps its resume records across the
+upgrade. The resume store already compares each record under `record.version ??
+1`, so version 2 and versionless records are untouched.
+
+**opencode's own `<system-reminder>` blocks are deliberately NOT stripped.**
+They are STORED with the message (1,982 parts in the operator's database carry
+one: the "user opened the file" and "user selected" notices), so they are
+content, they do not move, and no volatile group was attributable to them.
+Dropping them would blind the digest to a real edit, and a test pins that an
+opencode reminder changing still reads as a rewind.
+
+Three opencode reminders are NOT stored as text parts (`NO LONGER in Plan
+mode`, `changed the current working directory`, the plan-mode restriction), so
+they are per-request. They are not a cause either, and could not be fixed the
+same way if they were: opencode sends them as a whole synthetic user message
+rather than appended text, so what would change is a message's PRESENCE, not
+its text. Measured anyway: the plan-exit reminder appears as entry #4 inside a
+later turn's replay, so it persists in the thread rather than vanishing.
+
+### Where the note shows, and where it never fired
+
+Checked because the maintainer had seen the note on opencode 1 and not in the
+opencode 2 session the question was asked from. On opencode 1.19.3 (its real
+XDG dirs) the note part reached the database every time: 20
+`▌ **conversation rewound:**` assistant text parts in
+`ses_e9c3821c0ffezUhZvXho73Y8zD` and 5 in `ses_e9a904de1ffeRMvYUeboOmze9L`,
+one per verdict, plain visible text, and 276 notes across 28 sessions from
+2026-10-16 to 2026-10-22. On opencode 2 (the sandbox's database) the verdict
+never fired: the text matches 21 `session_message` rows, and every one is that
+conversation or its two lanes quoting the note, none a note the plugin wrote.
+So nothing hid the note on either major. Why the same dcp warning did not trip
+it on opencode 2 is not measured: dcp's opencode 2 path writes its references
+in the `compact` form (h #g259), and where it puts its reminder there was not
+checked.
+
+### Tests
+
+`test/conversation-gap.test.ts` gained four unit cases and one fake-CLI case
+driving real `doStream` turns. On unmodified master the three that matter fail
+exactly as the log reads: the warning on the newest message gives
+`{rewound, shared: 2, removed: 1, removedUser: 1}`, the warning landing early
+gives `{rewound, shared: 2, removed: 5, removedUser: 3}` (the outlier shape
+from one changed message), and the fake-CLI turn spawned a second `claude`
+(pid 81922 against 81921) and replayed. The two guard cases pass on master and
+must keep passing: a real edit under a warning is still a rewind, and an
+opencode reminder is still content. `test/session-fork.test.ts` pins the
+digest itself, including the assistant-side and leading-block arrangements, the
+opencode 2 `@N@` form, and version 2 still hashing the warning as text.
+
+### Left open
+
+A dcp compression of a mid-thread range would still read as a rewind: shared
+prefix above zero, user messages gone. It has not been observed doing so (see
+the ruling-out above), so no rule was built for it. If it is ever measured, the
+narrow signal to key on is the `b`-form reference dcp gives a compressed block
+(`<dcp-message-id>b3</dcp-message-id>`, `@b3@`), which this codebase already
+recognises from (h #g258) and (h #g259); a compression is not an operator edit
+and must not end the session.

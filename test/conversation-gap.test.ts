@@ -192,6 +192,97 @@ test("a shared prefix of zero is never a rewind, so a compaction is not one", ()
   assert.equal(classifyConversationChange("k", p([u("one again")])), null)
 })
 
+// opencode-dcp's context-limit warning, shortened. The real block is 1,091
+// characters; nothing here depends on its length, only on where it sits.
+const DCP_WARNING =
+  "<dcp-system-reminder>\nCRITICAL WARNING: MAX CONTEXT LIMIT REACHED\n\n" +
+  "You MUST use the `compress` tool now.\n</dcp-system-reminder>"
+
+test("a dcp context-limit warning appearing on a message it was sent without is not a rewind", () => {
+  _resetServedConversations()
+  // Turn N. The newest message goes out as the operator wrote it, with only
+  // dcp's message reference appended.
+  recordServedConversation(
+    "k",
+    p([u("one"), a("A1"), u("two\n\n<dcp-message-id>m0003</dcp-message-id>")]),
+  )
+
+  // Turn N+1. dcp has since tagged "two" with its warning, and renumbered.
+  // Not one word of the conversation changed.
+  assert.equal(
+    classifyConversationChange(
+      "k",
+      p([
+        u("one"),
+        a("A1"),
+        u(`two\n\n${DCP_WARNING}\n\n<dcp-message-id>m0004</dcp-message-id>`),
+        a("A2"),
+        u("three"),
+      ]),
+    ),
+    null,
+  )
+})
+
+test("a dcp warning landing early in the thread is not a rewind either", () => {
+  _resetServedConversations()
+  // The shape behind the large-removal outliers: dcp tags a message near the
+  // head, so the first mismatch is early and the whole tail reads as removed.
+  const served = p([
+    u("one"),
+    a("A1"),
+    u("two"),
+    a("A2"),
+    u("three"),
+    a("A3"),
+    u("four"),
+  ])
+  recordServedConversation("k", served)
+  assert.equal(
+    classifyConversationChange(
+      "k",
+      p([
+        u("one"),
+        a("A1"),
+        u(`two\n\n${DCP_WARNING}`),
+        a("A2"),
+        u("three"),
+        a("A3"),
+        u("four"),
+        a("A4"),
+        u("five"),
+      ]),
+    ),
+    null,
+  )
+})
+
+test("a dcp warning on an assistant message does not hide a real edit under it", () => {
+  _resetServedConversations()
+  // Stripping the warning must not make two different conversations match.
+  recordServedConversation("k", p([u("one"), a("A1"), u("two")]))
+  const change = classifyConversationChange(
+    "k",
+    p([u("one"), a("A1"), u(`TWO, edited\n\n${DCP_WARNING}`), a("A2"), u("three")]),
+  )
+  assert.equal(change?.kind, "rewound")
+})
+
+test("opencode's own system-reminder is part of the message and still catches an edit", () => {
+  _resetServedConversations()
+  // opencode stores these blocks with the message (measured: 1,982 stored
+  // parts carry one), so they are content, not a per-request injection, and
+  // the digest must keep reading them.
+  const reminder =
+    '<system-reminder>Note: The user selected line 248 from "src/a.ts". ```x```</system-reminder>'
+  recordServedConversation("k", p([u("one"), a("A1"), u(`two\n${reminder}`)]))
+  const change = classifyConversationChange(
+    "k",
+    p([u("one"), a("A1"), u("two\n<system-reminder>Note: something else</system-reminder>"), a("A2"), u("three")]),
+  )
+  assert.equal(change?.kind, "rewound", "an opencode reminder is never stripped")
+})
+
 test("a removed stretch with no user message in it is never a rewind", () => {
   _resetServedConversations()
   // The chain a tool-result turn records: the call, then its result.
@@ -559,6 +650,40 @@ test("a regenerated reply resets the session that already answered the message",
     assert.match(block, /User: one/)
     assert.match(block, /Assistant: A1/)
     assert.equal(countNotes(again.text), 1, again.text)
+  } finally {
+    await f.cleanup()
+  }
+})
+
+test("a dcp warning moving onto an earlier message keeps the process and writes no note", async () => {
+  _resetServedConversations()
+  const f = fixture()
+  try {
+    await f.turn("build", [u("first message\n\n<dcp-message-id>m0001</dcp-message-id>")])
+    await f.turn("build", [
+      u("first message\n\n<dcp-message-id>m0001</dcp-message-id>"),
+      a("A1"),
+      u("second message\n\n<dcp-message-id>m0003</dcp-message-id>"),
+    ])
+
+    // Third turn: dcp has tagged the second message with its context-limit
+    // warning and renumbered every reference. The operator changed nothing.
+    const third = await f.turn("build", [
+      u("first message\n\n<dcp-message-id>m0002</dcp-message-id>"),
+      a("A1"),
+      u(`second message\n\n${DCP_WARNING}\n\n<dcp-message-id>m0004</dcp-message-id>`),
+      a("A2"),
+      u(`third message\n\n${DCP_WARNING}\n\n<dcp-message-id>m0005</dcp-message-id>`),
+    ])
+
+    const sent = f.envelopes()
+    assert.equal(sent.length, 3)
+    const [one, two, three] = sent
+    assert.equal(two.pid, one.pid, "the first two turns share a process")
+    assert.equal(three.pid, one.pid, "the third turn kept the same claude process")
+    assert.equal(historyBlock(three.stdin), null, "nothing was replayed as text")
+    assert.equal(missedBlock(three.stdin), null)
+    assert.equal(countNotes(third.text), 0, third.text)
   } finally {
     await f.cleanup()
   }

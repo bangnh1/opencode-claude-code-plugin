@@ -72,6 +72,7 @@ export const MAX_FORK_FINGERPRINTS = 64
  *
  * 1. Every text and tool output hashed as it arrived.
  * 2. The same, with opencode-dcp's message references taken out first.
+ * 3. The same, with dcp's context-limit reminder taken out as well.
  *
  * Version 2 exists because dcp numbers messages in memory: it hands every
  * message it sends a provider a `<dcp-message-id>m0004</dcp-message-id>` tag
@@ -82,8 +83,26 @@ export const MAX_FORK_FINGERPRINTS = 64
  * `m0003` after it, with every word of it unchanged, so `resumeAfterRestart`
  * refused it as a changed conversation and replayed the thread as text. A
  * plain conversation and a compacted one kept their numbers and resumed.
+ *
+ * Version 3 is the same mistake one layer out, and it cost far more because it
+ * fired mid-session rather than once per restart (h #g262). dcp also appends a
+ * `<dcp-system-reminder>` block, its MAX CONTEXT LIMIT warning, to a message
+ * that is already in the history, and it keeps doing so as the thread grows.
+ * So a user message goes out on its own turn as the operator wrote it and
+ * comes back on the next turn 1,091 characters longer, which
+ * `classifyConversationChange` read as the thread having been edited:
+ * `rewound`, a healthy `claude` killed, the thread replayed as text. Measured
+ * over 99 Claude CLI transcripts this plugin wrote, 32 distinct user messages
+ * were seen both with the block and without it, against zero for any
+ * opencode-authored block; the matching `plugin.log` holds 28 such false
+ * verdicts in one day, 22 of them with `removedUserMessages: 1`.
+ *
+ * Only dcp's own blocks are removed. opencode's `<system-reminder>` blocks are
+ * STORED with the message (1,982 parts in the operator's own database carry
+ * one), so they are content rather than a per-request injection, and dropping
+ * them would blind the digest to a real edit.
  */
-export const DIGEST_VERSION = 2
+export const DIGEST_VERSION = 3
 
 /**
  * dcp's message reference in its XML form (opencode 1): a message, a
@@ -103,15 +122,42 @@ const DCP_MESSAGE_ID_TAG = /<dcp-message-id(?:\s[^>]*)?>[^<]*<\/dcp-message-id>/
  */
 const DCP_COMPACT_REF_LINE = /^@(?:\d+|b\d+|blocked)@(?: \[[^\]\n]*\])?$/
 
-function withoutDcpRefs(text: string): string {
-  let out = text.includes("<dcp-message-id") ? text.replace(DCP_MESSAGE_ID_TAG, "") : text
+/**
+ * dcp's MAX CONTEXT LIMIT warning, which it appends to a message already in
+ * the history and goes on appending to later ones as the thread grows. Removed
+ * from version 3 on, for the reason `DIGEST_VERSION` gives.
+ */
+const DCP_SYSTEM_REMINDER_BLOCK = /<dcp-system-reminder>[\s\S]*?<\/dcp-system-reminder>/g
+
+function withoutDcpRefs(text: string, version: number): string {
+  let out = text
+  let removed = false
+  if (version >= 3 && out.includes("<dcp-system-reminder")) {
+    out = out.replace(DCP_SYSTEM_REMINDER_BLOCK, "")
+    removed = true
+  }
+  if (out.includes("<dcp-message-id")) {
+    out = out.replace(DCP_MESSAGE_ID_TAG, "")
+    removed = true
+  }
   for (;;) {
     const trimmed = out.trimEnd()
-    if (!trimmed.endsWith("@") && !trimmed.endsWith("]")) return out
+    if (!trimmed.endsWith("@") && !trimmed.endsWith("]")) break
     const lineStart = trimmed.lastIndexOf("\n") + 1
-    if (!DCP_COMPACT_REF_LINE.test(trimmed.slice(lineStart))) return out
+    if (!DCP_COMPACT_REF_LINE.test(trimmed.slice(lineStart))) break
     out = trimmed.slice(0, lineStart)
+    removed = true
   }
+  if (version < 3 || !removed) return out
+  // Removing a block leaves the blank line dcp put in front of it, and which
+  // blocks a message carries changes from turn to turn, so the gap it leaves
+  // behind has to be levelled too: one copy of the same message would
+  // otherwise end in "\n\n" and the other in "\n\n\n\n". Bounded and linear,
+  // unlike the leading `\s*` the patterns deliberately avoid. A message
+  // carrying no dcp block at all is returned untouched, so a conversation that
+  // never met dcp hashes the same under versions 2 and 3 and keeps its resume
+  // record across the upgrade.
+  return out.replace(/\n{3,}/g, "\n\n").trim()
 }
 
 /**
@@ -124,8 +170,8 @@ function withoutDcpRefs(text: string): string {
  * is left out for the same class of reason: it is model-internal, it is not
  * what makes two conversations the same conversation, and a turn whose
  * reasoning differed also differs in the reply text that follows it. dcp's
- * message references are left out from version 2 on, for the reason
- * `DIGEST_VERSION` gives.
+ * message references are left out from version 2 on and its context-limit
+ * reminder from version 3 on, for the reason `DIGEST_VERSION` gives.
  */
 function hashPart(
   hash: ReturnType<typeof createHash>,
@@ -134,7 +180,7 @@ function hashPart(
 ): void {
   const p = part as Record<string, unknown> | null
   const type = typeof p?.type === "string" ? p.type : "unknown"
-  const content = (text: string) => (version >= 2 ? withoutDcpRefs(text) : text)
+  const content = (text: string) => (version >= 2 ? withoutDcpRefs(text, version) : text)
   switch (type) {
     case "text":
       hash.update("text\u0000")
@@ -152,7 +198,9 @@ function hashPart(
       hash.update("\u0000")
       // dcp appends its reference to a tool's output, which reaches the
       // provider inside the result's `{ type, value }`.
-      hash.update(stableJson(p?.output, version >= 2 ? withoutDcpRefs : undefined))
+      hash.update(
+        stableJson(p?.output, version >= 2 ? (text) => withoutDcpRefs(text, version) : undefined),
+      )
       break
     case "file":
     case "image": {
@@ -211,7 +259,7 @@ function messageDigest(msg: { role: string; content: unknown }, version: number)
   hash.update("\u0000")
   if (typeof msg.content === "string") {
     hash.update("text\u0000")
-    hash.update(version >= 2 ? withoutDcpRefs(msg.content) : msg.content)
+    hash.update(version >= 2 ? withoutDcpRefs(msg.content, version) : msg.content)
     hash.update("\u001e")
   } else if (Array.isArray(msg.content)) {
     for (const part of msg.content) hashPart(hash, part, version)

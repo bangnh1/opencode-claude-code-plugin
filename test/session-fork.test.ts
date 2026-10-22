@@ -287,6 +287,69 @@ test("version 1 hashes dcp's references as text, and a message without one hashe
   assert.deepEqual(conversationDigests(plain, { version: 1 }), conversationDigests(plain))
 })
 
+/** dcp's MAX CONTEXT LIMIT warning, shortened; the real block is 1,091 chars. */
+const dcpWarning =
+  "<dcp-system-reminder>\nCRITICAL WARNING: MAX CONTEXT LIMIT REACHED\n\n" +
+  "You MUST use the `compress` tool now.\n</dcp-system-reminder>"
+
+test("conversationDigests ignores dcp's context-limit warning, which it appends to a message later (h #g262)", () => {
+  // The measured pair: the same message, sent on its own turn and seen again
+  // on the next one after dcp tagged it and renumbered.
+  assert.deepEqual(
+    conversationDigests([userText(`Second message.\n\n${dcpTag("m0003")}`)] as any),
+    conversationDigests(
+      [userText(`Second message.\n\n${dcpWarning}\n\n${dcpTag("m0004")}`)] as any,
+    ),
+  )
+  // dcp's opencode 2 reference form, same shape.
+  assert.deepEqual(
+    conversationDigests([userText("Second message.\n\n@3@")] as any),
+    conversationDigests([userText(`Second message.\n\n${dcpWarning}\n\n@4@`)] as any),
+  )
+  // It appends to an assistant message too, and there it carries no reference
+  // of its own, so the gap it leaves has to be levelled on that side as well.
+  assert.deepEqual(
+    conversationDigests([assistantText("It stores the prefix.")] as any),
+    conversationDigests([assistantText(`It stores the prefix.\n\n${dcpWarning}`)] as any),
+  )
+  // And it can arrive in front of the text rather than behind it.
+  assert.deepEqual(
+    conversationDigests([assistantText("It stores the prefix.")] as any),
+    conversationDigests([assistantText(`${dcpWarning}\n\nIt stores the prefix.`)] as any),
+  )
+  // A tool output carries it the same way.
+  assert.deepEqual(
+    conversationDigests([toolResult(`total 0\n${dcpTag("m0007")}`)] as any),
+    conversationDigests([toolResult(`total 0\n${dcpWarning}\n${dcpTag("m0005")}`)] as any),
+  )
+
+  // What the warning sits next to is still content: it may never hide an edit.
+  assert.notDeepEqual(
+    conversationDigests([userText(`Second message.\n\n${dcpWarning}`)] as any),
+    conversationDigests([userText(`Edited message.\n\n${dcpWarning}`)] as any),
+  )
+  // opencode's own system-reminder is stored with the message, so it is
+  // content and stays in the digest.
+  assert.notDeepEqual(
+    conversationDigests([userText("Second message.\n<system-reminder>a</system-reminder>")] as any),
+    conversationDigests([userText("Second message.\n<system-reminder>b</system-reminder>")] as any),
+  )
+})
+
+test("version 2 hashes dcp's context-limit warning as text, so a version 2 record keeps its meaning (h #g262)", () => {
+  const warned = [userText(`Second message.\n\n${dcpWarning}\n\n${dcpTag("m0004")}`)] as any
+  const plainer = [userText(`Second message.\n\n${dcpTag("m0003")}`)] as any
+  assert.notDeepEqual(
+    conversationDigests(warned, { version: 2 }),
+    conversationDigests(plainer, { version: 2 }),
+    "version 2 is what every record written between h #g258 and h #g262 was built with",
+  )
+  // A message carrying no dcp block at all hashes the same under both, so an
+  // install without dcp keeps its resume records across the upgrade.
+  const plain = [userText("Explain the cache."), assistantText("It stores the prefix."), toolResult("total 0")] as any
+  assert.deepEqual(conversationDigests(plain, { version: 2 }), conversationDigests(plain))
+})
+
 test("findForkParent matches a fork taken at the parent's end", () => {
   _resetForkFingerprints()
   recordForkFingerprint(keyFor("ses_parent"), PARENT_PROMPT, CLI_A)
