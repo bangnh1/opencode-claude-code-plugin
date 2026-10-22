@@ -24,6 +24,7 @@ import {
   classifyConversationChange,
   formatConversationRewoundNote,
   recordServedConversation,
+  type MissedMessages,
 } from "./conversation-gap.js"
 import {
   getAgentRegistry,
@@ -2123,55 +2124,77 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       })
     }
 
-    // The `accountGroups` guard (h #g226). The operator moved this opencode
-    // conversation to an account in another group, by picking a model under
-    // its provider: nothing of the conversation may go there, so neither half
-    // of the two ways it could happens. The transcript carry is already out
-    // (the sibling lookup below refuses a cross-group account), and this is
-    // what takes the REPLAY out, which is the same history by another route
-    // and would defeat the guard on its own.
+    // The `accountGroups` guard's one lookup (h #g226, h #g261): the account
+    // outside this account's group that has answered this same opencode
+    // conversation, if there is one.
+    //
+    // Three decisions below read it, because there are three ways this
+    // conversation's content can travel and the guard has to hold on all of
+    // them: the fresh-start REPLAY, the catch-up that tells a session what it
+    // missed (h #g239), and the replay a rewound thread turns back on
+    // (h #g242). Checking the group on every catch-up rather than only on the
+    // fresh start is @bangnh1's idea, from `c614345` on their fork.
     //
     // Detection is deliberately broader than the carry's: any account outside
-    // this group that has answered this same opencode conversation counts,
-    // whether or not its content still lines up, because the replay is exactly
-    // what happens when the carry would have been refused.
+    // this group that has answered this conversation counts, whether or not
+    // its content still lines up, because the replay is exactly what happens
+    // when the carry would have been refused.
     //
-    // Gated on `includeHistoryContext`, so it fires once, on the turn that was
-    // about to send the thread. The next turn on this account has a session of
-    // its own and is an ordinary turn.
-    //
-    // The source keeps everything: no transfer, no `deleteClaudeSessionId`, and
-    // the carry never deletes a transcript, so switching back resumes it.
-    let accountGroupNote: string | null = null
-    if (
-      !compactionMode &&
-      groups &&
-      accountProviders.size > 0 &&
-      includeHistoryContext &&
-      failoverAnswer?.kind !== "switch"
-    ) {
-      const foreign = findForeignAccountSibling({
+    // Resolved once and lazily: with no `accountGroups` and on a
+    // single-account install (`accountProviders` empty) there is no lookup at
+    // all, so a default install is byte-identical. The answer is "which
+    // accounts have answered this conversation", which nothing in the rest of
+    // the prologue changes in a way that may flip the guard.
+    let crossGroupAccountRead = false
+    let crossGroupAccountValue: string | undefined
+    const crossGroupAccount = (): string | undefined => {
+      if (crossGroupAccountRead) return crossGroupAccountValue
+      crossGroupAccountRead = true
+      if (compactionMode || !groups || accountProviders.size === 0) return undefined
+      if (failoverAnswer?.kind === "switch") return undefined
+      crossGroupAccountValue = findForeignAccountSibling({
         sessionKey: sk,
         accountProviders,
         // The live process's own view, so the guard holds with
         // `resumeAfterRestart: false`, where the store is never written.
         extraKeys: listClaudeSessionKeys(),
+        only: (account) => !accountsShareGroup(sourceAccount, account, groups),
+      })?.account
+      return crossGroupAccountValue
+    }
+    const accountGroupNoteFor = (from: string): string =>
+      formatAccountGroupNote({
+        sourceAccount: from,
+        sourceGroup: accountGroup(from, groups),
+        targetAccount: sourceAccount,
+        targetGroup: accountGroup(sourceAccount, groups),
       })
-      if (foreign && !accountsShareGroup(sourceAccount, foreign.account, groups)) {
+    const logAnotherAccountGroup = (from: string): void => {
+      log.notice("starting fresh on this account: it is in another account group", {
+        sessionKey: sk,
+        reason: "another-account-group",
+        account: sourceAccount,
+        from,
+        group: accountGroup(sourceAccount, groups),
+      })
+    }
+
+    // The first of those three: the operator moved this opencode conversation
+    // to an account in another group, by picking a model under its provider,
+    // and this turn was about to send the whole thread as text. The transcript
+    // carry is already out (the sibling lookup below refuses a cross-group
+    // account), and this is what takes the REPLAY out, which is the same
+    // history by another route and would defeat the guard on its own.
+    //
+    // The source keeps everything: no transfer, no `deleteClaudeSessionId`, and
+    // the carry never deletes a transcript, so switching back resumes it.
+    let accountGroupNote: string | null = null
+    if (includeHistoryContext) {
+      const from = crossGroupAccount()
+      if (from) {
         includeHistoryContext = false
-        accountGroupNote = formatAccountGroupNote({
-          sourceAccount: foreign.account,
-          sourceGroup: accountGroup(foreign.account, groups),
-          targetAccount: sourceAccount,
-          targetGroup: accountGroup(sourceAccount, groups),
-        })
-        log.notice("starting fresh on this account: it is in another account group", {
-          sessionKey: sk,
-          reason: "another-account-group",
-          account: sourceAccount,
-          from: foreign.account,
-          group: accountGroup(sourceAccount, groups),
-        })
+        accountGroupNote = accountGroupNoteFor(from)
+        logAnotherAccountGroup(from)
       }
     }
 
@@ -2414,13 +2437,37 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       (!!getClaudeSessionId(sk) || !!getActiveProcess(sk))
         ? classifyConversationChange(sk, filterSideQuestionHistory(options.prompt))
         : null
-    const missed = conversationChange?.kind === "missed" ? conversationChange : null
-    if (missed) {
-      log.notice("replaying the messages this claude session missed: the conversation continued under another session key", {
-        sessionKey: sk,
-        messages: missed.messages.length,
-        userMessages: missed.userMessages,
-      })
+    // The second of the guard's three decisions (h #g261). This session kept
+    // its own Claude conversation across the switch, so this is an ORDINARY
+    // turn and the fresh-start guard above had nothing to gate on: what the
+    // catch-up would send is precisely the stretch that was answered on the
+    // other account. Fail closed and send none of it. The turn is otherwise
+    // untouched: the session continues, and the only thing withheld is a
+    // catch-up this account was never allowed to have.
+    let missed: MissedMessages | null = null
+    if (conversationChange?.kind === "missed") {
+      const from = crossGroupAccount()
+      if (from) {
+        log.notice(
+          "not replaying what this claude session missed: the conversation continued on an account in another group",
+          {
+            sessionKey: sk,
+            reason: "another-account-group",
+            account: sourceAccount,
+            from,
+            group: accountGroup(sourceAccount, groups),
+            messages: conversationChange.messages.length,
+            userMessages: conversationChange.userMessages,
+          },
+        )
+      } else {
+        missed = conversationChange
+        log.notice("replaying the messages this claude session missed: the conversation continued under another session key", {
+          sessionKey: sk,
+          messages: missed.messages.length,
+          userMessages: missed.userMessages,
+        })
+      }
     }
 
     // A rewound thread: what the session was answering is gone, and nothing
@@ -2436,18 +2483,36 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     if (conversationChange?.kind === "rewound") {
       await deleteActiveProcessAndWait(sk)
       deleteClaudeSessionId(sk)
-      includeHistoryContext = true
-      replayReason = "history-rewound"
-      log.notice("replaying the conversation as text: the thread was edited or undone", {
-        sessionKey: sk,
-        reason: "history-rewound",
-        sharedMessages: conversationChange.sharedMessages,
-        removedMessages: conversationChange.removedMessages,
-        removedUserMessages: conversationChange.removedUserMessages,
-      })
-      // Not on a `doGenerate` turn, for the reason the usage-limit note is
-      // not: its text is aggregated into a return value rather than shown.
-      if (mode !== "generate") rewoundNote = formatConversationRewoundNote()
+      // The third of the guard's three decisions (h #g261), and the reason it
+      // is read HERE rather than trusted from the block above: this branch is
+      // what turns the replay back on, below the point where that block ran.
+      // The session still has to go, because nothing can take the removed
+      // turns back out of its context, but the thread that replaces it was
+      // partly answered on an account in another group, so none of it may be
+      // replayed here. That leaves exactly the fresh-start branch's outcome: a
+      // new session holding only the current message, and the note that says
+      // so. The rewound note is deliberately NOT written as well: it describes
+      // a replay this turn did not do, and the account-group note is the one
+      // that explains the missing context.
+      const from = crossGroupAccount()
+      if (from) {
+        includeHistoryContext = false
+        accountGroupNote = accountGroupNote ?? accountGroupNoteFor(from)
+        logAnotherAccountGroup(from)
+      } else {
+        includeHistoryContext = true
+        replayReason = "history-rewound"
+        log.notice("replaying the conversation as text: the thread was edited or undone", {
+          sessionKey: sk,
+          reason: "history-rewound",
+          sharedMessages: conversationChange.sharedMessages,
+          removedMessages: conversationChange.removedMessages,
+          removedUserMessages: conversationChange.removedUserMessages,
+        })
+        // Not on a `doGenerate` turn, for the reason the usage-limit note is
+        // not: its text is aggregated into a return value rather than shown.
+        if (mode !== "generate") rewoundNote = formatConversationRewoundNote()
+      }
     }
 
     // What this key is being asked to continue, so a later fork of it can be

@@ -118,6 +118,15 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-22: **done** (h #g261): the fork sweep, and the one thing it found worth taking. 28 forks
+  fetched (one new, @taylormitchell); only @bangnh1, @broskees and @taylormitchell have pushed since
+  2026-10-08, and all three are resolved in the history entry. @bangnh1's `c614345` solved issue #114
+  independently and checked the `accountGroups` group on EVERY catch-up, where this plugin checked it
+  only on the fresh-start turn. That was a real leak, confirmed verbatim both ways by a fake CLI
+  driving real turns across two accounts: the `<missed_conversation>` catch-up and a `rewound`
+  thread's `<conversation_history>` replay each carried the other group's exchange back to the first
+  account. One lazy lookup now serves all three paths; the module itself is superseded by `323b20e`,
+  so nothing was cherry-picked and @bangnh1 is credited for the idea.
 - 2026-10-20: **done** (v0.61.0, PR #131, h #g260): the todo-tools decision, after "2 do the
   recommended" and "update skill and docs as well". New provider option `enableTodoTools` (off by
   default) sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` on every turn spawn, both transports, never compaction,

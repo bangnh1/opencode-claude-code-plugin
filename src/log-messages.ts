@@ -125,6 +125,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "no configured account could take this turn; it ends here",
   "no proxyTools entry was recognised; nothing will be proxied this turn",
   "no stdout after envelope write; respawning claude process to resume conversation",
+  "not replaying what this claude session missed: the conversation continued on an account in another group",
   "opencode 2 event subscription ended; deleted sessions keep their claude process until idle eviction, and stopped turns keep their proxy calls until the next message",
   "opencode's stored OAuth token for this MCP server has expired, so the bridged server carries no credential; re-authenticate it in opencode",
   "pending proxy call arrived after stream close; rejecting",

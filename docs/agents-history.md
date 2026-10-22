@@ -7863,3 +7863,145 @@ too). Rewriting it would mean force-pushing master and the tag after the
 publish had started, so it stays, and the release-flow rule in `AGENTS.md`
 now spells the flag out. The same turn dropped the `#til` announcement at the
 maintainer's request ("no til drop it"); nothing was sent.
+
+## Fork sweep, 2026-10-22: the `accountGroups` guard on every catch-up (2026-10-22)
+
+h #g261. The sweep due after (h #g223) and (h #g224). 28 forks fetched, one of
+them new: @taylormitchell, created 2026-10-18, added as the remote
+`fork-taylormitchell`. Three forks have pushed anything since 2026-10-08, and
+all three are resolved here.
+
+### The sweep
+
+- **@bangnh1 `c614345`** (`fix/agent-switch-missed-context`, 2026-10-10,
+  "Catch a resumed Claude session up on what another agent answered"). They
+  solved issue #114's problem independently, six days before master shipped
+  `323b20e`. Master's version is better on three counts and stays: a shape
+  chain that survives a model switch (h #g215's rule, so a model change does
+  not read as a different conversation), the `rewound` verdict (h #g242), and
+  the bounded newest-first replay budget (h #g238). **One thing their version
+  had that master's did not**, and it was not a style difference: they checked
+  the `accountGroups` group on EVERY catch-up (`findForeignAccountSibling` plus
+  `accountsShareGroup`, logging `reason: "another-account-group"`), where
+  master checked it only on the fresh-start turn. That was a real leak here, in
+  two places, measured below. Taken as the rule, implemented in master's
+  design; the module is superseded, so nothing was cherry-picked.
+- **@broskees**: nothing new. Every unique commit is from August or September
+  and was settled in an earlier sweep (`68ed142`, `b719497`, `dd494a8`,
+  `a44a2dc`, `b796c71` on `master`, and `ae48773` / `df9af44`, the `dist/`
+  commits, declined: this repository does not commit build output). One trap
+  for the next sweep: `feat/automatic-account-failover` carries a committer
+  date of 2026-10-14 and holds **no unique patch at all** (`git cherry` is
+  empty), so it is master's own `"auto"` work (h #g236) re-pointed, not fork
+  work. Read `git cherry`, not the branch date.
+- **@taylormitchell**: `feat/task-model-override` is already absorbed, as
+  PR #123 (h #g254), and `git cherry` confirms it holds nothing else.
+  `dist/task-model-override` carries two commits of its own, `2acbc94` ("Build
+  dist for git installation") and `97863ed` ("Drop build scripts so git
+  installs need no preparation"), both 2026-10-18: declined as fork-specific
+  and against the no-`dist` policy, the same verdict @broskees' two dist
+  commits got.
+
+### The leak, measured both ways
+
+Suspected from reading the two call sites, then confirmed verbatim by a fake
+CLI driving real `doStream` turns over two account providers in one opencode
+session (`test/account-groups.test.ts`, the existing switch harness): alpha
+answers, beta (in another group) answers, back to alpha.
+
+The fresh-start guard cannot see either path, and the reason is structural:
+after a cross-group switch the account the conversation STARTED on still has
+its own Claude session and its own live process, so `includeHistoryContext` is
+false on the way back and the whole guard block is skipped. What runs instead
+is the catch-up.
+
+- **`missed`**: alpha's envelope on the third turn, on master:
+
+  ```text
+  <missed_conversation>
+  ...
+  User: What is the codename?
+
+  Assistant: SPARROW-ONLY-ON-BETA
+
+  </missed_conversation>
+  ```
+
+  Beta's reply, in full, in alpha's envelope. The whole job of the catch-up is
+  to send the stretch the session missed, and under the guard every message in
+  that stretch was answered on the other group's account.
+
+- **`rewound`**: the same two accounts, with the operator undoing their second
+  alpha message, asking it on beta instead, and coming back. Alpha's session
+  still holds the undone turn, so the verdict is `rewound`, which sets
+  `includeHistoryContext = true` at a point BELOW where the guard block ran:
+
+  ```text
+  <conversation_history>
+  ...
+  User: Ask beta instead.
+
+  Assistant: SPARROW-ONLY-ON-BETA
+
+  </conversation_history>
+  ```
+
+  The bounded replay, carrying the same exchange, by the route the guard was
+  written to close.
+
+Both tests fail on master and pass on this change. The third test added with
+them is the control inside the same harness: both accounts in ONE group with
+`crossAccountResume: false`, so alpha keeps its own session and the catch-up
+runs exactly as it does on a single-account install, `SPARROW-ONLY-ON-BETA`
+included.
+
+### What changed
+
+One lazy lookup in the prologue, `crossGroupAccount()`, read by all three
+places this conversation's content can travel:
+
+1. the fresh-start replay (today's behaviour, byte for byte),
+2. the catch-up, which now fails closed: no messages inserted, one NOTICE, and
+   nothing else about the turn touched, because the session is healthy and the
+   only thing withheld is a catch-up this account was never allowed to have,
+3. the `rewound` branch, where the session still goes (nothing can take the
+   removed turns back out of its context) but nothing is replayed.
+
+The rewound branch writes the account-group note rather than the rewound one.
+Both facts are true, but the rewound note says the thread "is replayed as it
+stands now", which this turn did not do, and the account-group note is the one
+that explains the context the model is missing. Two notes for one turn would
+also be the first time any turn wrote two `▌` notes about the same decision.
+
+`findForeignAccountSibling` takes an `only` predicate now, applied inside the
+scan, and the guard passes "not in my group". That closes a second, narrower
+hole in the EXISTING guard: with three accounts, two of them in this group, the
+plain scan could answer with a same-group sibling while the cross-group one sat
+further down `extraKeys`, and the caller's `!accountsShareGroup` then read that
+answer as "no cross-group account". A unit test covers it both ways.
+
+The lookup is lazy and memoised, and it returns `undefined` before touching
+anything when `accountGroups` is unset or `accountProviders` is empty (a
+single-account install), so a default install does no lookup on any turn. The
+answer is "which accounts have answered this conversation", which nothing
+between the three call sites changes in a way that may flip the guard: the only
+thing that moves another key's session is the same-group carry, which runs only
+when the guard has already said yes.
+
+One new NOTICE, `not replaying what this claude session missed: the
+conversation continued on an account in another group`, with the same kebab
+`reason: "another-account-group"` token @bangnh1 used, and
+`npm run generate:log-messages` run for it. The cross-group `rewound` case
+reuses the existing `starting fresh on this account: it is in another account
+group` message, because that is exactly what it does. `userMessages` was added
+to `BUNDLE_DATA_ALLOWLIST` as a `count`: it is safe by type, and it was already
+being logged (and redacted) by the catch-up's own NOTICE.
+
+### Not measured live
+
+No live run: the leak and the fix are both on the plugin's own side of the CLI
+(which messages go into the envelope), the fake CLI reads the envelope
+verbatim, and reproducing it live needs two accounts in different groups, which
+would spend the second account's window to see a string the test already prints.
+The guard's fresh-start half is live on both majors (h #g226, h #g229) and
+nothing about it changed.
