@@ -61,9 +61,72 @@ interface FixturePaths {
   claudeConfig: string
 }
 
+/**
+ * The directory names `skillRoots` looks for at every level of its walk-up.
+ * Kept here rather than imported so a widening of the product's list shows up
+ * as a leak the guard below reports, instead of silently following along.
+ */
+const SKILL_ROOT_DIRS = [".opencode", ".claude", ".agents"]
+
+/** Every existing skill root at or above `from`, nearest first. */
+function ancestorSkillRoots(from: string): string[] {
+  const found: string[] = []
+  let current = path.resolve(from)
+  while (true) {
+    for (const name of SKILL_ROOT_DIRS) {
+      const dir = path.join(current, name, "skills")
+      try {
+        if (fs.statSync(dir).isDirectory()) found.push(dir)
+      } catch {
+        // absent, which is what we want
+      }
+    }
+    const parent = path.dirname(current)
+    if (parent === current) return found
+    current = parent
+  }
+}
+
+/**
+ * Where the scratch trees go, and it cannot be `os.tmpdir()` unconditionally.
+ *
+ * `skillRoots` walks from the workspace up to `/` collecting `.opencode`,
+ * `.claude` and `.agents` skill dirs, which is what opencode itself does, and
+ * its one guard against the machine's own global roots compares each ancestor
+ * against `os.homedir()`. `withFixture` repoints HOME at its scratch tree, so
+ * that guard now protects the scratch tree and no longer protects the real
+ * home: a scratch tree created UNDER the real home leaves `~/.claude/skills`
+ * and `~/.agents/skills` looking like ordinary project ancestors, reached by
+ * the walk-up rather than by the external-roots branch the kill switches
+ * govern. Measured on the maintainer's Mac, where opencode's sandbox sets
+ * `TMPDIR` to `~/opencode-v2-sandbox/drive/tmp`: 114 skills discovered instead
+ * of the fixture's own, 13 of them surviving into three specs' staged set and
+ * the other 101 dropped only because the native scan walked up to the same
+ * `~/.claude/skills`. CI never saw it, because its runner has no such skills.
+ *
+ * So the tree goes under the first candidate with no skill root above it. On
+ * a machine whose `TMPDIR` is ordinary (CI included) that is `os.tmpdir()` and
+ * nothing changes.
+ */
+let scratchRootCache: string | undefined
+function scratchRoot(): string {
+  if (scratchRootCache) return scratchRootCache
+  const candidates = [os.tmpdir(), ...(process.platform === "win32" ? [] : ["/tmp"])]
+  const dirty: string[] = []
+  for (const candidate of candidates) {
+    const leaks = ancestorSkillRoots(candidate)
+    if (leaks.length === 0) return (scratchRootCache = candidate)
+    dirty.push(`${candidate}: ${leaks.join(", ")}`)
+  }
+  throw new Error(
+    `no scratch root on this machine is free of skill roots, so these specs cannot be ` +
+      `isolated from the operator's own skills:\n  ${dirty.join("\n  ")}`,
+  )
+}
+
 /** Run `fn` with a scratch tree and env isolated from the real machine. */
 async function withFixture<T>(fn: (paths: FixturePaths) => T): Promise<Awaited<T>> {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "skill-bridge-test-"))
+  const base = fs.mkdtempSync(path.join(scratchRoot(), "skill-bridge-test-"))
   const cwd = path.join(base, "workspace")
   const xdg = path.join(base, "xdg")
   const claudeConfig = path.join(base, ".claude")
@@ -98,6 +161,12 @@ async function withFixture<T>(fn: (paths: FixturePaths) => T): Promise<Awaited<T
   delete process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS
   delete process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS
   try {
+    // Belt on top of the scratch root: whatever this machine's env holds, the
+    // only roots in play are the ones created above. Asserted rather than
+    // assumed, because a root that leaks in does not fail the specs that
+    // filter by the `zz-fixture-` prefix, it quietly changes what they prove.
+    const strays = skillRoots(cwd).filter((root) => !root.startsWith(base + path.sep))
+    assert.deepEqual(strays, [], `skill roots outside the fixture reached discovery:\n${strays.join("\n")}`)
     return await fn(paths)
   } finally {
     for (const [key, value] of Object.entries(saved)) {

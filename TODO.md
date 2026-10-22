@@ -139,6 +139,12 @@ raised, so they survive context compaction; removed when answered, done or dropp
   thread's `<conversation_history>` replay each carried the other group's exchange back to the first
   account. One lazy lookup now serves all three paths; the module itself is superseded by `323b20e`,
   so nothing was cherry-picked and @bangnh1 is credited for the idea.
+- 2026-10-22: **done** (h #g263): three `test/skill-bridge.test.ts` specs failed on the maintainer's Mac
+  (31 pass / 3 fail) and passed in CI. Not a product bug: `withFixture` repoints HOME at its scratch tree,
+  which moves `skillRoots`' home-dir guard off the real home, and opencode's sandbox sets `TMPDIR` inside
+  that home, so the walk-up read `~/.claude/skills` and `~/.agents/skills` as ordinary project ancestors.
+  The fixture now picks a scratch root with no skill root above it and asserts, per fixture, that every
+  root discovery sees is inside it. 34/34 on this Mac, `src/` unchanged.
 - 2026-10-20: **done** (v0.61.0, PR #131, h #g260): the todo-tools decision, after "2 do the
   recommended" and "update skill and docs as well". New provider option `enableTodoTools` (off by
   default) sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` on every turn spawn, both transports, never compaction,

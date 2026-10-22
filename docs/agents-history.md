@@ -8146,3 +8146,75 @@ narrow signal to key on is the `b`-form reference dcp gives a compressed block
 (`<dcp-message-id>b3</dcp-message-id>`, `@b3@`), which this codebase already
 recognises from (h #g258) and (h #g259); a compression is not an operator edit
 and must not end the session.
+
+## The skill-bridge fixture's own HOME defeats the walk-up's home guard (2026-10-22)
+
+h #g263. Three specs in `test/skill-bridge.test.ts` failed on the maintainer's
+Mac and passed in CI: 31 pass / 3 fail on unmodified `origin/master`, every
+failure an expected `['claude-code-plugin', 'zz-fixture-on']` coming back with
+thirteen of the operator's own skills in it (`autofix`, `worklog`, `defuddle`,
+...). No product bug was found; `src/` is unchanged.
+
+### Which roots leaked, and why
+
+Measured with a probe that built the fixture's exact env and printed
+`skillRoots(cwd)` plus everything discovery and the native scan returned.
+Two roots leaked, both of them the operator's own:
+
+- `/Users/khalil/.claude/skills`
+- `/Users/khalil/.agents/skills`
+
+Neither arrived through the external-roots branch the kill switches govern.
+Both arrived through the PROJECT WALK-UP, which is the part of `skillRoots`
+that mirrors opencode's own and runs all the way to `/`. Its one guard against
+the machine's global roots is `current !== homeDir`, with `homeDir` from
+`os.homedir()`, and `os.homedir()` follows `$HOME` on POSIX. `withFixture`
+repoints `HOME` at its scratch tree, so from that moment the guard protects the
+scratch tree and nothing protects the real home. On this Mac opencode's sandbox
+sets `TMPDIR` to `~/opencode-v2-sandbox/drive/tmp`, so `os.tmpdir()` and the
+whole scratch tree sit UNDER the real home, and `/Users/khalil` is an ordinary
+ancestor of the fixture's cwd. CI never saw it: its runner's `os.tmpdir()` is
+`/tmp` and it has no skills in either place.
+
+The count is worth recording, because the visible symptom understated it by an
+order of magnitude. Discovery returned 114 skills where the fixture had its
+own, and the native scan returned 101. Only 13 reached the assertion: the other
+101 came from `~/.claude/skills`, which `discoverNativeClaudeSkills` reached by
+the same walk-up and reported as `project` scope, so `dropNativelyLoadedSkills`
+skipped them as `same-copy`. In other words the native-drop specs in this file
+were quietly running against 101 real native skills, and passing only because
+they filter on the `zz-fixture-` prefix. That is the real hazard here: a leaked
+root does not fail a prefix-filtered spec, it changes what the spec proves.
+
+### Why this is the test's problem and not the product's
+
+In production the guard holds. A workspace under the user's own home reaches
+`/Users/khalil` with `current === homeDir`, so `.claude/skills` and
+`.agents/skills` there are skipped by the walk-up and pushed afterwards under
+`OPENCODE_DISABLE_EXTERNAL_SKILLS` / `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`,
+which is exactly what the spec "the home dir's own .claude and .agents arrive
+as global roots, not project ones" pins. An ancestor that is not the home dir
+and does hold `.claude/skills` is a root opencode itself reads for a project
+nested under it, so narrowing the walk would change behaviour the bridge exists
+to mirror. Nothing was changed in `src/`.
+
+### The fix
+
+`withFixture` no longer trusts `os.tmpdir()`. `scratchRoot()` takes the first
+candidate with no skill root above it (`os.tmpdir()` first, so a machine with
+an ordinary `TMPDIR`, CI included, is byte-identical to before, then `/tmp` off
+Windows), and throws naming every dirty candidate when none is clean, because a
+spec that cannot be isolated must fail loudly rather than quietly measure the
+operator's machine. `ancestorSkillRoots` walks the same three directory names
+`skillRoots` does, kept as a local list so a widening of the product's list
+surfaces as a leak instead of being followed silently. On top of that each
+fixture asserts that `skillRoots(cwd)` holds nothing outside its own base, so
+any future env the fixture forgets to clear fails by name.
+
+Verified both ways: 34/34 with the fix (`npx tsx --test
+test/skill-bridge.test.ts`, exit 0) against 31/3 before it, and with the `/tmp`
+candidate removed by hand the run fails 24 specs with `no scratch root on this
+machine is free of skill roots` rather than with a wrong skill list. Full
+suite 1877/1877, typecheck and build clean. `skill-bridge.test.ts` is already
+in `.github/windows-skipped-tests.txt`, so the `/tmp` candidate is POSIX-only
+by construction.
