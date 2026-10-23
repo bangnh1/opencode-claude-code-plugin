@@ -309,7 +309,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   chmodSync(cliPath, 0o755)
   const events = () =>
     existsSync(eventsPath)
-      ? readFileSync(eventsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      ? readFileSync(eventsPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
       : []
   return { cwd, cliPath, events }
 }
