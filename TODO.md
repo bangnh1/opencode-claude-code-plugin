@@ -130,7 +130,14 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
-- 2026-10-22: **done** (h #g261): the fork sweep, and the one thing it found worth taking. 28 forks
+- 2026-10-23: **done** (v0.61.1, PR #134, h #g262): "conversation rewound" fired 276 times in a week on
+  opencode 1 (28 sessions) and never on opencode 2. Cause: opencode-dcp's context-limit reminder, added to a
+  user message after it was first sent, changed that message's digest, so the turn read as an undo, ended a
+  healthy Claude session and replayed the thread. The digest leaves dcp's blocks out (version 3, older
+  records compared as before); real undos, edits and regenerations still trigger it. Released with PR #132,
+  #133 and #135 after "do all that is recommeded and deliver the good work"; CI on the merged #133 was red
+  from a lifecycle-test race, fixed in PR #135.
+- 2026-10-22: **done** (v0.61.1, PR #132, h #g261): the fork sweep, and the one thing it found worth taking. 28 forks
   fetched (one new, @taylormitchell); only @bangnh1, @broskees and @taylormitchell have pushed since
   2026-10-08, and all three are resolved in the history entry. @bangnh1's `c614345` solved issue #114
   independently and checked the `accountGroups` group on EVERY catch-up, where this plugin checked it
@@ -139,7 +146,7 @@ raised, so they survive context compaction; removed when answered, done or dropp
   thread's `<conversation_history>` replay each carried the other group's exchange back to the first
   account. One lazy lookup now serves all three paths; the module itself is superseded by `323b20e`,
   so nothing was cherry-picked and @bangnh1 is credited for the idea.
-- 2026-10-22: **done** (h #g263): three `test/skill-bridge.test.ts` specs failed on the maintainer's Mac
+- 2026-10-22: **done** (v0.61.1, PR #133, h #g263): three `test/skill-bridge.test.ts` specs failed on the maintainer's Mac
   (31 pass / 3 fail) and passed in CI. Not a product bug: `withFixture` repoints HOME at its scratch tree,
   which moves `skillRoots`' home-dir guard off the real home, and opencode's sandbox sets `TMPDIR` inside
   that home, so the walk-up read `~/.claude/skills` and `~/.agents/skills` as ordinary project ancestors.

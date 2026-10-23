@@ -8218,3 +8218,14 @@ machine is free of skill roots` rather than with a wrong skill list. Full
 suite 1877/1877, typecheck and build clean. `skill-bridge.test.ts` is already
 in `.github/windows-skipped-tests.txt`, so the `/tmp` candidate is POSIX-only
 by construction.
+
+Shipped as v0.61.1 on 2026-10-23, together with (h #g261) and (h #g262) and PR
+#135 (a test race), after the maintainer's "do all that is recommeded and
+deliver the good work": a patch, because neither runtime change adds an option.
+The publish was verified from the Publish step's tail and the version
+document's shasum, Linux, Windows and the post-publish Docs run passed on the
+release commit, and the GitHub Release was created after. #133 had been merged
+with its Linux job red: `gh pr checks --watch | tail` exited 0, the same trap
+(h #g117) names for `npm test | grep`. The failure was the
+`test/process-lifecycle.test.ts` race fixed in #135, and a rerun on the same
+commit passed.
