@@ -72,6 +72,18 @@
 Feature ideas live in the vault note `opencode-claude-code-plugin/Future Features.md`; this list is
 checks and suspected defects found in passing.
 
+- 2026-10-23: a dcp compression of a MID-THREAD range would still be read as a `rewound`
+  conversation, and nothing has measured it doing so. Found while fixing the false rewinds
+  of h #g262: the two large-removal verdicts in the log (`shared 4 / removed 173 /
+  removedUser 15` and `70 / 131 / 6`) looked like a prune and were not one, because
+  `removedUserMessages` counts the whole removed tail rather than what changed, and both
+  affected sessions held zero compressed-block parts and zero `compress` tool calls
+  (against 1,643 `compress` calls elsewhere in the same database). So no rule was built.
+  If it is ever measured: a dcp compression is not an operator edit and must not end the
+  Claude session, and the narrow signal to key on is the `b`-form reference dcp gives a
+  compressed block (`<dcp-message-id>b3</dcp-message-id>`, `@b3@`), which
+  `src/session-fork.ts` already recognises from h #g258 and h #g259.
+
 ## Deferred decisions
 
 Only decisions about this plugin belong here. Items about the global opencode config
