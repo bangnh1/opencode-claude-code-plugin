@@ -475,11 +475,18 @@ export function findSiblingResumePoint(opts: {
  * written to the store at all. The one gap left is that combination PLUS an
  * opencode restart in between, where nothing in this process has ever seen the
  * other account; that is documented rather than papered over.
+ *
+ * `only` is the caller's own test on the account, applied inside the scan, and
+ * the guard passes "not in my group" so that one foreign account cannot hide
+ * another: with three accounts, two of them in this group, a plain scan can
+ * answer with a same-group sibling while the one the guard exists to catch sits
+ * further down the list.
  */
 export function findForeignAccountSibling(opts: {
   sessionKey: string
   accountProviders: ReadonlyMap<string, string>
   extraKeys?: Iterable<string>
+  only?: (account: string) => boolean
 }): { siblingKey: string; account: string } | undefined {
   const providers = opts.accountProviders
   if (providers.size === 0) return undefined
@@ -493,6 +500,7 @@ export function findForeignAccountSibling(opts: {
     if (modelSiblingSignature(key, providers) !== signature) return undefined
     const account = sessionKeyAccount(key, providers)
     if (account === undefined || account === ownAccount) return undefined
+    if (opts.only && !opts.only(account)) return undefined
     return { siblingKey: key, account }
   }
 

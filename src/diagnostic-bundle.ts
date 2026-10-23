@@ -185,6 +185,7 @@ export const BUNDLE_DATA_ALLOWLIST: Readonly<Record<string, BundleValueKind>> = 
   historyLength: "count",
   matchedMessages: "count",
   messages: "count",
+  userMessages: "count",
   inputTokens: "count",
   lastTextLength: "count",
   lines: "count",

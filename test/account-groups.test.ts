@@ -58,6 +58,9 @@ const {
 } = await import("../src/session-resume-store.js")
 const { encodeCwd } = await import("../src/claude-session-bun.js")
 const { filterSideQuestionHistory } = await import("../src/message-builder.js")
+const { CONVERSATION_REWOUND_MARKER, _resetServedConversations } = await import(
+  "../src/conversation-gap.js"
+)
 const {
   deleteActiveProcessAndWait,
   deleteClaudeSessionId,
@@ -365,6 +368,29 @@ test("the group guard's detector ignores content, binaries and transcripts", () 
         extraKeys: [keyFor("alpha")],
       }),
       { siblingKey: keyFor("alpha"), account: "alpha" },
+    )
+    // `only` is applied inside the scan, so one foreign account cannot hide
+    // another: with a same-group sibling first in the list, the guard still
+    // finds the cross-group one it exists to catch.
+    const threeProviders = accountProviderMap([...ACCOUNTS, "gamma"])
+    assert.deepEqual(
+      findForeignAccountSibling({
+        sessionKey: keyFor("beta"),
+        accountProviders: threeProviders,
+        extraKeys: [keyFor("alpha"), keyFor("gamma")],
+        only: (account) => !accountsShareGroup("beta", account, { beta: "work", alpha: "work" }),
+      }),
+      { siblingKey: keyFor("gamma"), account: "gamma" },
+    )
+    // And a filter nothing passes answers nothing, rather than the first hit.
+    assert.equal(
+      findForeignAccountSibling({
+        sessionKey: keyFor("beta"),
+        accountProviders: threeProviders,
+        extraKeys: [keyFor("alpha"), keyFor("gamma")],
+        only: () => false,
+      }),
+      undefined,
     )
   } finally {
     _setResumeStorePath(null)
@@ -707,6 +733,142 @@ test("crossAccountResume: false replays a by-hand switch, as before", E2E, async
     // A replay is not a guard, so it says nothing about groups.
     assert.ok(!deltas(parts).includes(ACCOUNT_GROUP_MARKER))
     assert.equal(getClaudeSessionId(fake.key("alpha", MODEL)), "claude-on-alpha", "untouched")
+  } finally {
+    await fake.cleanup()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The guard on the catch-up, not only on the fresh start
+// ---------------------------------------------------------------------------
+
+/**
+ * The second way this conversation's content can reach an account in another
+ * group, and the one the fresh-start guard above cannot see.
+ *
+ * After a switch across groups the account the conversation started on still
+ * has its own Claude session, so the next turn back on it is an ORDINARY turn:
+ * no replay, no carry, nothing for the fresh-start guard to gate on. What runs
+ * instead is the catch-up (h #g239), whose whole job is to send the stretch of
+ * conversation this session missed, and every message in it was answered on
+ * the other account. The rewind (h #g242) is the same leak by the other
+ * verdict: it turns the replay back ON, below the point the guard ran.
+ *
+ * The idea of checking the group on every catch-up rather than only on the
+ * fresh start is @bangnh1's, from `c614345` on their fork.
+ *
+ * The control for both is `test/conversation-gap.test.ts`, which drives the
+ * catch-up and the rewind over a single account: the guard may only withhold
+ * them where another group answered, and must leave a default install alone.
+ */
+const BETA_SECRET = "SPARROW-ONLY-ON-BETA"
+
+test("accountGroups keeps a cross-group exchange out of the catch-up", E2E, async () => {
+  _resetServedConversations()
+  const fake = await createSwitchFixture({ beta: "work" })
+  try {
+    await fake.warm()
+    await fake.turn("alpha", MODEL, [...BEFORE])
+    fake.writeTranscript("alpha", "claude-on-alpha")
+
+    // Beta is in another group, so it starts fresh and answers on its own.
+    await fake.turn("beta", MODEL, [...AFTER])
+
+    // Back on alpha, which still has the session it started with: an ordinary
+    // turn, so the fresh-start guard has nothing to gate on and the catch-up
+    // is what would hand alpha's session the exchange that ran on beta.
+    const BACK = [...AFTER, assistantText(BETA_SECRET), userText("Anything else?")] as any
+    await fake.turn("alpha", MODEL, BACK)
+
+    const sent = fake.lastInput()
+    assert.ok(
+      !sent.includes(BETA_SECRET),
+      `beta's reply must not reach alpha: ${sent.slice(0, 600)}`,
+    )
+    assert.ok(
+      !sent.includes("missed_conversation"),
+      `and no catch-up block at all: ${sent.slice(0, 600)}`,
+    )
+    assert.ok(!sent.includes("What is the codename?"), sent.slice(0, 600))
+    // The turn itself is unharmed: alpha answers this message on the session
+    // it keeps.
+    assert.ok(sent.includes("Anything else?"), sent.slice(0, 600))
+    assert.equal(getClaudeSessionId(fake.key("alpha", MODEL)), "claude-on-alpha")
+  } finally {
+    await fake.cleanup()
+  }
+})
+
+test("accountGroups keeps a cross-group exchange out of a rewound replay", E2E, async () => {
+  _resetServedConversations()
+  const fake = await createSwitchFixture({ beta: "work" })
+  try {
+    await fake.warm()
+    await fake.turn("alpha", MODEL, [...BEFORE])
+    fake.writeTranscript("alpha", "claude-on-alpha")
+    // A second turn on alpha, so its session holds a message the operator is
+    // about to take back.
+    const SECOND = [...BEFORE, assistantText("OK"), userText("Second question on alpha.")] as any
+    await fake.turn("alpha", MODEL, SECOND)
+
+    // The operator undoes that message, asks it on beta instead (another
+    // group, so beta starts fresh), and comes back to alpha. Alpha's session
+    // still holds the undone turn, which is what makes this a rewind: the
+    // session has to go. The thread that replaces it ran on beta, so none of
+    // it may be replayed here either.
+    const ON_BETA = [...BEFORE, assistantText("OK"), userText("Ask beta instead.")] as any
+    await fake.turn("beta", MODEL, ON_BETA)
+    const BACK = [...ON_BETA, assistantText(BETA_SECRET), userText("Fourth question.")] as any
+    const parts = await fake.turn("alpha", MODEL, BACK)
+
+    const sent = fake.lastInput()
+    assert.ok(
+      !sent.includes(BETA_SECRET),
+      `beta's reply must not reach alpha: ${sent.slice(0, 800)}`,
+    )
+    assert.ok(!sent.includes("Ask beta instead."), sent.slice(0, 800))
+    assert.ok(
+      !sent.includes("conversation_history"),
+      `and the thread is not replayed either: ${sent.slice(0, 800)}`,
+    )
+    assert.ok(sent.includes("Fourth question."), sent.slice(0, 800))
+
+    // The rewound session still goes: nothing can take those turns back out of
+    // its context. What this turn starts is a fresh one with this message.
+    const args: string[] = fake.spawns().at(-1)!.args
+    assert.ok(!args.includes("--resume"), `a fresh session: ${JSON.stringify(args)}`)
+
+    // One note, and it is the one that explains the missing context.
+    const text = deltas(parts)
+    assert.ok(text.includes(ACCOUNT_GROUP_MARKER), text.slice(0, 500))
+    assert.ok(!text.includes(CONVERSATION_REWOUND_MARKER), text.slice(0, 500))
+  } finally {
+    await fake.cleanup()
+  }
+})
+
+test("a same-group account's exchange is still caught up on", E2E, async () => {
+  // The control inside this harness: the same shape with both accounts in one
+  // group, and the carry refused so alpha keeps its own session. The guard is
+  // configured, the accounts share a group, and the catch-up runs exactly as
+  // it does on a single-account install.
+  _resetServedConversations()
+  const fake = await createSwitchFixture(
+    { alpha: "work", beta: "work" },
+    { crossAccountResume: false },
+  )
+  try {
+    await fake.warm()
+    await fake.turn("alpha", MODEL, [...BEFORE])
+    fake.writeTranscript("alpha", "claude-on-alpha")
+    await fake.turn("beta", MODEL, [...AFTER])
+
+    const BACK = [...AFTER, assistantText(BETA_SECRET), userText("Anything else?")] as any
+    await fake.turn("alpha", MODEL, BACK)
+
+    const sent = fake.lastInput()
+    assert.ok(sent.includes("missed_conversation"), sent.slice(0, 600))
+    assert.ok(sent.includes(BETA_SECRET), `the catch-up still happens: ${sent.slice(0, 600)}`)
   } finally {
     await fake.cleanup()
   }
