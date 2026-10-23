@@ -23,7 +23,7 @@ For a local checkout, point opencode 2 at the **`dist` directory**, not the repo
 }
 ```
 
-Last checked on opencode **2.0.31** (2026-10-18). First verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill.
+Last checked on opencode **2.1.3** (2026-10-23): a chat turn, a proxied `shell` call, one of Claude's own tools, a session opened in a subdirectory of a project, and a second prompt reusing the same `claude` process. First verified live on opencode **2.0.11** with Claude Code 2.1.280: chat turns, proxied tools running through opencode 2's own `shell`, `edit`, `write`, `webfetch` and `subagent` tools and their permission rules, Claude's own tools rendered in the transcript, subagent dispatch with the agent list, reasoning variants, compaction, account providers, `/claude-code-doctor`, `/btw`, and the bundled configuration skill.
 
 opencode 2 gives a plugin no way to ask whether a session is busy and no toast of its own, so the plugin reads opencode 2's event stream for the first and uses the channel opencode 2 gives a plugin between its two halves for the second. With those, these work as they do on 1.x (measured on 2.0.22 and 2.0.31):
 

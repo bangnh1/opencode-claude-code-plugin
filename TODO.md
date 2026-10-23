@@ -130,6 +130,18 @@ raised, so they survive context compaction; removed when answered, done or dropp
 
 ## Done
 
+- 2026-10-23: **done** (docs only, h #g264): compatibility check of the plugin against **opencode 2.1.3**,
+  which the maintainer's opencode 2 now runs. `@opencode/plugin` publishes no 2.1.3 (the 2.1 line stops at
+  2.1.2), so the declarations were diffed 2.0.31 -> 2.1.2 by `curl`'d tarball and every verdict re-checked
+  against the 2.1.3 binary with `rg -a`. Additive for everything a plugin is handed: the `SessionDomain`
+  `Pick` gained `list` (and `session.active` is still absent), `SessionCompactionResult.providerState`
+  became `native` (which the plugin never reads), the whole `dist/tui` tree is byte-identical, and the
+  `session.*` event set only gained `session.archived` / `session.unarchived`. `src/` needed no change.
+  Live on 2.1.3: a text turn, a proxied `shell` plus a CLI-native `read`, process reuse, and a
+  subdirectory cwd measured both over HTTP and in a live serve turn. The one thing that moved a standing
+  verdict is `list`, which reopens the premise of h #g221's declined `session_list` but not its verdict;
+  nothing was built. Not measured: the interactive transport, the forms, the MCP bridge with a real
+  server, background subagents, `/btw` and the doctor.
 - 2026-10-23: **done** (v0.61.1, PR #134, h #g262): "conversation rewound" fired 276 times in a week on
   opencode 1 (28 sessions) and never on opencode 2. Cause: opencode-dcp's context-limit reminder, added to a
   user message after it was first sent, changed that message's digest, so the turn read as an undo, ended a
