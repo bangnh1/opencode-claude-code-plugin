@@ -8229,3 +8229,170 @@ with its Linux job red: `gh pr checks --watch | tail` exited 0, the same trap
 (h #g117) names for `npm test | grep`. The failure was the
 `test/process-lifecycle.test.ts` race fixed in #135, and a rerun on the same
 commit passed.
+
+## Compatibility sweep: opencode 2.1.3 (2026-10-23)
+
+h #g264. The maintainer's opencode 2 moved to `bin/opencode-2.1.3` (downloaded
+2026-10-22), and the plugin's last measurement was 2.0.31 (h #g240). Nothing in
+`src/` needed to change: the sweep is docs-only.
+
+### 2.1.3 is not a published package, so the diff is 2.0.31 against 2.1.2
+
+`@opencode/plugin` publishes no `2.1.3`. The registry document lists `2.1.0`,
+`2.1.1` and `2.1.2` as the whole 2.1 line, `latest` is `2.1.2` (published
+2026-10-21), and the same holds for `@opencode/client`, `@opencode/core`,
+`@opencode/schema`, `@opencode/ai` and `@opencode/theme`; `opencode` is not a
+package name at all and `opencode-ai` stops at 1.19.3. So the declarations were
+diffed 2.0.31 -> **2.1.2**, every tarball fetched with `curl` straight from
+`registry.npmjs.org` (never `npm`, whose replies this Mac's Aikido
+minimum-package-age filter strips), and then **every verdict that mattered was
+re-checked against the 2.1.3 binary itself** with `rg -a`. Read the binary, not
+only the newest package, whenever a sweep's target version is unpublished.
+
+### `@opencode/plugin` 2.0.31 -> 2.1.2: three declaration changes, none of them a loss
+
+The whole `.d.ts` diff across the package is three files.
+
+1. **`SessionDomain`'s `Pick` gained `list`.** It is now `list | create | get |
+   remove | switchAgent | switchModel | prompt | generate | command | compact |
+   synthetic | interrupt | update | move | wait | context`, in both the `effect`
+   and `promise` flavours, and `dist/promise/adapter.js` wires
+   `list: adaptApiMethod(SessionEndpoints["session.list"], host.session.list)`
+   ahead of `create`. **`session.active` is still absent**, so (h #g176) holds
+   unchanged. Confirmed on the 2.1.3 binary: its own plugin adapter emits
+   `list:t(b["session.list"],e.session.list),create:...` and the sixteen members
+   read back exactly as above, while `session.active` appears only as an HTTP
+   endpoint key, never in the `Pick`.
+2. **`SessionCompactionResult.providerState` became `native`** (`providerState?:
+   SessionMessage.ProviderState` -> `native?: SessionMessage.Native`, with a doc
+   comment saying `native.messages` is a provider replacement window that
+   replays instead of `summary`). `@opencode/schema`'s `session-message.js`
+   matches: `providerContext`, `providerResultState`, `providerState` and
+   `recent` are gone and `native` is new. The plugin reads none of those four
+   and never produces a compaction result for opencode (its `/compact` turn
+   returns prose), so this reaches nothing here.
+3. `localSource`'s return type lost its `import("url")` qualifier, which is
+   emit cosmetics.
+
+Beyond the declarations, the peer range for `@opentui/core` and `@opentui/solid`
+rose from `>=0.5.17` to `>=0.6.6`. That is the runtime the TUI half's bare
+external imports resolve against, and it changes nothing to do here, because
+those three specifiers are deliberately never dependencies (h #g234): both
+majors resolve them to their own bundled copy.
+
+### Nothing else a plugin is handed moved
+
+- **TUI context: byte-identical.** The entire `dist/tui` tree of
+  `@opencode/plugin` is unchanged 2.0.31 -> 2.1.2, so `data.listen`,
+  `data.session.list`, `ui.toast.show` and the `sidebar.content` /
+  `sidebar.footer` slots are exactly what (h #g234) measured.
+- **`ctx.rpc`, `aisdk` (`sdk` / `language`), `session.hook("model.request")`,
+  `command.transform`, `event.subscribe`, `provider.transform` and
+  `skill.transform`: all in files that did not change**, since only
+  `session.d.ts` and `source.d.ts` differ in the whole package.
+- **The event names are additive.** Over `@opencode/schema`'s `session-event.js`
+  plus `event-manifest.js` the `session.*` name set goes from 51 to 53: only
+  `session.archived` and `session.unarchived` are new, nothing was removed, and
+  `session.deleted` plus all four `session.execution.*` names (with the
+  `user | shutdown | superseded | inactivity` reasons) are present, so
+  `followSessionEvents` reads what it always did. Both new names are in the
+  2.1.3 binary too. `session.status` and `session.idle` are still declared in
+  `@opencode/client` and still absent from the schema's emitted set, exactly as
+  (h #g253) recorded, so the parser reading them anyway stays harmless.
+- **`Model.Info`, `Provider.Info`, the prompt input and the `Form` shape are
+  unchanged where it counts.** Their `.d.ts` all differ, but each one's `.js`
+  is byte-identical, so the change is declaration-emit field ordering, not the
+  schema. Diff the sibling `.js` before reading an inferred-type diff by eye:
+  of the 22 differing `@opencode/schema` declarations, 13 are types-only. The
+  real changes are `config/experimental`, `credential` (plus a new
+  `credential-legacy`), `event-manifest`, `model-compatibility` (additive
+  `streamUsage`, `supportsThinkingBlockBinding`, `supportsEffortUpdates`, which
+  is why `provider.d.ts` looked changed while `provider.js` did not),
+  `session-error`, `session-event`, `session-message` and `session`.
+- **MCP config is byte-identical** (`config/mcp.d.ts` and `config/mcp.js`), so
+  `mcp.servers` with `disabled` holds (h #g178), and `providers.<id>.settings`
+  is types-only.
+- **`Session.Info` still carries `location` and `subpath`.** `@opencode/schema`'s
+  `session.js` gained `anchor`, `description`, `directory`, `order`, `project`
+  and `search`, but those belong to the new `session.list` filter, not to
+  `Session.Info`, whose `location: Location.Ref` and optional `subpath` sit
+  where they did; `location.js` is byte-identical. So (h #g237) holds.
+- `@opencode/client`'s declarations changed heavily (its content-hashed chunks
+  were renamed `contract-*` to `service-probe-*` wholesale), and it cannot reach
+  this package: the runtime dependencies are `@ai-sdk/provider` and
+  `jsonc-parser` and nothing else (h #g186), every `@opencode/` string in `src/`
+  is a comment, and the response shapes the V2 shim consumes come from
+  `@opencode/schema`, checked above.
+
+So `src/opencode-v2-types.ts` needed no edit. The one thing worth noting is that
+its `V2Event` comment and the `SessionDomain` it mirrors are now a strict subset
+of what the host offers.
+
+### What this changes about a standing verdict
+
+(h #g221) declined `session_list` and `session_search`, and named the thing that
+would reopen the first: "the thing that would change that is a V2 session list".
+It has arrived. `SessionDomain` holds `list` on 2.1.2 and on the 2.1.3 binary,
+so a session-list tool would no longer be V1-only and no longer change a model's
+tool set across a major. The rest of that entry is untouched and still argues
+against building it: `session_search` has no route on either major, and the
+exposure (reading OTHER sessions) is the same. Recorded here rather than acted
+on; the plugin uses `list` nowhere.
+
+### Live on 2.1.3
+
+Under a scratch `XDG_CONFIG_HOME` of its own (opencode merges plugin arrays with
+the operator's global config, h #g97) plus the other three XDG dirs and
+`TMPDIR`, with the plugin loaded from a worktree `dist` at 0.61.1, `claude`
+2.1.293, model `claude-code/claude-haiku-5-5`, and no `accounts` so the provider
+id is `claude-code`. `claude-code plugin ready` appeared exactly once per
+process, every block reading `"opencode":"2.1.3"`, and no process was left
+behind. The one WARN in the whole log is the maintainer's own unauthenticated
+Stripe MCP server in Claude Code, which is not opencode's.
+
+- **A text turn** (`opencode run --standalone`) answered `PROBE1`.
+- **A proxied `shell` and a CLI-native `read` in one turn** answered `SHELLOK`
+  and the planted codeword. The proxied half is the full path: `ignoring proxy
+  tool_use block; broker handles it {"name":"mcp__opencode_proxy__bash"}`, then
+  `queued pending proxy call`, `draining pending proxy calls into stream
+  finish`, and `resolved pending proxy call from tool result prompt`. The native
+  half is `tool started {"name":"Read","mappedName":"read"}` followed by `tool
+  call complete {... "executed":true}`.
+- **A subdirectory cwd** (h #g237) was measured twice, because `opencode run`
+  cannot discriminate it: there `process.cwd()` is already the session's
+  directory, so a doubled path out of `toV1Session` would be masked by
+  `resolveSpawnCwdFrom`'s fallback. First directly, over a private
+  password-protected `serve`: creating a session with
+  `location: {directory: "<root>/sub/deeper"}` answers `location.directory =
+  "<root>/sub/deeper"` and `subpath = "sub/deeper"`, which is exactly the shape
+  (h #g237) read off 2.0.22 and 2.0.28, so reading `location.directory` alone
+  and ignoring `subpath` is still right and resolving the two together would
+  still give `<root>/sub/deeper/sub/deeper`. Then live, in that same session on
+  a server whose own cwd is the project ROOT: both `doStream starting` and
+  `spawning new claude process` logged `"cwd":".../work/sub/deeper"`, the
+  session-directory tier therefore answered rather than falling back, there was
+  no `failed to fetch opencode session directory` WARN and no `ENOENT` anywhere,
+  and the turn read the subdirectory's file.
+- **Process reuse**, a second prompt in that same session: `hasActiveProcess:
+  true`, `reusing active process`, and zero further `spawning new claude
+  process` lines.
+- `claude-code plugin set up for opencode 2` appeared once per location
+  (`.../work` and `.../work/sub/deeper`), as (h #g253) measured, and the notice
+  channel was not refused, so `ctx.rpc.register` is accepted on 2.1.3.
+
+Two probe notes for next time. `serve` takes no `--standalone` (it prints help
+and exits, and `--service` is the background one to avoid), and it prints a
+password that every request needs. `POST /api/session/{id}/model` wants the
+model NESTED, `{"model":{"providerID":...,"id":...}}`; the flat body (h #g219)
+used answers 400 on 2.1.3.
+
+### Not measured
+
+The interactive PTY transport was not exercised, so `INTERACTIVE_MEASURED_CLI`
+is untouched and this says nothing about it on 2.1.3. Neither were the forms
+(account switch, plan approval, dispatch), the MCP bridge with a real server,
+background subagents, `/btw`, the doctor or its bundle: the API diff shows the
+surfaces all of those ride on to be unchanged, and each costs usage window the
+maintainer is sharing with other lanes. The gates themselves did resolve
+(`task model gate` and `background subagent gate` both `supported: true,
+hostApi: "v2"`), and the V2 title stub fired without spawning a second `claude`.
