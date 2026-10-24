@@ -86,6 +86,14 @@ checks and suspected defects found in passing.
   Claude session, and the narrow signal to key on is the `b`-form reference dcp gives a
   compressed block (`<dcp-message-id>b3</dcp-message-id>`, `@b3@`), which
   `src/session-fork.ts` already recognises from h #g258 and h #g259.
+- 2026-10-25: the `MCP server "<name>" is needs-auth` WARN fires once per server, so one
+  `system`/`init` on the appical account (33 claude.ai connectors, 27 never connected, all
+  org-provided, plus `plugin:stripe:stripe`) raises 4 toasts per opencode process: 3 arbitrary
+  names and a "24 more warnings" summary. Measured: needs-auth connectors load no tools and cost
+  no tokens. Candidate fix: collapse one init's needs-auth servers into one line listing every
+  name, and report claude.ai connectors never in `claudeAiMcpEverConnected` at INFO and in the
+  doctor only, because nobody chose them. Maintainer said "do all the recommended"; parked here
+  as a plugin change rather than built unasked.
 
 ## Deferred decisions
 
@@ -122,8 +130,13 @@ raised, so they survive context compaction; removed when answered, done or dropp
 Verification still owed, copied from the vault's `Future Features.md` "Next up" on 2026-10-24
 (maintainer: "do the most recommended for all in 1 go"), because they are checks, not features.
 
-- Around 2026-10-25: review the progress estimate after a week of real turns (the doctor's
-  `Progress estimate` section, h #g251). First candidate fix: a calibration per agent and model.
+- Around 2026-11-08: review the progress estimate again, once the busy keys have 30+ samples.
+  The 2026-10-25 review (one week, read-only) found a forward test of 44 to 45% in band against
+  a 50% target, estimates about 13% long on the median, a typical miss of x2.2, worst on
+  build/fable-5-1 (x4.4) and build/plan on opus-5-5 (38% in band). A per-key calibration,
+  simulated, fixed the bias but made the typical miss worse (x2.27 to x2.52), so the estimator
+  stays as is. Note for next time: the doctor's in-band figure reads about 7 points above the
+  forward test, because its calibration is scored on the residuals it was fitted to.
 - Live checks owed by v0.55.0: `accountFailover: "auto"` (PR #115) and PR #115's v0.60.2 fixes against
   two real logins hitting real limits (needs the second login under Parked), and the #114 agent-switch
   gap replay on opencode 2.
