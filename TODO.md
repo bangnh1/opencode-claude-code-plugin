@@ -54,6 +54,9 @@
 
 ## Dropped
 
+- Dropped 2026-10-22 at the maintainer's request ("recommended"): the ContextDex "Verified" README
+  badge (Julian Mercer, Gmail 19 Oct 2026). A paid-placement pitch ($49 pin, $199/week sponsor)
+  whose "MCP audit" does not fit this plugin. No reply, no badge.
 - Dropped 2026-10-07 at the maintainer's request: the GitHub fork-network detach (Support ticket
   #4818005). Maintainer: "forget the network detach also they are not going to do it i got mail".
   The repository stays a fork of unixfox/opencode-claude-code-plugin.
@@ -114,6 +117,21 @@ raised, so they survive context compaction; removed when answered, done or dropp
   35 s to get ready. So the stall scales with the parent session's size. Whether opencode or dcp's
   message transform burns it (needs a large session with dcp disabled): maintainer, 2026-10-09: "later".
 
+## Owed checks
+
+Verification still owed, copied from the vault's `Future Features.md` "Next up" on 2026-10-24
+(maintainer: "do the most recommended for all in 1 go"), because they are checks, not features.
+
+- Around 2026-10-25: review the progress estimate after a week of real turns (the doctor's
+  `Progress estimate` section, h #g251). First candidate fix: a calibration per agent and model.
+- Live checks owed by v0.55.0: `accountFailover: "auto"` (PR #115) and PR #115's v0.60.2 fixes against
+  two real logins hitting real limits (needs the second login under Parked), and the #114 agent-switch
+  gap replay on opencode 2.
+- With the next compatibility sweep: the interactive transport's full live list on Claude Code 2.1.300
+  (`INTERACTIVE_MEASURED_CLI` is still 2.1.293), and on opencode 2.1.3 the forms, the MCP bridge with a
+  real server, background subagents, `/btw` and the doctor (h #g264's "not measured").
+- Next fork sweep: early November.
+
 ## Parked
 
 - 2026-10-08: switching the daily driver to opencode 2. Maintainer: "ill stay with 1 for now will
@@ -122,6 +140,10 @@ raised, so they survive context compaction; removed when answered, done or dropp
   changes and the rollback is in `~/opencode-v2-sandbox/migration-dryrun/REPORT.md` (plugin path ends
   in `/dist`, drop `compaction.prune`, notify becomes cli.json `attention` from `cli.notify.json`,
   herdr-agent-state.js has no V2 version).
+  2026-10-24: two days of real work on opencode 2.1.3 in a scratch copy of the config
+  (`~/opencode-v2-sandbox/drive/run.sh`, session ses_e9ab4363dffeLkqp9VslrAFBZe) found no plugin
+  defect; verdict: fit to be the daily driver. Left before switching: the OpenAI, Copilot and figma
+  logins, furno-postgres's HTTP 405 on V2, and the V1-only plugins with no V2 version.
 - 2026-10-08: optional, needs the maintainer: a second non-work Claude login, only to live-test a
   switch between two real logins and an expired-login switch. Every failure path falls back to the
   replay, so normal use answers it too. MCP elicitation as a form is parked in Future Features.
