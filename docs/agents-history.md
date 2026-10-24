@@ -8396,3 +8396,34 @@ surfaces all of those ride on to be unchanged, and each costs usage window the
 maintainer is sharing with other lanes. The gates themselves did resolve
 (`task model gate` and `background subagent gate` both `supported: true,
 hostApi: "v2"`), and the V2 title stub fired without spawning a second `claude`.
+
+h #g265. Two days of the maintainer's real work on opencode 2.1.3 (session
+ses_e9ab4363dffeLkqp9VslrAFBZe, 22 to 24 October, in a scratch copy of the
+config at `~/opencode-v2-sandbox/drive/`) found no plugin defect, and its log
+answered whether 2.1.3 is fit to be the daily driver: yes. What the log did
+show is noise. Three WARNs fired on every spawn, because the skill bridge and
+the MCP routing are rebuilt per spawn while what they report does not change
+between spawns: `two different skills share a name` 310 times and `claude
+already registers a different skill under this name` 309 times (one herdr
+skill, two differing copies, 105 times within ONE process), and V2 Code Mode's
+`proxyOpencodeMcpTools cannot route` 307 times. Inside a TUI a WARN is a toast
+(h #g193), and opencode 2.1.3 re-sets a plugin up roughly hourly, so each
+re-setup toasted again.
+
+PR #137 makes all three once per process. The skill clashes are keyed on the
+name and both paths, so a clash that changes on disk is a new fact and warns
+again; the skip itself still happens on every spawn, only the line is
+deduplicated. The Code Mode warning is a single flag, because the config it
+describes is fixed for a process's life. No message text changed, so
+`src/log-messages.ts` needed no regeneration. `test/skill-bridge.test.ts`
+drives three spawns for one warning and a changed path for a second; suite
+1888/1888, CI green on Linux and Windows.
+
+Shipped as v0.61.2 on 2026-10-24 after the maintainer's "do the most
+recommended for all in 1 go": a patch, because nothing user-facing beyond the
+log changed. Publish verified from the Publish step's tail against the version
+document's shasum (`0acb04f6`), both CI jobs green on the tagged commit's
+parent first, GitHub Release created after. The maintainer's own clash went
+away the same turn: `~/.config/opencode/skills/herdr/SKILL.md` was an older
+copy of `~/.claude/skills/herdr/SKILL.md` (a strict subset), and syncing it
+makes the bridge drop it as identical, silently.

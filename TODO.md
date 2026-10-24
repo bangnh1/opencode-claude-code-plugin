@@ -152,6 +152,10 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-24: **done** (v0.61.2, PR #137, h #g265): the skill-clash and V2 Code Mode WARNs fire once
+  per process instead of on every spawn (614 and 307 lines, hourly toasts, over two days on opencode 2.1.3).
+  The two-day trial's verdict: opencode 2.1.3 is fit to be the daily driver. The maintainer's herdr skill
+  copies were synced the same turn, so the clash itself is gone.
 - 2026-10-23: **done** (docs only, h #g264): compatibility check of the plugin against **opencode 2.1.3**,
   which the maintainer's opencode 2 now runs. `@opencode/plugin` publishes no 2.1.3 (the 2.1 line stops at
   2.1.2), so the declarations were diffed 2.0.31 -> 2.1.2 by `curl`'d tarball and every verdict re-checked
