@@ -286,9 +286,12 @@ export function resolvedProxyMcpTools(
     else if (route === "bridge") bridged.push(server)
   }
 
-  if (codeMode && resolution.defs.length === 0) {
+  if (codeMode && resolution.defs.length === 0 && !codeModeProxyWarned) {
     // WARN: an operator who opted in on V2 Code Mode gets none of what the
-    // option is for, and the fix is a config change only they can make.
+    // option is for, and the fix is a config change only they can make. Once
+    // per process: the config does not change between spawns, and repeated on
+    // every one it was 307 lines and an hourly toast on opencode 2.1.3.
+    codeModeProxyWarned = true
     log.warn(
       "proxyOpencodeMcpTools cannot route V2 Code Mode's MCP tools, which reach the" +
         " model through execute; for Code Mode, explicitly allowlist execute in" +
@@ -623,7 +626,10 @@ export function warnCliCapsOnInteractive(caps: AgentCliCaps): void {
   )
 }
 
+let codeModeProxyWarned = false
+
 export function _resetSpawnCliCapWarningsForTests(): void {
   droppedCapWarnings.clear()
   interactiveCapsWarned = false
+  codeModeProxyWarned = false
 }

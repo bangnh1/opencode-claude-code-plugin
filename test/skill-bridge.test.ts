@@ -17,7 +17,9 @@ import {
   registerBundledSkillPath,
   resolveSkillPluginDirs,
   skillRoots,
+  _resetSkillBridgeWarnings,
 } from "../src/skill-bridge.js"
+import { log } from "../src/logger.js"
 import { detectCliSupportsFlag } from "../src/cli-version.js"
 import {
   buildCliArgs,
@@ -481,6 +483,33 @@ test("identical copies are dropped whatever Claude loads them from; a name clash
     [["shared", "same-copy"], ["copied-elsewhere", "same-content"], ["diverged", "name-taken"]],
   )
   assert.equal(skipped[2]!.native.dir, "/claude/diverged", "the warning has to name both sides")
+})
+
+test("a name clash warns once per process, not on every spawn, and again when it changes", () => {
+  // Measured on opencode 2.1.3: the bridge runs on every spawn, so one herdr
+  // clash warned 105 times in one process, and inside a TUI a WARN is a toast.
+  _resetSkillBridgeWarnings()
+  const warned: Array<Record<string, unknown> | undefined> = []
+  const original = log.warn
+  log.warn = (msg, data) => {
+    if (msg.startsWith("claude already registers a different skill")) warned.push(data)
+  }
+  try {
+    const native = [
+      { name: "herdr", dir: "/claude/herdr", realDir: "/claude/herdr", contentHash: "theirs", scope: "user" as const },
+    ]
+    const ours = { name: "herdr", dir: "/oc/herdr", realDir: "/oc/herdr", contentHash: "mine" }
+    for (let spawn = 0; spawn < 3; spawn++) {
+      const { skipped } = dropNativelyLoadedSkills([ours], native)
+      assert.equal(skipped[0]!.reason, "name-taken", "the skip itself still happens every time")
+    }
+    assert.equal(warned.length, 1)
+    dropNativelyLoadedSkills([{ ...ours, dir: "/elsewhere/herdr", realDir: "/elsewhere/herdr" }], native)
+    assert.equal(warned.length, 2, "a clash between different paths is a new fact")
+  } finally {
+    log.warn = original
+    _resetSkillBridgeWarnings()
+  }
 })
 
 test("no native skills at all is a pass-through, not a filter", () => {

@@ -273,7 +273,7 @@ function collectSkills(
     if (!skill) continue
     const winner = claimed.get(skill.name)
     if (winner) {
-      if (!sameSkill(winner, skill)) {
+      if (!sameSkill(winner, skill) && firstSkillWarning(`dup:${skill.name}:${winner.dir}:${skill.dir}`)) {
         log.warn("two different skills share a name; bridging the one the nearest root claimed", {
           name: skill.name,
           bridged: winner.dir,
@@ -285,6 +285,26 @@ function collectSkills(
     claimed.set(skill.name, skill)
     found.push(skill)
   }
+}
+
+/**
+ * Both skill clashes are facts about the operator's disk, not about one spawn,
+ * and the bridge is rebuilt on every spawn: one herdr clash warned 105 times in
+ * one opencode 2 process, and inside a TUI a WARN is a toast (h #g193). So each
+ * clash warns once per process, keyed on the name and both paths so a clash
+ * that changes on disk still warns again.
+ */
+const warnedSkillClashes = new Set<string>()
+
+function firstSkillWarning(key: string): boolean {
+  if (warnedSkillClashes.has(key)) return false
+  warnedSkillClashes.add(key)
+  return true
+}
+
+/** Test seam. */
+export function _resetSkillBridgeWarnings(): void {
+  warnedSkillClashes.clear()
 }
 
 const byName = (a: DiscoveredSkill, b: DiscoveredSkill) => a.name.localeCompare(b.name)
@@ -451,7 +471,7 @@ export function dropNativelyLoadedSkills(
     }
     const reason = sameCopy ? "same-copy" : sameContent ? "same-content" : "name-taken"
     skipped.push({ skill, native: nameTaken, reason })
-    if (reason === "name-taken") {
+    if (reason === "name-taken" && firstSkillWarning(`taken:${skill.name}:${nameTaken.dir}:${skill.dir}`)) {
       log.warn("claude already registers a different skill under this name; not bridging ours", {
         name: skill.name,
         claudeLoads: nameTaken.dir,
