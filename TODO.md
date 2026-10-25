@@ -165,6 +165,12 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-25: **done** (v0.62.0, PR #139, h #g266): the sidebar shows what is left of each account's 5-hour
+  window, live (`5h 28% left · resets 18:00`), from the CLI's `unifiedWindows`, with a second line for a
+  weekly window that is refused or nearly spent; the 7-day window now has readings and notes of its own.
+- 2026-10-25: **done** (docs only, h #g267): interrupts measured on **opencode 2.1.4**. No plugin defect:
+  every stop path reaches the plugin, and the TUI's Esc Esc (`interrupt?resume=true`) restarts at once on
+  a queued prompt, which reads as "the interrupt did nothing".
 - 2026-10-24: **done** (v0.61.2, PR #137, h #g265): the skill-clash and V2 Code Mode WARNs fire once
   per process instead of on every spawn (614 and 307 lines, hourly toasts, over two days on opencode 2.1.3).
   The two-day trial's verdict: opencode 2.1.3 is fit to be the daily driver. The maintainer's herdr skill

@@ -8504,6 +8504,15 @@ and the width). Suite 1899 of 1899. An earlier run failed once in
 Claude with the line, once"), which passed three reruns in isolation and touches
 nothing changed here.
 
+Shipped as v0.62.0 on 2026-10-25 after the maintainer chose "PR, merge,
+release": a minor, because the sidebar visibly changes and the seven-day window
+gains notes. PR #139 green on Linux and Windows, CI and Docs green on the merge
+commit before the tag, the publish verified from the Publish step's tail
+against the version document's shasum (`e535583b`, visible about 90 s after),
+and the GitHub Release created after. The main checkout's `dist`, which the
+maintainer's opencode loads by `file://` path, was rebuilt the same turn, so it
+applies on the next opencode start.
+
 ## Interrupts on opencode 2.1.4: the plugin stops, `resume=true` restarts (2026-10-25)
 
 h #g267. The maintainer reported "when hitting interupt i need to hit it twice
