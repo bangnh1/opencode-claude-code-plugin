@@ -165,6 +165,9 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-25: **done** (v0.63.0, PR #142, h #g269): a rebuilt plugin applies without restarting opencode 2.
+  The newest copy takes over at the first quiet turn, each conversation resuming its Claude session there;
+  a session with work in flight finishes on its own copy first. Takes one restart to start.
 - 2026-10-25: **done** (v0.62.1, PR #141, h #g268): stops keep working after opencode 2 reloads the plugin.
   opencode 2 re-imports a rebuilt plugin but keeps serving turns from the first copy, which lost its event
   subscription, so a stop at a parked call after any rebuild released nothing. One relay per process now.

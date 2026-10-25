@@ -8748,3 +8748,12 @@ hand-over is that path; NOTICE never toasts, so it was left as is.
 Checks: `npm run typecheck`, `npm test` (1925/1925; an earlier full run had two
 timing failures in `background-running-count` and `process-lifecycle`, which
 passed three isolated reruns each and the next full run), `npm run build`.
+
+Shipped as v0.63.0 on 2026-10-25 after the maintainer chose "PR, merge,
+release": PR #142 green on Linux and Windows, CI and Docs green on the merge
+commit before the tag, the publish verified from the Publish step's tail
+against the version document's shasum (`bddbcfd8`, visible about 90 s after),
+and the GitHub Release created after. A minor, because every V2 turn is now
+routed. The main checkout's `dist` was rebuilt the same turn; it is in force
+from the maintainer's next opencode restart, after which rebuilds apply on
+their own.
