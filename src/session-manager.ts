@@ -8,18 +8,20 @@ import { reportUnrecognizedModel } from "./cli-events.js"
 import { SERVER_CLOSED_MESSAGE, type ProxyMcpServer, type ProxyToolResult } from "./proxy-mcp.js"
 import {
   getPendingProxyCalls,
+  hasAnyPendingProxyCall,
   rejectAllPendingProxyCallsForSession,
   type PendingProxyCall,
 } from "./proxy-broker.js"
 import { clearLedger } from "./todo-ledger.js"
 import { clearExitPlanModeQuestions, hasExitPlanModeQuestions } from "./plan-mode-question.js"
-import { clearAccountFailoverQuestions } from "./account-failover.js"
+import { clearAccountFailoverQuestions, hasAccountFailoverQuestions } from "./account-failover.js"
 import {
   clearSubagentDispatchQuestions,
   forgetDispatchChoicesForSession,
   forgetSessionChoice,
+  hasPendingSubagentDispatch,
 } from "./subagent-dispatch.js"
-import { forgetExplicitTaskModel } from "./task-model.js"
+import { forgetExplicitTaskModel, hasUnclaimedExplicitTaskModels } from "./task-model.js"
 import { clearCompression } from "./compression-store.js"
 import { clearBackgroundTasks } from "./background-tasks.js"
 import { forgetForkFingerprint, moveForkFingerprint } from "./session-fork.js"
@@ -987,6 +989,18 @@ export function _forgetClaudeSessionIdInMemory(key: string): void {
 }
 
 export function deleteClaudeSessionId(key: string): void {
+  forgetClaudeSessionInMemory(key)
+  // Same for the copy kept across restarts: a conversation this process
+  // abandoned must not be resumed by the next one.
+  forgetResumePoint(key)
+}
+
+/**
+ * Everything `deleteClaudeSessionId` drops except the resume record on disk,
+ * which is what a handover to another copy of the plugin needs (h #g269): the
+ * conversation is not abandoned, it is resumed elsewhere from that record.
+ */
+function forgetClaudeSessionInMemory(key: string): void {
   clearExitPlanModeQuestions(key)
   clearAccountFailoverQuestions(key)
   clearSubagentDispatchQuestions(key)
@@ -999,9 +1013,94 @@ export function deleteClaudeSessionId(key: string): void {
   // And what that session had been asked: the next session under this key
   // starts with a replay, which carries everything (h #g239).
   forgetServedConversation(key)
-  // Same for the copy kept across restarts: a conversation this process
-  // abandoned must not be resumed by the next one.
-  forgetResumePoint(key)
+}
+
+function keyBelongsToSession(key: string, sessionID: string, ap?: ActiveProcess): boolean {
+  return ap?.opencodeSessionID === sessionID || describeSessionKey(key).session === sessionID
+}
+
+/** Work under one key that only this copy of the plugin can finish. */
+function keyHeldHere(key: string): boolean {
+  return (
+    claudeSessionIsWriting(key) ||
+    hasAccountFailoverQuestions(key) ||
+    hasPendingSubagentDispatch(key)
+  )
+}
+
+/**
+ * Whether this copy of the plugin still has work for one opencode session that
+ * only it can finish (h #g269): a turn streaming or parked, a proxied call
+ * outstanding, or a form (plan mode, account switch, subagent dispatch) whose
+ * answer the session's next turn carries. That work lives in this copy's
+ * memory, so the session stays here until it is done, whichever build is newer.
+ */
+export function sessionHeldHere(sessionID: string): boolean {
+  if (!sessionID || sessionID === "default") return false
+  for (const [key, ap] of activeProcesses) {
+    if (keyBelongsToSession(key, sessionID, ap) && keyHeldHere(key)) return true
+  }
+  for (const key of claudeSessions.keys()) {
+    if (keyBelongsToSession(key, sessionID) && keyHeldHere(key)) return true
+  }
+  return false
+}
+
+/**
+ * Whether this copy has nothing in flight in any session: no turn streaming or
+ * parked, no proxied call outstanding, and no explicit task model waiting for a
+ * child to claim it. The build switch waits for every older copy to say so
+ * (h #g269). Forms are left out on purpose: each belongs to one session, which
+ * `sessionHeldHere` keeps, and an unanswered form in a forgotten session must
+ * not keep every other session on an old build.
+ */
+export function noWorkInFlightHere(): boolean {
+  for (const ap of activeProcesses.values()) {
+    if (isTurnInFlight(ap)) return false
+  }
+  return !hasAnyPendingProxyCall() && !hasUnclaimedExplicitTaskModels()
+}
+
+/**
+ * Whether this copy has no `claude` child, no remembered Claude session and no
+ * proxied call left: a disposed copy in that state can leave the process's
+ * list of copies (h #g269).
+ */
+export function holdsNoClaudeState(): boolean {
+  return activeProcesses.size === 0 && claudeSessions.size === 0 && !hasAnyPendingProxyCall()
+}
+
+/**
+ * Hand this copy's conversations to another copy of the plugin (h #g269): stop
+ * the idle `claude` children of one opencode session, or of every session when
+ * none is named, and forget what this copy remembers about them, while KEEPING
+ * the resume record on disk. The next copy's first turn `--resume`s from that
+ * record exactly as a restarted opencode does (`src/session-resume-store.ts`),
+ * and waits for this copy's child to have exited, because two children must
+ * never write one transcript. A key with work only this copy can finish is
+ * left alone. Returns the released keys.
+ */
+export async function releaseIdleForHandover(sessionID?: string): Promise<string[]> {
+  if (sessionID === "default") return []
+  const belongs = (key: string, ap?: ActiveProcess) =>
+    sessionID === undefined || keyBelongsToSession(key, sessionID, ap)
+  const released: string[] = []
+  const exits: Promise<boolean>[] = []
+  for (const [key, ap] of [...activeProcesses]) {
+    if (!belongs(key, ap) || keyHeldHere(key)) continue
+    exits.push(deleteActiveProcessAndWait(key))
+    released.push(key)
+  }
+  await Promise.all(exits)
+  for (const key of [...claudeSessions.keys()]) {
+    if (!belongs(key) || keyHeldHere(key)) continue
+    forgetClaudeSessionInMemory(key)
+    if (!released.includes(key)) released.push(key)
+  }
+  if (released.length > 0) {
+    log.info("handed claude sessions to another copy of the plugin", { sessionID, released })
+  }
+  return released
 }
 
 /**

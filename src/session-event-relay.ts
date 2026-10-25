@@ -97,6 +97,20 @@ export function noteRelayMemberServing(): void {
   join()
 }
 
+/** Whether this copy ever registered a `claude` process. */
+export function relayMemberHasServed(): boolean {
+  return ownServed
+}
+
+/**
+ * Leave the relay although this copy served: it was disposed and holds nothing
+ * now (h #g269), so staying would only pin it in memory. A later spawn here
+ * joins again through `noteRelayMemberServing`.
+ */
+export function leaveSessionEventRelay(): void {
+  leave()
+}
+
 /** Declare one live subscription. The returned function ends it; calling it twice is a no-op. */
 export function openRelayFollower(): () => void {
   const state = relayState()

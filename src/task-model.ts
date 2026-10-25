@@ -239,6 +239,16 @@ export function noteExplicitTaskModels(
   return noted
 }
 
+/**
+ * Whether a `task` call named a model for a child that has not run yet. The
+ * claim lives in this copy's memory, so the build switch waits for it
+ * (`src/plugin-copies.ts`): the child's first turn has to land here to find it.
+ */
+export function hasUnclaimedExplicitTaskModels(now = Date.now()): boolean {
+  pruneClaims(now)
+  return claims.length > 0
+}
+
 /** The record a child session already holds, for its second turn onwards. */
 export function explicitTaskModelFor(sessionId: string): ExplicitTaskModel | undefined {
   return sessionModels.get(sessionId)

@@ -283,6 +283,11 @@ export function findPendingProxyCall(toolCallId: string): PendingProxyCall | und
   return pendingByCallId.get(toolCallId)
 }
 
+/** Whether any session has a call outstanding, for the build switch (`src/plugin-copies.ts`). */
+export function hasAnyPendingProxyCall(): boolean {
+  return pendingByCallId.size > 0
+}
+
 export function getPendingProxyCalls(sessionKey: string): PendingProxyCall[] {
   const s = callIdsBySession.get(sessionKey)
   if (!s || s.size === 0) return []

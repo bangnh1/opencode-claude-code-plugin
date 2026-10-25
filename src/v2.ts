@@ -49,9 +49,29 @@ import { createV1ClientShim, type V2ClientContext } from "./v2-client.js"
 import {
   deleteActiveProcessesForSession,
   ensureProcessExitCleanup,
+  holdsNoClaudeState,
+  noWorkInFlightHere,
+  releaseIdleForHandover,
   releaseParkedProxyCallsForSession,
+  sessionHeldHere,
 } from "./session-manager.js"
-import { defineOwnRelayMember, openRelayFollower, relaySessionEvent } from "./session-event-relay.js"
+import {
+  defineOwnRelayMember,
+  leaveSessionEventRelay,
+  openRelayFollower,
+  relayMemberHasServed,
+  relaySessionEvent,
+} from "./session-event-relay.js"
+import {
+  isActivePluginCopy,
+  registerPluginCopy,
+  routeTurn,
+  unregisterPluginCopy,
+  type PluginCopy,
+  type PluginCopyTurn,
+} from "./plugin-copies.js"
+import { resolveSessionAffinity } from "./call-options.js"
+import { staleBuildWatch } from "./stale-build.js"
 import { readBundledSkillInfos } from "./skill-bridge.js"
 import { logStartupDiagnostics } from "./startup-diagnostics.js"
 import type { ClaudeCodeProviderSettings } from "./types.js"
@@ -374,9 +394,141 @@ function handleSessionEventHere(event: V2Event | undefined): void {
   if (stopped) releaseParkedProxyCallsForSession(stopped)
 }
 
+// ---------------------------------------------------------------------------
+// This copy among the copies opencode 2 has loaded (h #g269)
+// ---------------------------------------------------------------------------
+
+/** What `createProvider` returns, as far as the routing needs it. */
+type ModelProvider = { languageModel(modelId: string): LanguageModelV3 }
+
+let ownCopy: PluginCopy | undefined
+let liveSetups = 0
+/** Each live setup's provider plans, by its location: what `modelFor` builds from. */
+const plannedByDirectory = new Map<string | undefined, Map<string, Record<string, unknown>>>()
+/** Providers built for turns another copy was called for, so each is built once. */
+const forwardedProviders = new Map<string, ModelProvider>()
+const MAX_FORWARDED_PROVIDERS = 32
+
+function plannedSettings(
+  directory: string | undefined,
+  providerID: string,
+): Record<string, unknown> | undefined {
+  const here = plannedByDirectory.get(directory)?.get(providerID)
+  if (here) return here
+  for (const planned of plannedByDirectory.values()) {
+    const found = planned.get(providerID)
+    if (found) return found
+  }
+  return undefined
+}
+
+/** This module's entry in the process's list of copies, created on its first setup. */
+function pluginCopyFor(deps: V2SetupDeps): PluginCopy {
+  if (ownCopy) return ownCopy
+  const loaded = staleBuildWatch().loaded
+  ownCopy = {
+    id: randomUUID(),
+    version: loaded.version,
+    build: { entryPath: loaded.entryPath, mtimeMs: loaded.mtimeMs, size: loaded.size },
+    disposed: false,
+    holds: (sessionID) => sessionHeldHere(sessionID),
+    quiet: () => noWorkInFlightHere(),
+    release: (sessionID) => releaseIdleForHandover(sessionID),
+    async modelFor(turn) {
+      const planned = plannedSettings(turn.directory, turn.providerID)
+      if (!planned) throw new Error(`no provider ${turn.providerID} is planned in this build`)
+      const cacheKey = JSON.stringify([turn.directory ?? null, turn.providerID, turn.sdkOptions])
+      let provider = forwardedProviders.get(cacheKey)
+      if (!provider) {
+        const settings = await resolveSdkSettings(turn.providerID, planned, turn.sdkOptions)
+        provider = deps.createProvider(settings)
+        forwardedProviders.set(cacheKey, provider)
+        while (forwardedProviders.size > MAX_FORWARDED_PROVIDERS) {
+          const oldest = forwardedProviders.keys().next().value
+          if (oldest === undefined) break
+          forwardedProviders.delete(oldest)
+        }
+      }
+      return provider.languageModel(turn.modelId)
+    },
+  }
+  return ownCopy
+}
+
+/**
+ * A disposed copy that holds nothing any more leaves the list of copies and
+ * the event relay, so the copies a day of rebuilds leaves behind are not all
+ * pinned in memory. Asked on every relayed event, which is how a copy learns
+ * that its last conversation has moved on.
+ */
+function retireWhenSpent(): void {
+  const copy = ownCopy
+  if (!copy?.disposed || isActivePluginCopy(copy) || !holdsNoClaudeState()) return
+  unregisterPluginCopy(copy)
+  leaveSessionEventRelay()
+  log.info("a disposed plugin build left the process", { version: copy.version })
+}
+
+/**
+ * The language model opencode is handed, routed: each turn asks the process's
+ * copies which one serves it (`routeTurn`), so the newest build takes over at
+ * the next quiet moment instead of at the next restart. Everything else is the
+ * model this copy built.
+ */
+function routedModel(
+  model: LanguageModelV3,
+  copy: PluginCopy,
+  turn: PluginCopyTurn,
+): LanguageModelV3 {
+  const sessionOf = (options: Parameters<LanguageModelV3["doStream"]>[0]) =>
+    resolveSessionAffinity(
+      options.headers as Record<string, string | undefined> | undefined,
+      options.providerOptions as Record<string, unknown> | undefined,
+      turn.providerID,
+    )
+  return {
+    specificationVersion: model.specificationVersion,
+    provider: model.provider,
+    modelId: model.modelId,
+    supportedUrls: model.supportedUrls,
+    doStream: (options) =>
+      routeTurn({
+        own: copy,
+        turn,
+        sessionID: sessionOf(options),
+        runHere: () => model.doStream(options),
+        runOn: (other) => other.doStream(options),
+      }),
+    doGenerate: (options) =>
+      routeTurn({
+        own: copy,
+        turn,
+        sessionID: sessionOf(options),
+        runHere: () => model.doGenerate(options),
+        runOn: (other) => other.doGenerate(options),
+      }),
+  }
+}
+
+/** `provider` with every model it hands out routed. Keeps its callable shape. */
+export function routedProvider<P extends ModelProvider>(
+  provider: P,
+  copy: PluginCopy,
+  base: Omit<PluginCopyTurn, "modelId">,
+): P {
+  const languageModel = (modelId: string) =>
+    routedModel(provider.languageModel(modelId), copy, { ...base, modelId })
+  return Object.assign((modelId: string) => languageModel(modelId), provider, {
+    languageModel,
+  }) as unknown as P
+}
+
 let closeOwnFeed: (() => void) | undefined
 defineOwnRelayMember({
-  handle: (event) => handleSessionEventHere(event as V2Event | undefined),
+  handle: (event) => {
+    handleSessionEventHere(event as V2Event | undefined)
+    retireWhenSpent()
+  },
   feedOpened: () => {
     closeOwnFeed ??= openSessionRunEventFeed()
   },
@@ -560,6 +712,15 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
     }
 
     const planned = new Map<string, Record<string, unknown>>()
+    // This copy joins the process's copies, and a turn another copy was called
+    // for can be built from this location's plans (h #g269).
+    const copy = pluginCopyFor(deps)
+    // opencode 2 also sets a loaded module up again (roughly hourly on 2.1.3,
+    // h #g265), so a copy disposed a moment ago is live once more.
+    copy.disposed = false
+    registerPluginCopy(copy)
+    liveSetups += 1
+    plannedByDirectory.set(directory, planned)
 
     registrations.push(
       await ctx.provider.transform((editor) => {
@@ -613,7 +774,11 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
         const providerID = event.model.providerID
         if (!isClaudeCodeProviderId(providerID)) return
         const settings = await resolveSdkSettings(providerID, planned.get(providerID), event.options)
-        event.sdk = deps.createProvider(settings)
+        event.sdk = routedProvider(deps.createProvider(settings), copy, {
+          directory,
+          providerID,
+          sdkOptions: event.options,
+        })
         log.debug("v2 sdk created", { providerID, cliPath: settings.cliPath })
       }),
     )
@@ -711,6 +876,16 @@ export function createV2Setup(deps: V2SetupDeps): (ctx: V2Context) => Promise<V2
 
     return async () => {
       events.abort()
+      // `plannedByDirectory` keeps this setup's plans: a disposed copy can still
+      // hold a session (a parked call) and has to build its model to finish it.
+      liveSetups = Math.max(0, liveSetups - 1)
+      if (liveSetups === 0) {
+        // opencode 2 disposed every setup of this copy: a rebuild replaced it,
+        // or the plugin was removed. It is never switched to again, and one
+        // that never ran a `claude` has nothing to finish (h #g269).
+        copy.disposed = true
+        if (!relayMemberHasServed()) unregisterPluginCopy(copy)
+      }
       for (const registration of registrations.splice(0)) {
         await registration.dispose().catch(() => undefined)
       }

@@ -1185,7 +1185,12 @@ package identity and get approval before removing only that stale package direct
 never the whole cache or auth/session directories. Respect platform/XDG paths
 (`XDG_CACHE_HOME` moves it). Then fully relaunch every opencode window, including serve
 and GUI processes. A `file://` install uses the checkout's
-`dist/`: rebuild with `npm run build` and restart after approval, not cache deletion.
+`dist/`: rebuild with `npm run build`, not cache deletion. On opencode 2, from plugin
+0.63.0, the rebuild applies by itself: opencode re-imports the changed build within a
+second, and the first turn that finds no older build with work in flight switches to
+it, each conversation resuming its Claude session there (`switched to the newest plugin
+build` in `plugin.log`). That needs the FIRST build the process loaded to be 0.63.0 or
+later, so one restart after upgrading to it. On opencode 1, restart after approval.
 No manual skill copy/update is needed. Do not publish or release as part of configuring.
 
 ## Models and variants
@@ -1329,8 +1334,10 @@ at <time>. Restart opencode to run it`, or `the build on disk could not be read`
 last is not a fault: a package cache mid-reinstall or a build mid-`clean` is unreadable
 and says nothing about staleness. It names no path. The same comparison writes a
 one-per-conversation `▌ **restart opencode:**` note into the reply and one WARN per
-process, because a process can be months out of date with nothing else saying so. Check
-this row before investigating any bug the user says was already fixed.
+process, because a process can be months out of date with nothing else saying so. On
+opencode 2 the note and the WARN stay quiet for a build this process has already
+re-imported, which takes over at the next quiet moment. Check this row before
+investigating any bug the user says was already fixed.
 
 It also prints an **MCP config entries Claude Code skipped** section, but only when the
 CLI refused an entry in an `--mcp-config` it was given. Read it whenever MCP tools are
