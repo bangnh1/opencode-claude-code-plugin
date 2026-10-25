@@ -26,6 +26,7 @@ import {
   isReadingCurrent,
   markUsageNoted,
   pendingCrossings,
+  recordRateLimitObservation,
   recordUsageReading,
   registerKnownAccounts,
   resolveUsageSwitchAt,
@@ -34,6 +35,7 @@ import {
   snapshotKnownAccounts,
   usageCrossings,
   usagePercent,
+  usageReadingsFromObservation,
   type WindowUsage,
 } from "../src/account-usage.js"
 import {
@@ -218,7 +220,7 @@ test("the file holds account names, window names, numbers and times, and nothing
 test("the accounts registered at startup sit beside the readings, are replaced on each registration, and ride a reading's write", () => {
   recordUsageReading("appical", "five_hour", { utilization: 0.4, resetsAt: NOW + HOUR, status: "allowed" }, NOW)
   assert.equal(registerKnownAccounts([{ account: "appical", tier: "Max 20x" }, { account: "default" }], NOW), true)
-  const reader = createAccountUsageReader(() => file)
+  const reader = createAccountUsageReader(() => file, () => NOW)
   assert.deepEqual([...reader.known()], [["appical", { tier: "Max 20x", at: NOW }], ["default", { at: NOW }]])
   assert.equal(reader.read().get("appical")?.get("five_hour")?.utilization, 0.4, "the readings are untouched")
   assert.equal(reader.known(), reader.known(), "an unchanged file hands back the same map")
@@ -376,7 +378,7 @@ test("accountUsageAtOrOver reads current windows only, and a rejection counts", 
 })
 
 test("the TUI reader re-parses only when the file changed", () => {
-  const reader = createAccountUsageReader(() => file)
+  const reader = createAccountUsageReader(() => file, () => NOW)
   assert.equal(reader.read().size, 0)
   recordUsageReading("appical", "five_hour", { utilization: 0.4, resetsAt: Date.now() + HOUR, status: "allowed" })
   const first = reader.read()
@@ -428,4 +430,114 @@ test("the usage note names the account, the window, the percent and the local re
   assert.match(named, /91% of the 5-hour window, which resets at 2026-10-17 18:00; and 50% of /)
   assert.match(named, /resets Monday/)
   assert.match(named, /pick a model from .*"default"/)
+})
+
+// ---------------------------------------------------------------------------
+// unifiedWindows: every window's own reading (h #g266)
+// ---------------------------------------------------------------------------
+
+test("an event's unifiedWindows gives the limiting window its utilization and every other window a reading of its own", () => {
+  const readings = usageReadingsFromObservation(
+    {
+      window: "five_hour",
+      status: "allowed",
+      resetsAt: NOW + HOUR,
+      windows: {
+        five_hour: { utilization: 0.31, resetsAt: NOW + HOUR },
+        seven_day: { utilization: 0.62, resetsAt: NOW + 72 * HOUR },
+      },
+    },
+    () => undefined,
+    NOW,
+  )
+  assert.deepEqual(readings, [
+    ["five_hour", { utilization: 0.31, resetsAt: NOW + HOUR, status: "allowed" }],
+    ["seven_day", { utilization: 0.62, resetsAt: NOW + 72 * HOUR, status: "allowed" }],
+  ])
+})
+
+test("the top level's own utilization and reset win for the limiting window", () => {
+  const [limiting] = usageReadingsFromObservation(
+    {
+      window: "five_hour",
+      status: "allowed_warning",
+      utilization: 0.9,
+      resetsAt: NOW + HOUR,
+      windows: { five_hour: { utilization: 0.89, resetsAt: NOW + HOUR + 60_000 } },
+    },
+    () => undefined,
+    NOW,
+  )
+  assert.deepEqual(limiting, ["five_hour", { utilization: 0.9, resetsAt: NOW + HOUR, status: "allowed_warning" }])
+})
+
+test("an event without unifiedWindows records only the limiting window, as before", () => {
+  assert.deepEqual(
+    usageReadingsFromObservation({ window: "five_hour", status: "allowed", resetsAt: NOW + HOUR }, () => undefined, NOW),
+    [["five_hour", { utilization: null, resetsAt: NOW + HOUR, status: "allowed" }]],
+  )
+  // No limiting window and no windows: nothing to record.
+  assert.deepEqual(usageReadingsFromObservation({ status: "allowed" }, () => undefined, NOW), [])
+})
+
+test("a window still refused from an earlier event stays refused while it reads at or past its cap", () => {
+  const refused = entry({ status: "rejected", utilization: null, resetsAt: NOW + 72 * HOUR })
+  const observation = {
+    window: "five_hour",
+    status: "allowed",
+    windows: {
+      five_hour: { utilization: 0.2, resetsAt: NOW + HOUR },
+      seven_day: { utilization: 1, resetsAt: NOW + 72 * HOUR },
+    },
+  }
+  const previous = (window: string) => (window === "seven_day" ? refused : undefined)
+  assert.equal(usageReadingsFromObservation(observation, previous, NOW)[1][1].status, "rejected")
+  // Under its cap it is no longer refused.
+  observation.windows.seven_day.utilization = 0.97
+  assert.equal(usageReadingsFromObservation(observation, previous, NOW)[1][1].status, "allowed")
+  // A refusal whose reset has passed is over.
+  const lapsed = entry({ status: "rejected", utilization: null, resetsAt: NOW - 1 })
+  observation.windows.seven_day.utilization = 1
+  assert.equal(
+    usageReadingsFromObservation(observation, () => lapsed, NOW)[1][1].status,
+    "allowed",
+  )
+})
+
+test("recordRateLimitObservation writes every window in one go and keeps what each had already announced", () => {
+  recordUsageReading("appical", "seven_day", { utilization: 0.8, resetsAt: NOW + 72 * HOUR, status: "allowed_warning" }, NOW)
+  markUsageNoted("appical", "seven_day", [50, 75], NOW)
+  assert.equal(
+    recordRateLimitObservation(
+      "appical",
+      {
+        window: "five_hour",
+        status: "allowed",
+        resetsAt: NOW + HOUR,
+        windows: {
+          five_hour: { utilization: 0.4, resetsAt: NOW + HOUR },
+          seven_day: { utilization: 0.81, resetsAt: NOW + 72 * HOUR },
+        },
+      },
+      NOW + 1,
+    ),
+    true,
+  )
+  const windows = snapshotAccountUsage(NOW + 1).get("appical")
+  assert.equal(windows?.get("five_hour")?.utilization, 0.4)
+  assert.equal(windows?.get("seven_day")?.utilization, 0.81)
+  assert.deepEqual(windows?.get("seven_day")?.noted, [50, 75])
+  // The 50% crossing of the five-hour window is now knowable, and nothing else is pending.
+  assert.deepEqual(
+    usageCrossings("appical", DEFAULT_USAGE_WARN_THRESHOLDS, NOW + 1).map((crossing) => [crossing.window, crossing.crossed]),
+    [],
+  )
+  recordRateLimitObservation("appical", { windows: { five_hour: { utilization: 0.55, resetsAt: NOW + HOUR } } }, NOW + 2)
+  assert.deepEqual(
+    usageCrossings("appical", DEFAULT_USAGE_WARN_THRESHOLDS, NOW + 2).map((crossing) => [crossing.window, crossing.crossed]),
+    [["five_hour", [50]]],
+  )
+  // Nothing usable is not a write.
+  assert.equal(recordRateLimitObservation("appical", { status: "allowed" }, NOW + 3), false)
+  assert.equal(recordRateLimitObservation("Not A Name", { window: "five_hour", status: "allowed" }, NOW + 3), false)
 })

@@ -20,7 +20,7 @@ import {
   reportToolProgress,
   resetsAtToMs,
 } from "./cli-events.js"
-import { recordUsageReading } from "./account-usage.js"
+import { recordRateLimitObservation, recordUsageReading } from "./account-usage.js"
 import {
   accountBlockKind,
   formatAccountBlockNote,
@@ -344,11 +344,22 @@ export function createLineHandler(
         // (h #g244). Recorded on every turn, compaction and subagents
         // included, because it is a fact about the account; only the note is
         // kept to the turns that can speak (`completeResult`).
-        if (info?.rateLimitType && info.status) {
-          recordUsageReading(ctx.usageAccount, info.rateLimitType, {
-            utilization: info.utilization ?? null,
-            resetsAt: resetsAtToMs(info.resetsAt),
+        // Every window the event carries is a reading of its own
+        // (`unifiedWindows`, h #g266), not only the one that limits.
+        if (info) {
+          recordRateLimitObservation(ctx.usageAccount, {
+            window: info.rateLimitType,
             status: info.status,
+            utilization: info.utilization,
+            resetsAt: resetsAtToMs(info.resetsAt),
+            windows: info.windows
+              ? Object.fromEntries(
+                  Object.entries(info.windows).map(([window, own]) => [
+                    window,
+                    { utilization: own.utilization, resetsAt: resetsAtToMs(own.resetsAt) },
+                  ]),
+                )
+              : undefined,
           })
         }
         const note = reportRateLimitEvent(msg)
