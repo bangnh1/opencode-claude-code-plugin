@@ -165,6 +165,9 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-25: **done** (v0.62.1, PR #141, h #g268): stops keep working after opencode 2 reloads the plugin.
+  opencode 2 re-imports a rebuilt plugin but keeps serving turns from the first copy, which lost its event
+  subscription, so a stop at a parked call after any rebuild released nothing. One relay per process now.
 - 2026-10-25: **done** (v0.62.0, PR #139, h #g266): the sidebar shows what is left of each account's 5-hour
   window, live (`5h 28% left · resets 18:00`), from the CLI's `unifiedWindows`, with a second line for a
   weekly window that is refused or nearly spent; the 7-day window now has readings and notes of its own.

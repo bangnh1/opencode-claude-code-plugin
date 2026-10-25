@@ -8660,3 +8660,12 @@ respawn and resume the session in the new copy, and the first build carrying
 the forwarder still needs one restart. Left as a question to the maintainer.
 
 Checks: `npm run typecheck`, `npm test` (1903/1903), `npm run build`.
+
+Shipped as v0.62.1 on 2026-10-25 after the maintainer chose "PR, merge,
+release": PR #141 green on Linux and Windows, CI and Docs green on the merge
+commit before the tag, the publish verified from the Publish step's tail
+against the version document's shasum (`3c305c77`, visible about 60 s after),
+and the GitHub Release created after. The main checkout's `dist` was rebuilt
+the same turn. The relay only helps once the FIRST copy in a process carries
+it, so it takes one opencode restart to be in force. The maintainer chose
+"Every session" for auto-apply, which is the next piece of work (h #g269).
