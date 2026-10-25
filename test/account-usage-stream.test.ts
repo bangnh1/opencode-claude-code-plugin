@@ -273,6 +273,38 @@ test("an allowed event with no utilization is recorded as unknown and says nothi
   })
 })
 
+test("the same event's unifiedWindows gives every window a number, so the sidebar can say what is left", async () => {
+  await withFake(async (fake) => {
+    // The shape 2.1.293's schema documents (h #g266): headroom at the top
+    // level, every window's own reading under `unifiedWindows`.
+    const fiveHourReset = Math.floor(Date.now() / 1000) + 2 * HOUR_S
+    const weekReset = Math.floor(Date.now() / 1000) + 72 * HOUR_S
+    fake.plan({
+      appical: {
+        status: "allowed",
+        rateLimitType: "five_hour",
+        utilization: null,
+        resetsAt: fiveHourReset,
+        unifiedWindows: {
+          five_hour: { utilization: 0.31, resetsAt: fiveHourReset },
+          seven_day: { utilization: 0.12, resetsAt: weekReset },
+        },
+      },
+    })
+    const model = await buildModel(fake)
+    const parts = await drain(await model.doStream({ prompt: first, tools: TOOLS } as any))
+    const windows = snapshotAccountUsage().get("appical")
+    assert.equal(windows?.get("five_hour")?.utilization, 0.31)
+    assert.equal(windows?.get("five_hour")?.status, "allowed")
+    assert.equal(windows?.get("five_hour")?.resetsAt, fiveHourReset * 1000)
+    assert.equal(windows?.get("seven_day")?.utilization, 0.12)
+    assert.equal(windows?.get("seven_day")?.status, "allowed")
+    assert.equal(windows?.get("seven_day")?.resetsAt, weekReset * 1000)
+    // Under every threshold, so nothing is said.
+    assert.deepEqual(usageNotes(parts), [])
+  })
+})
+
 test("at 91% with accountFailover auto, new turns move to the other account and the note says so", async () => {
   await withFake(async (fake) => {
     fake.plan({ appical: warning(0.91), default: null })

@@ -22,6 +22,13 @@
  *     That is "unknown", never zero: a null reading crosses no threshold and
  *     the sidebar shows `ok`, not `0%`.
  *
+ * The same event also carries `unifiedWindows` (h #g266), which the plugin did
+ * not read before: every subscription window's own utilization and reset, on
+ * every event, and the CLI emits an event whenever one of them moves by a
+ * rounded percent. So the five-hour and seven-day windows have numbers while
+ * the top level says nothing, and a reading follows the account turn by turn
+ * (`recordRateLimitObservation`). A window absent from it keeps the old rule.
+ *
  * The interactive transport has no event, so the only thing it records is a
  * limit reply: status `rejected`, utilization unknown, and whatever reset the
  * reply's own text names (`limitFactsFromText`, h #g208).
@@ -373,6 +380,88 @@ export function recordUsageReading(
   return writeStore(file, kept, store.known) ? entry : null
 }
 
+/**
+ * One `rate_limit_event` as the stream parser hands it over, times in epoch
+ * ms: the window that limits the account (`window`, with the `status`,
+ * `utilization` and reset the CLI attached to it) and `windows`, every
+ * window's own reading off the event's `unifiedWindows` (h #g266).
+ */
+export interface RateLimitObservation {
+  window?: string
+  status?: string
+  utilization?: number
+  resetsAt?: number
+  windows?: Readonly<Record<string, { utilization: number; resetsAt?: number }>>
+}
+
+/**
+ * The readings one event leaves, window by window. The limiting window takes
+ * the event's status, and its utilization from the top level when the CLI put
+ * one there, else from `windows`, which is where a window with headroom has
+ * one. Every other window in `windows` is `allowed`, because the status
+ * describes only the limiting window, with one exception: a refusal from an
+ * earlier event that is still current stays a refusal while the window reads
+ * at or past its cap, since two windows can be out at once and an event names
+ * only one of them.
+ */
+export function usageReadingsFromObservation(
+  observation: RateLimitObservation,
+  previous: (window: string) => WindowUsage | undefined,
+  now: number = Date.now(),
+): Array<[string, UsageReading]> {
+  const out: Array<[string, UsageReading]> = []
+  const windows = observation.windows ?? {}
+  const limiting = observation.window
+  if (limiting && observation.status) {
+    const own = windows[limiting]
+    out.push([
+      limiting,
+      {
+        utilization: finite(observation.utilization)
+          ? observation.utilization
+          : own && finite(own.utilization)
+            ? own.utilization
+            : null,
+        resetsAt: finite(observation.resetsAt) ? observation.resetsAt : own?.resetsAt,
+        status: observation.status,
+      },
+    ])
+  }
+  for (const [window, own] of Object.entries(windows)) {
+    if (window === limiting || !finite(own.utilization)) continue
+    const before = previous(window)
+    const stillRefused =
+      before !== undefined && before.status === "rejected" && isReadingCurrent(before, now) && own.utilization >= 1
+    out.push([window, { utilization: own.utilization, resetsAt: own.resetsAt, status: stillRefused ? "rejected" : "allowed" }])
+  }
+  return out
+}
+
+/**
+ * Record every reading one event carries, in one write. Returns false when
+ * there was nothing usable to record or the write failed (the in-process view
+ * still takes the readings, as `recordUsageReading`'s does).
+ */
+export function recordRateLimitObservation(
+  account: string,
+  observation: RateLimitObservation,
+  now: number = Date.now(),
+): boolean {
+  if (!NAME.test(account)) return false
+  const file = accountUsageStorePath()
+  const store = parseStore(file, now)
+  const merged = store.usage
+  const windows = merged.get(account) ?? new Map<string, WindowUsage>()
+  const previous = (window: string) => windows.get(window) ?? cached(now).get(account)?.get(window)
+  const readings = usageReadingsFromObservation(observation, previous, now).filter(([window]) => NAME.test(window))
+  if (readings.length === 0) return false
+  for (const [window, reading] of readings) windows.set(window, applyReading(previous(window), reading, now))
+  merged.set(account, windows)
+  const kept = bounded(merged, now)
+  cache = { path: file, usage: kept }
+  return writeStore(file, kept, store.known)
+}
+
 /** Mark thresholds announced, on the window's newest reading. */
 export function markUsageNoted(
   account: string,
@@ -498,7 +587,10 @@ export function snapshotAccountUsage(now: number = Date.now()): AccountUsage {
  * A reader that re-parses the file only when it changed, for the TUI's
  * refresh clock: an unchanged file costs one `stat`.
  */
-export function createAccountUsageReader(file: () => string = accountUsageStorePath) {
+export function createAccountUsageReader(
+  file: () => string = accountUsageStorePath,
+  now: () => number = Date.now,
+) {
   let identity = ""
   let store = emptyStore()
   const refresh = () => {
@@ -512,7 +604,7 @@ export function createAccountUsageReader(file: () => string = accountUsageStoreP
     }
     if (next !== identity) {
       identity = next
-      store = next === "missing" ? emptyStore() : parseStore(path, Date.now())
+      store = next === "missing" ? emptyStore() : parseStore(path, now())
     }
   }
   return {

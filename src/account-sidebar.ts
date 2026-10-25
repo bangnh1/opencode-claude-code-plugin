@@ -1,9 +1,10 @@
 /**
- * The model behind the sidebar's `Accounts` section (`src/tui.ts`): one line
- * per account this install runs, from the sidebar's first draw (h #g248).
- * With a current usage reading the line is `appical · 5h 72% · resets 18:00`
- * (`appical · 5h 72% · 2026-10-18 01:20` for a reset on another day, h #g244,
- * h #g246); before one has arrived it is `appical · Max 20x · no reading yet`.
+ * The model behind the sidebar's `Accounts` section (`src/tui.ts`): a line per
+ * account this install runs, from the sidebar's first draw (h #g248), about
+ * what is LEFT of the account's five-hour window (h #g266):
+ * `appical · 5h 28% left · resets 18:00` (`appical · 5h 28% left · 2026-10-18
+ * 01:20` for a reset on another day, h #g244, h #g246). Before any reading has
+ * arrived it is `appical · Max 20x · no reading yet`.
  *
  * Pure, like `src/subagent-sidebar.ts`, and for the same reason: the TUI bundle
  * runs on the terminal's own thread, where a logger writes over the interface
@@ -12,21 +13,31 @@
  *
  * Which accounts: every account the server half registered at startup (the
  * configured list, or the one `default` account) plus any with a reading,
- * alphabetically. Which window an account's line shows: a refused one first
- * (the account is out now, whatever its other windows say), else the fullest
- * known one, else any current reading (`ok`, a window the CLI reported without
- * a utilization, which is how it reports one with headroom). A reading whose
- * reset has passed describes a window that is over and is not shown; the
- * account then reads `no reading yet` again, with the plan tier read off its
- * own `.claude.json` (`src/account-tier.ts`) when the store has one.
+ * alphabetically.
+ *
+ * What an account's line is about: its five-hour window whenever the store
+ * has one, because that is the window the operator asked to watch, and it is
+ * the one that moves turn by turn now that every event carries every window's
+ * reading (`unifiedWindows`, h #g266). A five-hour reading whose reset has
+ * passed describes a window that is over, so the account has all of a fresh
+ * one: `5h 100% left`, with no reset time, until the next reading. Under it, a
+ * SECOND line, set in under the level, names any other window that is refused
+ * or at `WARNING_PERCENT` or more (`7d limited · resets 10-30 12:00`), because
+ * a full five-hour window on an account whose week is spent is not room to
+ * work in; while that other window is refused, the five-hour level is drawn
+ * muted. An account with no five-hour reading at all (the interactive
+ * transport records only a refusal) gets today's choice: a refused window
+ * first, else the fullest. `ok` is a window the CLI reported without a
+ * utilization, which is how a CLI without `unifiedWindows` reports
+ * headroom, and never `100% left`.
  *
  * Colours, by segment: the name in the text colour; the level in its state's
- * (`limited` in the error colour, 75% and up in the warning colour, else the
- * success colour at full strength, `ok` included: the `ok` role, never `done`,
- * which is the finished row's faded success); the reset time in its own
- * (`reset`, the theme's info colour), so it
- * reads apart from the level beside it; the word `resets` and every separator
- * muted; the tier in its own (`tier`, the secondary colour).
+ * (`limited` in the error colour, 75% used and up in the warning colour, else
+ * the success colour at full strength, `ok` included: the `ok` role, never
+ * `done`, which is the finished row's faded success); the reset time in its own
+ * (`reset`, the theme's info colour), so it reads apart from the level beside
+ * it; the word `resets` and every separator muted; the tier in its own
+ * (`tier`, the secondary colour).
  */
 import {
   isReadingCurrent,
@@ -42,22 +53,29 @@ export interface AccountUsageLine {
   /** The window the line is about; empty on a line with no current reading. */
   window: string
   /**
-   * `limited` (refused), `warning` (at or past `WARNING_PERCENT`), `ok`, or
-   * `none` for an account no current reading describes.
+   * `limited` (refused), `warning` (at or past `WARNING_PERCENT` used), `ok`,
+   * or `none` for an account no reading describes.
    */
   state: "limited" | "warning" | "ok" | "none"
+  /** A second line under an account's first, about another window. */
+  detail: boolean
   segments: Segment[]
 }
 
-/** Where a line takes the theme's warning colour: the CLI's own first warning level. */
+/** Where a level takes the theme's warning colour, in percent USED: the CLI's own first warning level. */
 export const WARNING_PERCENT = 75
 
-/** What a line says for an account no current reading describes. */
+/** What a line says for an account no reading describes. */
 export const NO_READING_TEXT = "no reading yet"
+
+/** The window an account's first line is about whenever the store has one. */
+export const FIVE_HOUR_WINDOW = "five_hour"
 
 /** The word ahead of a reset time, muted while the time takes its own colour. */
 const RESET_WORD = "resets "
 const SEPARATOR = " · "
+/** The furthest a detail line is set in, so a long account name leaves it room. */
+const MAX_DETAIL_INDENT = 12
 
 const SHORT_WINDOWS: Record<string, string> = {
   five_hour: "5h",
@@ -72,6 +90,11 @@ const SHORT_WINDOWS: Record<string, string> = {
 export function shortWindowName(window: string): string {
   if (window === "unknown") return ""
   return SHORT_WINDOWS[window] ?? window.replace(/_/g, " ")
+}
+
+/** What is left of a window, in whole percent: `0.72` used is 28. Never below zero. */
+export function percentLeft(utilization: number): number {
+  return Math.max(0, Math.round(100 - usagePercent(utilization)))
 }
 
 const pad = (value: number) => String(value).padStart(2, "0")
@@ -110,32 +133,53 @@ export function resetSpellings(entry: WindowUsage, now: number): string[] {
   return []
 }
 
+function stateOf(entry: WindowUsage): "limited" | "warning" | "ok" {
+  if (entry.status === "rejected") return "limited"
+  if (entry.utilization !== null && usagePercent(entry.utilization) >= WARNING_PERCENT) return "warning"
+  return "ok"
+}
+
 function rank(entry: WindowUsage): number {
   if (entry.status === "rejected") return 1000
   if (entry.utilization === null) return -1
   return usagePercent(entry.utilization)
 }
 
-/** The window an account's line is about, or undefined when none is current. */
+/** The most pressing current window, refused first, else the fullest; undefined when none is current. */
 export function pressingWindow(
   windows: ReadonlyMap<string, WindowUsage>,
   now: number,
+  except?: string,
 ): [string, WindowUsage] | undefined {
   let best: [string, WindowUsage] | undefined
   for (const [window, entry] of windows) {
-    if (!isReadingCurrent(entry, now)) continue
+    if (window === except || !isReadingCurrent(entry, now)) continue
     if (!best || rank(entry) > rank(best[1])) best = [window, entry]
   }
   return best
+}
+
+/** `5h 28% left`, `5h limited`, `7d ok`; no `entry` is a window whose reset has passed. */
+function levelText(window: string, entry: WindowUsage | undefined): string {
+  const short = shortWindowName(window)
+  const prefix = short ? `${short} ` : ""
+  if (!entry) return `${prefix}100% left`
+  if (entry.status === "rejected") return `${prefix}limited`
+  if (entry.utilization === null) return `${prefix}ok`
+  return `${prefix}${percentLeft(entry.utilization)}% left`
 }
 
 interface LineDraft {
   account: string
   window: string
   state: AccountUsageLine["state"]
+  detail: boolean
+  /** The account's name, or the blank a detail line is set in by. */
   name: string
-  /** `5h 72%`, `limited`, `7d ok`; empty on a line with no reading. */
+  /** `5h 28% left`, `7d limited`; empty on a line with no reading. */
   level: string
+  /** Drawn muted rather than in its state's colour: another window has the account refused. */
+  dimmed: boolean
   /** The plan tier, drawn only on a line with no reading. */
   tier?: string
   spellings: string[]
@@ -144,14 +188,16 @@ interface LineDraft {
 const cells = (value: string) => Array.from(value).length
 const segmentsCells = (segments: Segment[]) => segments.reduce((sum, segment) => sum + cells(segment.text), 0)
 
-function levelRole(state: AccountUsageLine["state"]): Segment["role"] {
-  return state === "limited" ? "error" : state === "warning" ? "effort" : "ok"
+function levelRole(draft: LineDraft): Segment["role"] {
+  if (draft.dimmed) return "muted"
+  return draft.state === "limited" ? "error" : draft.state === "warning" ? "effort" : "ok"
 }
 
 /**
  * Segments cut to `budget` cells: a run that does not fit is cut with `…`, and
  * a separator that does not fit ends the line, since nothing it would
- * introduce fits either.
+ * introduce fits either. A separator or the word `resets` left at the end with
+ * nothing after it goes too.
  */
 function fitSegments(segments: Segment[], budget: number): Segment[] {
   const out: Segment[] = []
@@ -169,12 +215,14 @@ function fitSegments(segments: Segment[], budget: number): Segment[] {
     }
     break
   }
+  while (out.length > 0 && [SEPARATOR, RESET_WORD].includes(out[out.length - 1].text)) out.pop()
   return out
 }
 
 /**
  * What follows the name: the level and the reset for a reading, each in its
- * own colour; the tier (while `withTier`) and `no reading yet` without one.
+ * own colour; the tier (while `withTier`) and `no reading yet` without one. A
+ * detail line starts at its level, with no separator ahead of it.
  */
 function tailSegments(draft: LineDraft, spelling: number, withTier: boolean): Segment[] {
   if (draft.state === "none") {
@@ -183,10 +231,8 @@ function tailSegments(draft: LineDraft, spelling: number, withTier: boolean): Se
     out.push({ text: SEPARATOR, role: "muted" }, { text: NO_READING_TEXT, role: "muted" })
     return out
   }
-  const out: Segment[] = [
-    { text: SEPARATOR, role: "muted" },
-    { text: draft.level, role: levelRole(draft.state) },
-  ]
+  const out: Segment[] = draft.detail ? [] : [{ text: SEPARATOR, role: "muted" }]
+  out.push({ text: draft.level, role: levelRole(draft) })
   const reset = draft.spellings[Math.min(spelling, draft.spellings.length - 1)]
   if (reset) {
     out.push({ text: SEPARATOR, role: "muted" })
@@ -199,12 +245,75 @@ function tailSegments(draft: LineDraft, spelling: number, withTier: boolean): Se
   return out
 }
 
+function readingDraft(
+  account: string,
+  name: string,
+  window: string,
+  entry: WindowUsage | undefined,
+  now: number,
+  detail = false,
+  dimmed = false,
+): LineDraft {
+  return {
+    account,
+    window,
+    state: entry ? stateOf(entry) : "ok",
+    detail,
+    name,
+    level: levelText(window, entry),
+    dimmed,
+    spellings: entry ? resetSpellings(entry, now) : [],
+  }
+}
+
+/** The drafts for one account: none, one, or a five-hour line with another window under it. */
+function accountDrafts(
+  account: string,
+  windows: ReadonlyMap<string, WindowUsage> | undefined,
+  known: KnownAccounts,
+  now: number,
+  width: number,
+): LineDraft[] {
+  const name = truncate(account, Math.max(1, Math.floor(width / 2)))
+  const fiveHour = windows?.get(FIVE_HOUR_WINDOW)
+  const current = fiveHour && isReadingCurrent(fiveHour, now) ? fiveHour : undefined
+  // A five-hour window that is over is a fresh one, for an account this
+  // install runs; one only the old readings remember is not listed.
+  const rolled = fiveHour !== undefined && !current && known.has(account)
+  if (current || rolled) {
+    const other = windows ? pressingWindow(windows, now, FIVE_HOUR_WINDOW) : undefined
+    const otherState = other ? stateOf(other[1]) : "ok"
+    const drafts = [readingDraft(account, name, FIVE_HOUR_WINDOW, current, now, false, otherState === "limited")]
+    if (other && otherState !== "ok") {
+      const indent = " ".repeat(Math.min(MAX_DETAIL_INDENT, cells(name) + cells(SEPARATOR)))
+      drafts.push(readingDraft(account, indent, other[0], other[1], now, true))
+    }
+    return drafts
+  }
+  const pressing = windows ? pressingWindow(windows, now) : undefined
+  if (pressing) return [readingDraft(account, name, pressing[0], pressing[1], now)]
+  if (!known.has(account)) return []
+  return [
+    {
+      account,
+      window: "",
+      state: "none",
+      detail: false,
+      name,
+      level: "",
+      dimmed: false,
+      tier: known.get(account)?.tier,
+      spellings: [],
+    },
+  ]
+}
+
 /**
- * Every account with a current reading or a registration, alphabetically, each
- * laid out for `width`. The reset is spelt the same way on every line, the
- * widest spelling in `resetSpellings` that fits all of them, so the column
- * reads alike; a line with no reading gives up its tier before it is cut, and
- * a line that fits nothing else is cut.
+ * Every account with a reading or a registration, alphabetically, each laid out
+ * for `width`. The reset is spelt the same way on every line, the widest
+ * spelling in `resetSpellings` that fits all of them, so the column reads
+ * alike; a line with no reading gives up its tier before it is cut, and a line
+ * that fits nothing else is cut.
  */
 export function accountUsageLines(
   usage: AccountUsage,
@@ -214,39 +323,7 @@ export function accountUsageLines(
 ): AccountUsageLine[] {
   const drafts: LineDraft[] = []
   const names = [...new Set([...usage.keys(), ...known.keys()])].sort()
-  for (const account of names) {
-    const name = truncate(account, Math.max(1, Math.floor(width / 2)))
-    const windows = usage.get(account)
-    const pressing = windows ? pressingWindow(windows, now) : undefined
-    if (!pressing) {
-      if (!known.has(account)) continue
-      drafts.push({
-        account,
-        window: "",
-        state: "none",
-        name,
-        level: "",
-        tier: known.get(account)?.tier,
-        spellings: [],
-      })
-      continue
-    }
-    const [window, entry] = pressing
-    const state: AccountUsageLine["state"] =
-      entry.status === "rejected"
-        ? "limited"
-        : entry.utilization !== null && usagePercent(entry.utilization) >= WARNING_PERCENT
-          ? "warning"
-          : "ok"
-    const short = shortWindowName(window)
-    const level =
-      state === "limited"
-        ? "limited"
-        : entry.utilization === null
-          ? `${short ? `${short} ` : ""}ok`
-          : `${short ? `${short} ` : ""}${Math.round(usagePercent(entry.utilization))}%`
-    drafts.push({ account, window, state, name, level, spellings: resetSpellings(entry, now) })
-  }
+  for (const account of names) drafts.push(...accountDrafts(account, usage.get(account), known, now, width))
   const budget = (draft: LineDraft) => Math.max(0, width - cells(draft.name))
   // The reset's spelling is decided over the lines that have one; a line with
   // no reading has nothing to spell and does not move the column.
@@ -266,7 +343,8 @@ export function accountUsageLines(
       account: draft.account,
       window: draft.window,
       state: draft.state,
-      segments: [{ text: draft.name, role: "agent" }, ...fitSegments(tail, budget(draft))],
+      detail: draft.detail,
+      segments: [{ text: draft.name, role: draft.detail ? "muted" : "agent" }, ...fitSegments(tail, budget(draft))],
     }
   })
 }

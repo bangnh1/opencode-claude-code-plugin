@@ -8427,3 +8427,155 @@ parent first, GitHub Release created after. The maintainer's own clash went
 away the same turn: `~/.config/opencode/skills/herdr/SKILL.md` was an older
 copy of `~/.claude/skills/herdr/SKILL.md` (a strict subset), and syncing it
 makes the bridge drop it as identical, silently.
+
+## What is left of each account's five-hour window, live (2026-10-25)
+
+h #g266. The maintainer asked for "a live percentage on every account how much %
+is left of the 5-hour rolling if that is possible in addition.. and usefull", and
+"eveyrthing in accounts should be live also changing as things change".
+
+### The number was already in every event, unread
+
+Until now the sidebar could only say `5h ok` for an account with headroom,
+because the top level of a `rate_limit_event` carries a `utilization` only once a
+window nears its cap (h #g244). The 2.1.293 bundle's zod schema documents an
+`@internal` field beside it, `unifiedWindows`: every subscription window's own
+`{utilization, resetsAt}` read off the `anthropic-ratelimit-unified-*` headers,
+tracked "on every observation", with an event emitted "when a window's rounded
+percentage or reset time moves, not only on status transitions", and absent for
+API-key, Bedrock and Vertex sessions. Both installed CLIs carry it (2.1.288 and
+2.1.293), so no first version is claimed. Measured live on 2.1.293, one haiku
+call on the `default` account: an `allowed` event whose top level had no
+`utilization` carried `unifiedWindows: {five_hour: {utilization: 0.26}, seven_day:
+{utilization: 0.53}}`.
+
+### What changed
+
+- `parseRateLimitEvent` (`src/cli-events.ts`) reads it into `windows`, dropping
+  any entry without a finite, non-negative utilization.
+- `recordRateLimitObservation` (`src/account-usage.ts`) replaces the single-window
+  write in the stream parser and writes every window in one store write.
+  `usageReadingsFromObservation` decides each reading: the limiting window takes
+  the top-level status, and the top-level utilization and reset when present,
+  else its own from `windows`; every other listed window is `allowed`, except a
+  refusal from an earlier event that is still current while the window reads at
+  or past its cap, because an event names one limiting window and two can be out
+  at once. Each window's `noted` carries over as before.
+- The sidebar line (`src/account-sidebar.ts`) is about the five-hour window
+  whenever the store has one, in percent LEFT: `appical · 5h 28% left · resets
+  18:00`. A five-hour reading whose reset has passed is a fresh window, `5h 100%
+  left` with no reset time. Any other window refused or at 75% used or more gets a
+  second line set in under the level (`7d limited · resets 10-30 12:00`), and while
+  it is refused the five-hour level is drawn muted: a full five-hour window is no
+  room to work in when the week is spent. Without a five-hour reading (the
+  interactive transport records only a refusal) the old choice stands, now also
+  in percent left. `ok` stays for a reading without a number. A reset that does not
+  fit the row takes the word `resets` with it rather than leave it hanging.
+- `createAccountUsageReader` takes a clock, which fixed a test that read a
+  fixture dated 2026-10-17 through `Date.now()` and had started failing on the
+  base commit once that reading aged past `USAGE_READING_MAX_AGE_MS`.
+
+"Live" needed no new mechanism: the sidebar already re-reads the store every
+1.5 s (every second while something runs) and the reader hands back the same map
+while the file is unchanged. What made it look frozen was the data, not the
+clock.
+
+### A consequence worth knowing
+
+The seven-day window now has readings while it is not the limiting one, so its
+`usageWarnThresholds` notes fire too: on the maintainer's `default` account at
+53% of its week, the next served turn says so once. `usageSwitchAt` applies to it
+the same way. This was already the documented contract ("each threshold once per
+account per window"); before, the data to keep it was missing.
+
+### Limits
+
+Readings come only from turns this machine runs, so use on claude.ai or another
+machine shows on the next local turn. The interactive transport still gets no
+event. `unifiedWindows` is `@internal`, so a CLI that drops it falls back to the
+old `ok` behaviour rather than breaking.
+
+Tests: `test/account-usage.test.ts` (the observation rules and the one-write
+recorder), `test/account-usage-stream.test.ts` (a fake CLI sending
+`unifiedWindows` through a real `doStream`), `test/account-sidebar.test.ts`
+(rewritten for percent left, the fresh window, the detail line, the muted level
+and the width). Suite 1899 of 1899. An earlier run failed once in
+`test/background-running-count.test.ts` ("a background task dispatch reaches
+Claude with the line, once"), which passed three reruns in isolation and touches
+nothing changed here.
+
+## Interrupts on opencode 2.1.4: the plugin stops, `resume=true` restarts (2026-10-25)
+
+h #g267. The maintainer reported "when hitting interupt i need to hit it twice
+right but still does nothing i belive we had this bug in opencode 1 and fixed it
+opencode 2 has this bug it seems". The last live abort measurement was on
+opencode 1.18.35 (h #g219) and the V2 parity audit on 2.0.31 (h #g253); the 2.1.3
+sweep did not touch interrupts (h #g264). Nothing in `src/` changed.
+
+### How it was measured
+
+A build of the plugin with three temporary INFO probes (doStream entry with
+whether a signal came and whether it had already fired, `stopOnCancel`'s
+`cancel`, and every `session.execution.*` event `followSessionEvents` saw),
+loaded into a private `opencode serve` of 2.1.4 under scratch XDG dirs, Claude
+Code 2.1.293 on haiku through the `default` account. The `appical` account was
+out of its five-hour window, which is why the first attempt, a subagent on it,
+returned only the usage-limit note. Driven over the V2 API, then through the real
+TUI under `expect` (Esc, a second, Esc).
+
+### What was measured
+
+- **2.1.4 calls `doStream` with no `abortSignal`**, on every call, titles
+  included. Everything (h #g219)'s V1 measurement leaned on the signal for
+  arrives here as a cancel of the returned stream instead, which `stopOnCancel`
+  turns into the plugin's own signal, so the handlers downstream are the same.
+- **Mid-reply**: `cancel()`, then `abort signal received mid-turn`, the CLI's
+  `error_during_execution` 6 ms later, `interrupt sent for aborted turn`, and
+  `session.execution.interrupted` (`reason: "user"`) after it.
+- **During the prologue** (the TUI's Esc Esc a second after submitting):
+  `abort signal received before content, closing stream immediately`, then the
+  interrupt.
+- **At a parked proxied `bash`** (`sleep`): no cancel, as on 2.0.31 (h #g253);
+  the event alone, then `opencode stopped the turn at a proxy tool boundary;
+  releasing pending calls`, the call rejected, the CLI interrupted, and opencode
+  killed the shell. Same through the TUI.
+- **During a foreground subagent** whose child was in a parked `sleep`: one
+  interrupt of the parent produced `interrupted` for the parent and then the
+  child, each released and interrupted, and the child's shell died.
+- **The TUI's request is `POST /api/session/{id}/interrupt?resume=true`**, sent
+  on the second Esc only, and only while its `session.interrupt` command is
+  enabled: the TUI reads the session as `running`, the prompt has focus, no
+  overlay is open. `resume` is a query parameter; a body `{"resume":true}` is
+  ignored, which is why the first API attempt that sent one was a plain
+  interrupt.
+- **`resume=true` delivers the queued prompts at once.** With a second prompt
+  posted while the call was parked (`delivery: "steer"`), the interrupt ended the
+  execution, the plugin stopped the turn correctly, and a new execution started
+  11 ms later and answered the queued prompt. To the operator that is an
+  interrupt after which the session is still running.
+
+### What the maintainer's own data says
+
+`opencode.db` keeps an `idle` row with `outcome: "interrupted"` for every
+execution that a stop ended. In the 36 hours before the report there were two,
+both in one session: 12:39:38 UTC, in the same millisecond as a model switch from
+`appical` to `default`, and 12:52:40, with the maintainer's `?` delivered 156 ms
+later, which is the shape of a queued prompt released by `resume=true` rather
+than of a message typed after the press. No other press in that window ended an
+execution. The plugin log had rotated past both (5 MB files, about an hour
+each), and `opencode.log` records only event streams and non-2xx answers, so a
+successful interrupt leaves no line there; the one interrupt in it, a 503 at
+16:57:38, was the TUI quitting, every watcher stopping in the same millisecond.
+
+So the only interrupts that landed did stop work the plugin could see, and the
+one that looked like nothing happened most likely restarted on a queued prompt.
+A press that never reaches the server (the command disabled, the prompt
+unfocused) is the TUI's and leaves no trace anywhere, so it was not ruled out.
+
+### If it happens again
+
+Note what was running and whether a message was queued. Then look in the plugin
+log, within the hour, for `abort signal received`, `opencode stopped the turn`
+and `interrupt sent for aborted turn`, and in `opencode.db` for the session's
+`idle` rows. Neither line and no `interrupted` row means the press never reached
+the server.

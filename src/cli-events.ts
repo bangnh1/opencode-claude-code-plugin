@@ -46,6 +46,31 @@ export interface RateLimitInfo {
   overageStatus?: string
   overageResetsAt?: number
   overageDisabledReason?: string
+  /**
+   * Every subscription window's own reading, as the CLI read it off the
+   * response headers: window name to `{utilization, resetsAt}` (a fraction and
+   * unix seconds, the same units as the fields above). An `@internal` field of
+   * 2.1.293's schema, documented there as "both windows are tracked on every
+   * observation, and events are emitted when a window's rounded percentage or
+   * reset time moves", and absent for API-key, Bedrock and Vertex sessions.
+   * The top-level fields describe only the window that limits the account, and
+   * carry no `utilization` while it has headroom (h #g244), which is why the
+   * sidebar could say `ok` and never a number until this was read.
+   */
+  windows?: Record<string, { utilization: number; resetsAt?: number }>
+}
+
+function parseUnifiedWindows(value: unknown): RateLimitInfo["windows"] {
+  if (!isRecord(value)) return undefined
+  const out: NonNullable<RateLimitInfo["windows"]> = {}
+  for (const [window, raw] of Object.entries(value)) {
+    if (!isRecord(raw)) continue
+    const utilization = num(raw.utilization)
+    if (utilization === undefined || utilization < 0) continue
+    const resetsAt = num(raw.resetsAt)
+    out[window] = resetsAt === undefined ? { utilization } : { utilization, resetsAt }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**
@@ -92,6 +117,7 @@ export function parseRateLimitEvent(msg: ClaudeStreamMessage): RateLimitInfo | n
   if (msg.type !== "rate_limit_event") return null
   const info = (msg as { rate_limit_info?: unknown }).rate_limit_info
   if (!isRecord(info)) return null
+  const windows = parseUnifiedWindows(info.unifiedWindows)
   return {
     status: str(info.status),
     rateLimitType: str(info.rateLimitType),
@@ -101,6 +127,7 @@ export function parseRateLimitEvent(msg: ClaudeStreamMessage): RateLimitInfo | n
     overageStatus: str(info.overageStatus),
     overageResetsAt: num(info.overageResetsAt),
     overageDisabledReason: str(info.overageDisabledReason),
+    ...(windows ? { windows } : {}),
   }
 }
 
