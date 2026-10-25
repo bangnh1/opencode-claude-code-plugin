@@ -51,6 +51,7 @@ import {
   ensureProcessExitCleanup,
   releaseParkedProxyCallsForSession,
 } from "./session-manager.js"
+import { defineOwnRelayMember, openRelayFollower, relaySessionEvent } from "./session-event-relay.js"
 import { readBundledSkillInfos } from "./skill-bridge.js"
 import { logStartupDiagnostics } from "./startup-diagnostics.js"
 import type { ClaudeCodeProviderSettings } from "./types.js"
@@ -351,10 +352,7 @@ export function stoppedSessionIdV2(event: V2Event | undefined): string | undefin
 }
 
 /**
- * One subscription per `setup`, so one per location (opencode 2 sets a plugin
- * up once per location, all in one process; measured on 2.0.31 for the project
- * and the home directory, h #g253), and each can see the same event: every
- * action here is idempotent. It does three things:
+ * This copy's own handling of one session event, every action idempotent:
  *   - feeds the run-state map `fetchSessionRunState` answers from on a host
  *     with no status route, which is what lets the proxy deadline guard keep a
  *     call opencode is still serving (h #g27) and settles a background task
@@ -362,25 +360,51 @@ export function stoppedSessionIdV2(event: V2Event | undefined): string | undefin
  *   - releases a deleted session's `claude` state, as V1's `event` hook does;
  *   - releases a stopped session's parked proxy calls, as V1's abort does.
  */
+function handleSessionEventHere(event: V2Event | undefined): void {
+  noteSessionRunEvent(event)
+  const deleted = deletedSessionIdV2(event)
+  if (deleted) {
+    const released = deleteActiveProcessesForSession(deleted)
+    if (released.length > 0) {
+      log.info("released claude state for deleted session", { sessionID: deleted, released })
+    }
+    return
+  }
+  const stopped = stoppedSessionIdV2(event)
+  if (stopped) releaseParkedProxyCallsForSession(stopped)
+}
+
+let closeOwnFeed: (() => void) | undefined
+defineOwnRelayMember({
+  handle: (event) => handleSessionEventHere(event as V2Event | undefined),
+  feedOpened: () => {
+    closeOwnFeed ??= openSessionRunEventFeed()
+  },
+  feedClosed: () => {
+    const close = closeOwnFeed
+    closeOwnFeed = undefined
+    close?.()
+  },
+})
+
+/**
+ * One subscription per `setup`, so one per location (opencode 2 sets a plugin
+ * up once per location, all in one process; measured on 2.0.31 for the project
+ * and the home directory, h #g253), and each can see the same event. Every
+ * event goes to every copy of the plugin in the process (`relaySessionEvent`),
+ * not only this one: opencode 2 disposes a reloaded copy's setup and keeps
+ * serving turns from it (h #g268), so the copy whose subscription is alive is
+ * often not the copy that owns the `claude` processes.
+ */
 export async function followSessionEvents(
   subscribe: (options?: { signal?: AbortSignal }) => AsyncIterable<V2Event>,
   signal: AbortSignal,
 ): Promise<void> {
-  const closeFeed = openSessionRunEventFeed()
+  const closeFollower = openRelayFollower()
   try {
     for await (const event of subscribe({ signal })) {
       if (signal.aborted) break
-      noteSessionRunEvent(event)
-      const deleted = deletedSessionIdV2(event)
-      if (deleted) {
-        const released = deleteActiveProcessesForSession(deleted)
-        if (released.length > 0) {
-          log.info("released claude state for deleted session", { sessionID: deleted, released })
-        }
-        continue
-      }
-      const stopped = stoppedSessionIdV2(event)
-      if (stopped) releaseParkedProxyCallsForSession(stopped)
+      relaySessionEvent(event)
     }
   } catch (err) {
     if (!signal.aborted) {
@@ -390,7 +414,7 @@ export async function followSessionEvents(
       )
     }
   } finally {
-    closeFeed()
+    closeFollower()
   }
 }
 
