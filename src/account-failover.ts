@@ -758,6 +758,12 @@ export function clearAccountFailoverQuestions(sessionKey: string): void {
   }
 }
 
+/** Whether this key's next turn carries the answer to an account-switch form. */
+export function hasAccountFailoverQuestions(sessionKey: string): boolean {
+  const prefix = `${sessionKey}${KEY_SEPARATOR}`
+  return [...pendingQuestions.keys()].some((key) => key.startsWith(prefix))
+}
+
 function describeReset(resetsAt: number | undefined): string | undefined {
   return formatResetsAt(resetsAt)
 }

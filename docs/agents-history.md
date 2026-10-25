@@ -8669,3 +8669,82 @@ and the GitHub Release created after. The main checkout's `dist` was rebuilt
 the same turn. The relay only helps once the FIRST copy in a process carries
 it, so it takes one opencode restart to be in force. The maintainer chose
 "Every session" for auto-apply, which is the next piece of work (h #g269).
+
+## A rebuild applies without a restart on opencode 2 (2026-10-25)
+
+h #g269. Asked after h #g268 whether to build auto-apply, with three options
+(not now, new sessions only, every session), the maintainer chose "Every
+session".
+
+### The constraint that shaped it
+
+opencode 2.1.4 keeps every turn on the language model the FIRST copy's `sdk`
+hook built (h #g268), and each copy is its own module: its `claude` children,
+their parked proxy calls, its forms and the Claude sessions it remembers live in
+that copy only. So the first copy's model cannot simply call the newest copy's
+code: the conversation has to move too. It moves the way a restart already
+moves it. The old copy stops its idle `claude` and keeps the resume record
+(`src/session-resume-store.ts`), and the new copy's first turn `--resume`s from
+it.
+
+A strictly per-session move was the first design and was dropped before code:
+when a parent's `task` call names a model, the claim its child's first turn
+picks up (`src/task-model.ts`) lives in the parent's copy, so a child landing on
+a newer copy would lose it mid-task. Hence the two rules in
+`src/plugin-copies.ts`: the process switches to the newest live copy at the
+first turn that finds every OTHER copy quiet (no turn in flight, no proxied
+call, no unclaimed child model, no routed turn with an open stream), and a
+session an older copy still holds (a turn in flight, a parked call, an open
+form) is finished there. Forms are per-session holds rather than part of
+"quiet", so an unanswered form in a forgotten session cannot keep every other
+session on an old build. The routed-turn count closes a race the copies' own
+`quiet` cannot see: a turn's prologue runs for seconds before its `claude` is
+marked as writing.
+
+### Measured live
+
+A private `opencode serve` of 2.1.4, scratch XDG dirs, the build copied into a
+`file://` plugin directory, haiku on the `appical` account. Each "rebuild"
+changed the copy's version and the `doStream starting` log text (`LIVE2`,
+`LIVE3`), so the log names the copy that served every turn.
+
+- Turn 1 on `live.1`. Rebuild to `live.2`, re-imported within a second. Turn 2,
+  same session: `switched to the newest plugin build` (live.1 to live.2),
+  `handed claude sessions to another copy of the plugin`, `resuming the claude
+  session from before the restart instead of replaying it`, `doStream starting
+  LIVE2`, and `a disposed plugin build left the process` for live.1. The reply
+  was the word the session had been told to remember on live.1. A new session
+  ran on `LIVE2` too.
+- A proxied `bash` (`sleep 25`) parked on live.2, then a rebuild to `live.3`.
+  The continuation carrying the tool result ran on `LIVE2`, the holder, and
+  resolved its own pending call. The next turn switched to live.3, resumed, and
+  live.2 left the process. One `claude` child was left, and no reply carried a
+  restart note.
+
+The first run of that second case failed, which is why a disposed copy keeps its
+provider plans now: live.2's dispose had dropped them, so the holder could not
+build its model, the turn fell back to the first copy, which replayed the
+conversation in a fresh `claude` (the answer was right, the cost was not) and
+left live.2's call parked, which then held the switch back. A test pins it and
+fails without the fix.
+
+The resume NOTICE says "from before the restart" on a hand-over too, because a
+hand-over is that path; NOTICE never toasts, so it was left as is.
+
+### Limits
+
+- It takes one restart to start: the first copy in the process has to carry the
+  routing. A process that first loaded an older build behaves as before, and
+  its restart note stays true.
+- The registry key is a contract between builds (`copies/v1`). It may only
+  grow.
+- What a switch loses is what a restart loses: the todo ledger, a child's
+  explicit model after its first turn, the background collect ledger.
+- With `resumeAfterRestart: false` a moved conversation replays instead of
+  resuming, exactly as after a restart.
+- Not measured: whether opencode 2 re-imports an npm-installed plugin when its
+  package cache changes, so the skill only claims it for `file://` installs.
+
+Checks: `npm run typecheck`, `npm test` (1925/1925; an earlier full run had two
+timing failures in `background-running-count` and `process-lifecycle`, which
+passed three isolated reruns each and the next full run), `npm run build`.

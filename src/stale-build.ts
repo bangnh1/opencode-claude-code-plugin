@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 
 import { formatLocalMinute } from "./cli-events.js"
 import { log } from "./logger.js"
+import { processLoadedBuild } from "./plugin-copies.js"
 import { pluginVersion } from "./startup-diagnostics.js"
 
 /**
@@ -187,6 +188,13 @@ export interface StaleBuildIo {
    * runtime-built and redacted out of a diagnostic bundle.
    */
   warn?: (data: Record<string, unknown>) => void
+  /**
+   * Whether another copy this process loaded was imported from exactly this
+   * build. opencode 2 re-imports a rebuilt plugin and the newest copy takes
+   * over at the next quiet moment (`src/plugin-copies.ts`, h #g269), so a build
+   * already loaded here is no reason to restart.
+   */
+  loadedElsewhere?: (onDisk: OnDiskBuild) => boolean
 }
 
 export interface StaleBuildWatch {
@@ -220,6 +228,11 @@ export function createStaleBuildWatch(io: StaleBuildIo): StaleBuildWatch {
   const warned = new Set<string>()
   let checkedAt: number | undefined
   let cached: StaleBuild | null = null
+  let cachedOnDisk: OnDiskBuild | undefined
+  // In memory and cheap, so asked again on every check, throttled or not: the
+  // copy that loaded the rebuild registers a moment after the file changes.
+  const loadedHere = (onDisk: OnDiskBuild | undefined) =>
+    onDisk !== undefined && io.loadedElsewhere?.(onDisk) === true
 
   const read = (): StaleBuildStatus => {
     let onDisk: OnDiskBuild | undefined
@@ -243,22 +256,25 @@ export function createStaleBuildWatch(io: StaleBuildIo): StaleBuildWatch {
     },
     check(): StaleBuild | null {
       const now = io.now()
-      if (checkedAt !== undefined && now - checkedAt < throttleMs) return cached
+      if (checkedAt !== undefined && now - checkedAt < throttleMs) {
+        return cached && !loadedHere(cachedOnDisk) ? cached : null
+      }
       checkedAt = now
       const status = read()
-      cached = status.stale
-      if (status.stale && status.onDisk) {
+      cachedOnDisk = status.onDisk
+      cached = status.stale && loadedHere(status.onDisk) ? null : status.stale
+      if (cached && status.onDisk) {
         // One WARN per on-disk identity: a second rebuild is news, the same
         // one seen on the next turn is not. It reaches stderr and a log file
         // that is off by default, which is why the note and the doctor row
         // exist as well.
-        const identity = `${status.stale.kind}:${status.onDisk.version}:${status.onDisk.mtimeMs}:${status.onDisk.size}`
+        const identity = `${cached.kind}:${status.onDisk.version}:${status.onDisk.mtimeMs}:${status.onDisk.size}`
         if (!warned.has(identity)) {
           warned.add(identity)
           warn({
-            kind: status.stale.kind,
-            loadedVersion: status.stale.loadedVersion,
-            onDiskVersion: status.stale.onDiskVersion,
+            kind: cached.kind,
+            loadedVersion: cached.loadedVersion,
+            onDiskVersion: cached.onDiskVersion,
             path: io.loaded.entryPath,
           })
         }
@@ -342,6 +358,7 @@ export function staleBuildWatch(): StaleBuildWatch {
       loaded,
       readOnDisk: () => readOnDiskBuild(loaded.entryPath),
       now: () => Date.now(),
+      loadedElsewhere: (onDisk) => processLoadedBuild({ entryPath: loaded.entryPath, ...onDisk }),
     })
   }
   return watch
