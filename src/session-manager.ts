@@ -39,6 +39,7 @@ import { isReadOnlyPermissionMode } from "./permission-presets.js"
 import { planClaudeSpawn } from "./windows-spawn.js"
 import type { ReasoningEffort } from "./types.js"
 import { dispatchSideQuestionResponse, isSideQuestionPending } from "./side-question.js"
+import { noteRelayMemberServing } from "./session-event-relay.js"
 
 export interface ActiveProcess {
   proc: ChildProcess
@@ -612,6 +613,9 @@ export function processBelongsToAnotherAccount(
 export function setActiveProcess(key: string, ap: ActiveProcess): void {
   cancelIdleProcessEviction(key)
   activeProcesses.set(key, ap)
+  // This copy owns a `claude` process now, so it must hear opencode 2's
+  // session events even after a reload disposes its own subscription (h #g268).
+  noteRelayMemberServing()
 }
 
 /**
@@ -1176,8 +1180,7 @@ export function spawnClaudeProcess(
     settleTurn(ap)
     lineEmitter.emit("close")
   })
-  cancelIdleProcessEviction(sessionKey)
-  activeProcesses.set(sessionKey, ap)
+  setActiveProcess(sessionKey, ap)
 
   // Baseline 'error' listener so Node doesn't throw when the process emits
   // an error between stream turns (no per-stream listener attached then).

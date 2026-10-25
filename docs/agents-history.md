@@ -8588,3 +8588,75 @@ log, within the hour, for `abort signal received`, `opencode stopped the turn`
 and `interrupt sent for aborted turn`, and in `opencode.db` for the session's
 `idle` rows. Neither line and no `interrupted` row means the press never reached
 the server.
+
+## A reload on opencode 2 left the serving copy deaf to stops (2026-10-25)
+
+h #g268. The maintainer asked, about the stale-build note ("restart opencode:
+plugin 0.62.0 is on disk, but this opencode process still runs 0.61.2"): "is it
+hard to build an auto-reload or auto-apply instead of seeing this? after an
+update is there?"
+
+### What opencode 2.1.4 does with a rebuilt plugin
+
+Measured in a private `opencode serve` of 2.1.4 under scratch XDG dirs, with a
+copy of the build as a `file://` plugin. Changing the copy's `package.json`
+version and appending a comment to `dist/index.js` is a second `loading
+plugin` within a second, the new copy is set up (`plugin ready` with the new
+version) and the old copy's setup disposed. opencode's own log shows the
+watcher on the entry file and a `plugin reconciliation` pass. But turns keep
+running the language model the FIRST copy's `aisdk` `sdk` hook built: after
+changing the `doStream starting` log text in the copy on disk, both an old
+session and one created after the reload logged the old text. So the
+stale-build note is still true on opencode 2, and auto-apply is not something
+opencode does for a provider.
+
+### The defect it exposed
+
+The old copy owns the `claude` processes, their parked proxy calls and their
+run state, and its event subscription is what disposal ends. Measured before
+the fix: a turn, a rebuild, a proxied `bash` (`sleep 53`), then
+`POST /api/session/{id}/interrupt?resume=true`. The new copy's subscription
+heard `session.execution.interrupted` and found nothing of its own to stop; the
+old copy heard nothing, so no `opencode stopped the turn at a proxy tool
+boundary`, no rejected call and no CLI interrupt. opencode killed its own
+`sleep`, which is why this looks like a working stop from outside. Deleted
+sessions kept their processes the same way, and the proxy deadline guard read
+every session `unknown`. The maintainer's own opencode re-imported the plugin
+dozens of times on 2026-10-25, once per build of the main checkout (11:49,
+12:43, 12:50, 13:51, 14:24, 14:32 UTC among others), so this was live in their
+sessions most of that day. Whether it is what they saw in h #g267 cannot be
+said: the plugin log of that hour has rotated.
+
+### The fix
+
+`src/session-event-relay.ts`: one relay per process under a `Symbol.for` key on
+`globalThis`, the one place two copies of a module both reach. Every copy
+registers its own handling (`handleSessionEventHere` in `src/v2.ts`, unchanged
+in what it does), and whichever copy's subscription is alive relays each event
+to every member. A member's run-state feed opens with the first live
+subscription in the process and closes, forgetting, with the last. A copy that
+ever registered a `claude` process stays; a setup-only copy leaves with its
+last subscription, so rebuilds do not pin every copy they leave behind.
+
+The first live check of the fix failed, which a probe explained: the first copy
+never joined, because a real turn registers its process in
+`spawnClaudeProcess` with a direct `activeProcesses.set`, and only
+`setActiveProcess` had been hooked. `spawnClaudeProcess` now goes through
+`setActiveProcess`, and a test spawns a real child to pin it (it fails without
+that one line). Measured after: the reload, then the stop, logged `RELAYPROBE
+relay ... members: 2`, `opencode stopped the turn at a proxy tool boundary`,
+the rejected `bash` call and `interrupt sent for aborted turn`. Probes lived
+only in a scratch copy of the tree. The scratch runs used the `appical` account,
+because `default` was out of its five-hour window until 21:20 UTC.
+
+### Auto-apply, not built
+
+Making a rebuild apply without a restart would mean the language model the
+first copy hands opencode forwarding each new turn to the newest copy, through
+the same kind of `globalThis` registry. Each copy has its own module state
+(processes, remembered Claude session ids, parked calls, the MCP proxy server,
+usage dedup), so a switch could only happen at a turn boundary and would
+respawn and resume the session in the new copy, and the first build carrying
+the forwarder still needs one restart. Left as a question to the maintainer.
+
+Checks: `npm run typecheck`, `npm test` (1903/1903), `npm run build`.

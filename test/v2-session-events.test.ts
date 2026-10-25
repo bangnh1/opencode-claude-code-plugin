@@ -35,10 +35,18 @@ import {
   noteTurnLine,
   releaseParkedProxyCallsForSession,
   setActiveProcess,
+  spawnClaudeProcess,
   STOPPED_TURN_MESSAGE,
   type ActiveProcess,
 } from "../src/session-manager.js"
 import type { V2Event } from "../src/opencode-v2-types.js"
+import {
+  _joinForeignRelayMemberForTests,
+  _openForeignRelayFollowerForTests,
+  _resetSessionEventRelayForTests,
+  _sessionEventRelaySizeForTests,
+  relaySessionEvent,
+} from "../src/session-event-relay.js"
 import { followSessionEvents, stoppedSessionIdV2 } from "../src/v2.js"
 
 const started = (sessionID: string) => ({ type: "session.execution.started", data: { sessionID } })
@@ -376,5 +384,154 @@ test("followSessionEvents feeds the map, releases stopped and deleted sessions, 
     rejectAllPendingProxyCallsForSession(key, new Error("test cleanup"))
     dropProcess("ses_follow")
     setOpencodeClient(null)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The relay across copies of the plugin (h #g268)
+// ---------------------------------------------------------------------------
+
+/** Another copy of the plugin, as the relay sees it: what it was handed and whether its feed is open. */
+function foreignCopy(options: { throws?: boolean } = {}) {
+  const seen: unknown[] = []
+  let feed = false
+  const leave = _joinForeignRelayMemberForTests({
+    handle: (event) => {
+      seen.push(event)
+      if (options.throws) throw new Error("a broken copy")
+    },
+    feedOpened: () => (feed = true),
+    feedClosed: () => (feed = false),
+  })
+  return { seen, feedOpen: () => feed, leave }
+}
+
+test("after a reload disposes this copy's subscription, another copy's still stops its parked call and feeds its run state", async () => {
+  _resetSessionRunEventsForTests()
+  _resetSessionEventRelayForTests()
+  setOpencodeClient({})
+  const stream = pushableEvents()
+  const controller = new AbortController()
+  const { ap, writes } = parkedProcess("ses_reload")
+  const key = keyFor("ses_reload")
+  const following = followSessionEvents(stream.subscribe, controller.signal)
+  // opencode 2 sets the rebuilt copy up, then disposes this one's setup.
+  const reloaded = _openForeignRelayFollowerForTests()
+  try {
+    await settle()
+    controller.abort()
+    stream.end()
+    await following
+    assert.equal(_sessionEventRelaySizeForTests().followers, 1, "only the rebuilt copy's subscription is left")
+    assert.equal(_sessionEventRelaySizeForTests().members, 1, "a copy that owns a process stays")
+
+    // What the rebuilt copy's subscription now receives.
+    relaySessionEvent(started("ses_reload"))
+    assert.equal(await fetchSessionRunState("ses_reload"), "busy", "this copy's deadline guard still sees the session")
+
+    const handle = makeCall("bash")
+    queuePendingProxyCall(key, handle.call)
+    relaySessionEvent(ended("ses_reload", "interrupted", "user"))
+    await assert.rejects(handle.promise, new RegExp(STOPPED_TURN_MESSAGE))
+    assert.equal(writes.length, 1)
+    assert.deepEqual(JSON.parse(writes[0]!).request, { subtype: "interrupt" }, "the claude turn is interrupted")
+    noteTurnLine(ap, JSON.stringify({ type: "result", subtype: "error_during_execution" }))
+
+    relaySessionEvent({ type: "session.deleted", data: { sessionID: "ses_reload" } })
+    assert.equal(getActiveProcess(key), undefined, "a deleted session's process is released")
+
+    reloaded()
+    assert.equal(await fetchSessionRunState("ses_reload"), "unknown", "with no subscription left, nothing is trusted")
+  } finally {
+    reloaded()
+    controller.abort()
+    rejectAllPendingProxyCallsForSession(key, new Error("test cleanup"))
+    dropProcess("ses_reload")
+    setOpencodeClient(null)
+    _resetSessionEventRelayForTests()
+  }
+})
+
+test("every copy gets every event, a copy's feed follows the process's subscriptions, and a broken copy costs the others nothing", async () => {
+  _resetSessionRunEventsForTests()
+  _resetSessionEventRelayForTests()
+  setOpencodeClient({})
+  const broken = foreignCopy({ throws: true })
+  const other = foreignCopy()
+  const stream = pushableEvents()
+  const controller = new AbortController()
+  assert.equal(other.feedOpen(), false, "no subscription yet")
+  const following = followSessionEvents(stream.subscribe, controller.signal)
+  try {
+    await settle()
+    assert.equal(other.feedOpen(), true, "this copy's subscription opens every copy's feed")
+    stream.push(started("ses_many"))
+    await settle()
+    assert.deepEqual(other.seen, [started("ses_many")])
+    assert.equal(broken.seen.length, 1)
+    assert.equal(await fetchSessionRunState("ses_many"), "busy", "the broken copy did not stop this one")
+
+    const late = foreignCopy()
+    assert.equal(late.feedOpen(), true, "a copy joining while a subscription is live opens at once")
+    late.leave()
+    assert.equal(late.feedOpen(), false)
+  } finally {
+    controller.abort()
+    stream.end()
+    await following
+    assert.equal(other.feedOpen(), false, "the last subscription closes every copy's feed")
+    broken.leave()
+    other.leave()
+    setOpencodeClient(null)
+    _resetSessionEventRelayForTests()
+  }
+})
+
+test("a copy that never served leaves the relay with its last subscription, and one that served stays", async () => {
+  _resetSessionRunEventsForTests()
+  _resetSessionEventRelayForTests()
+  for (const serves of [false, true]) {
+    const stream = pushableEvents()
+    const controller = new AbortController()
+    const following = followSessionEvents(stream.subscribe, controller.signal)
+    if (serves) parkedProcess("ses_member")
+    try {
+      await settle()
+      assert.deepEqual(_sessionEventRelaySizeForTests(), { members: 1, followers: 1 })
+    } finally {
+      controller.abort()
+      stream.end()
+      await following
+    }
+    assert.deepEqual(
+      _sessionEventRelaySizeForTests(),
+      { members: serves ? 1 : 0, followers: 0 },
+      serves ? "a copy with a process stays for the copy that follows" : "a setup-only copy is not pinned",
+    )
+    dropProcess("ses_member")
+  }
+  _resetSessionEventRelayForTests()
+})
+
+test("a copy whose turn spawned its claude process stays in the relay too", async () => {
+  // A real turn registers its process through `spawnClaudeProcess`, not a
+  // direct `setActiveProcess`; the live reload check found that path missing.
+  _resetSessionRunEventsForTests()
+  _resetSessionEventRelayForTests()
+  const key = keyFor("ses_spawned")
+  const stream = pushableEvents()
+  const controller = new AbortController()
+  const following = followSessionEvents(stream.subscribe, controller.signal)
+  const spawned = spawnClaudeProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], process.cwd(), key)
+  try {
+    await settle()
+    controller.abort()
+    stream.end()
+    await following
+    assert.deepEqual(_sessionEventRelaySizeForTests(), { members: 1, followers: 0 })
+  } finally {
+    deleteActiveProcess(key)
+    spawned.proc.kill()
+    _resetSessionEventRelayForTests()
   }
 })
