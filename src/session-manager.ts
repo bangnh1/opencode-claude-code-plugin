@@ -1183,19 +1183,68 @@ export function spawnIdentity(key: string): string {
 }
 
 /**
+ * Whether a key's child or conversation is in the middle of a turn: a proxied
+ * call parked in it, a recovery completion owed to it, an open plan-mode
+ * question, a stream attached to its output, or a `/btw` in the air.
+ */
+function spawnHasPendingWork(key: string): boolean {
+  const active = activeProcesses.get(key)
+  return !!(
+    getPendingProxyCalls(key).length ||
+    hasExitPlanModeQuestions(key) ||
+    active?.pendingProxyCompletions?.size ||
+    (active && (active.lineEmitter.listenerCount("line") > 0 || isSideQuestionPending(active)))
+  )
+}
+
+/**
+ * `spawnIdentity` with the model name blanked too, its `@account` marker kept:
+ * one opencode conversation, agent, scope, cwd and account on any model.
+ * Undefined for compaction keys, keys of another shape, and the shared
+ * `default` affinity, which is no one conversation.
+ */
+function conversationIdentity(key: string): string | undefined {
+  const parts = spawnIdentity(key).split("::")
+  if (parts.length !== 5 || parts[2] === "compaction" || parts[3] === "default") return undefined
+  parts[1] = parts[1].replace(/^[^@]*/, "*")
+  return parts.join("::")
+}
+
+/**
+ * Another spawn of this conversation that is still inside a turn, under
+ * another model, effort, prompt cache TTL or CLI cap, or `undefined`. The
+ * caller serves the turn on it, so work in flight finishes under the settings
+ * it started with and the change applies at the first turn that finds it
+ * idle. Before this an effort or TTL change mid-turn was refused, and a model
+ * change spawned a second child beside the busy one (h #g271). Never when the
+ * requested key is itself busy: that turn is already where it belongs.
+ */
+export function findBusySpawnVariant(requestedKey: string): string | undefined {
+  const identity = conversationIdentity(requestedKey)
+  if (!identity || spawnHasPendingWork(requestedKey)) return undefined
+  for (const key of new Set([...activeProcesses.keys(), ...claudeSessions.keys()])) {
+    if (key === requestedKey || conversationIdentity(key) !== identity) continue
+    if (spawnHasPendingWork(key)) return key
+  }
+  return undefined
+}
+
+/**
  * Retire every other spawn of this conversation before deciding whether to
  * replay history: the keys `spawnIdentity` reads as the same conversation,
  * model and agent under another effort, prompt cache TTL, `maxTurns` or
- * `maxBudgetUsd`.
+ * `maxBudgetUsd`. `carryConversation: false` (`resumeAcrossModelChanges:
+ * false`) releases their Claude sessions instead of moving one over, so the
+ * new spawn replays the thread as it did before (issue #91).
  */
 export function invalidateOtherSpawnVariants(
-  baseKey: string,
-  effort?: ReasoningEffort,
+  currentKey: string,
+  options: { carryConversation?: boolean } = {},
 ): void {
   const levels: (ReasoningEffort | undefined)[] = [
     undefined, "minimal", "low", "medium", "high", "xhigh", "max",
   ]
-  const currentKey = effortSessionKey(baseKey, effort)
+  const baseKey = currentKey.replace(/::effort=[a-z]+$/, "")
   const identity = spawnIdentity(currentKey)
   // Effort siblings are named outright, so one holding nothing but a parked
   // call or an open plan-mode question is still seen. The other settings live
@@ -1214,15 +1263,12 @@ export function invalidateOtherSpawnVariants(
   ].filter((key) => key !== currentKey && spawnIdentity(key) === identity)
 
   // Refuse the transition atomically. Tool results and recovery completions
-  // still belong to the old process; they must finish under its settings.
+  // still belong to the old process; they must finish under its settings. A
+  // turn that finds one busy is served there (`findBusySpawnVariant`) before
+  // it gets here, so this is the backstop for what that scan cannot see: a
+  // key holding work with neither a child nor a conversation.
   for (const key of staleKeys) {
-    const active = activeProcesses.get(key)
-    if (
-      getPendingProxyCalls(key).length ||
-      hasExitPlanModeQuestions(key) ||
-      active?.pendingProxyCompletions?.size ||
-      (active && (active.lineEmitter.listenerCount("line") > 0 || isSideQuestionPending(active)))
-    ) {
+    if (spawnHasPendingWork(key)) {
       throw new Error(
         "Cannot change reasoning effort, prompt cache TTL, maxTurns or maxBudgetUsd while this conversation's previous claude process has pending work. Finish that work under its original settings first.",
       )
@@ -1235,9 +1281,10 @@ export function invalidateOtherSpawnVariants(
   // turn is about to use, so the spawn below resumes it under the new
   // settings; the old key is left holding nothing, so flipping back later
   // finds the conversation where it actually is.
+  const carry = options.carryConversation !== false
   for (const key of staleKeys) {
     deleteActiveProcess(key)
-    if (transferClaudeSession(key, currentKey)) {
+    if (carry && transferClaudeSession(key, currentKey)) {
       // Transferred, not released: `deleteClaudeSessionId` would clear the
       // todo ledger this conversation is still using and forget the resume
       // record the new key now owns.
