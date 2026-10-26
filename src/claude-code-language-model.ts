@@ -153,7 +153,7 @@ import {
   isClaudeThinkingDisabled,
   sessionKey,
   effortSessionKey,
-  invalidateOtherEffortSessions,
+  invalidateOtherSpawnVariants,
   transferClaudeSession,
   describeSessionKey,
 } from "./session-manager.js"
@@ -1408,9 +1408,11 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       : resolveAgentCacheTtl(this.getOpencodeAgent(options))
     // The TTL changes the spawn, so it has to be in the session key. Two
     // deliberate shape choices. It rides inside the existing context blob
-    // rather than as another `::` tail, because `invalidateOtherEffortSessions`
-    // rebuilds keys from `baseKey` plus an effort tail and a second tail would
-    // make it miss them. And it is appended only when set, so a default
+    // rather than as another `::` tail, because `spawnIdentity` (which
+    // `invalidateOtherSpawnVariants` matches siblings by) reads every blob
+    // entry past the provider and agent as a spawn setting, and a second tail
+    // would be read as part of the conversation instead. And it is appended
+    // only when set, so a default
     // install's key is byte-identical to what it was before this option
     // existed: an upgrade must not strand every live conversation's process
     // behind a key nobody will look up again.
@@ -1753,7 +1755,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       }
     }
 
-    if (!compactionMode) invalidateOtherEffortSessions(baseKey, reasoningEffort)
+    if (!compactionMode) invalidateOtherSpawnVariants(baseKey, reasoningEffort)
 
     // What this session REALLY spawns as, for the TUI's Subagents section
     // (h #g234). Written here, past every branch that answers without the CLI

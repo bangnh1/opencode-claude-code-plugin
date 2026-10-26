@@ -8757,3 +8757,61 @@ and the GitHub Release created after. A minor, because every V2 turn is now
 routed. The main checkout's `dist` was rebuilt the same turn; it is in force
 from the maintainer's next opencode restart, after which rebuilds apply on
 their own.
+
+## One child per conversation across spawn-setting changes (2026-10-26)
+
+h #g270. Issue #140 (@clementrahula, on 0.55.0 with opencode 2.0.26): an agent
+that lost its `cacheTtl` and `reasoningEffort` mid-session, or a message with
+another variant, left two `claude --print` processes serving one opencode
+session, each with its own MCP proxy, and both edited the same files in the
+same hour. The resume store held two keys for that session, differing only in
+the TTL and the effort tail. The maintainer asked to check it and devise a fix.
+
+### Why it happened
+
+The key is `cwd::model::scope::session::context=[provider, agent, ttl?,
+maxTurns=?, maxBudgetUsd=?]` with an optional `::effort=` tail. Two paths
+retire a sibling's child, and neither saw this one. `invalidateOtherEffortSessions`
+rebuilt `baseKey` plus each effort level, so a key whose TTL, `maxTurns` or
+`maxBudgetUsd` also differed had another `baseKey` and was never looked at. The
+sibling carry-over in the prologue kills a sibling's child too, but its
+signature pins the TTL and it refuses a busy sibling. So the new key replayed
+the thread into a fresh child while the old child stayed in the map, alive and
+still inside its turn. Still true on 0.63.0 when the issue was read.
+
+### The fix
+
+`spawnIdentity(key)` drops the effort tail and every context blob element past
+`[provider, agent]`. `invalidateOtherSpawnVariants` (the renamed function, same
+`(baseKey, effort)` call) scans `claudeSessions`, newest first, and
+`activeProcesses` for keys with the same identity. The effort-level enumeration
+stays in the candidate set, so a key holding only a parked call or a plan-mode
+question is still seen. The rules after that are the old ones, unchanged:
+refuse with "pending work" while any match is mid-turn, otherwise kill its
+child and transfer the conversation, so the new spawn resumes it. A TTL change
+therefore also stops replaying the thread as text.
+
+The issue's suggested fix, ending every process of the opencode session, was
+not taken. The agent is in the key on purpose (plan and build in one chat run
+as two processes, `docs/internals/how-a-turn-works.md`), and a model change has
+its own carry-over. Both stay as they were.
+
+Three tests fail with the old enumeration put back and pass with the scan: the
+TTL and cap carry, the refusal while a TTL'd child is parked in a proxied call,
+and a `doStream` turn that drops the agent's TTL and effort.
+
+### Limits
+
+- A model change while the old child is mid-turn is still refused by the
+  sibling carry-over as `sibling-still-writing`, which replays into a new child
+  beside the busy one. Same shape as this issue, different trigger.
+- A refused change stays refused until the old turn ends (finished, stopped,
+  or a proxied call reaching its deadline), as the effort refusal always has.
+  Routing that turn's continuation to the old key instead would remove the
+  error, and was not built.
+- `resumeAcrossModelChanges: false` does not stop this carry, as it never did
+  for effort, although `docs/guides/compaction-and-thinking.md` says it does.
+
+Checks: `npm run typecheck`, `npm test` (1929/1929), and `tsup` into a scratch
+directory rather than `npm run build`, because the main checkout's `dist` is
+the maintainer's live plugin and a rebuild applies on its own (h #g269).

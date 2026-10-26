@@ -1108,8 +1108,9 @@ export async function releaseIdleForHandover(sessionID?: string): Promise<string
  * holding nothing.
  *
  * Used where the same opencode conversation moves to a key it has never been
- * answered under: another reasoning effort (`invalidateOtherEffortSessions`)
- * or another model (the sibling carry-over in the turn prologue). Neither is a
+ * answered under: another reasoning effort, prompt cache TTL or CLI cap
+ * (`invalidateOtherSpawnVariants`) or another model (the sibling carry-over
+ * in the turn prologue). Neither is a
  * reason to start a new Claude conversation, because both are spawn-time
  * choices the CLI applies to a transcript it resumes.
  *
@@ -1157,20 +1158,63 @@ export function effortSessionKey(baseKey: string, effort?: ReasoningEffort): str
   return effort ? `${baseKey}::effort=${effort}` : baseKey
 }
 
-/** Retire sibling effort sessions before deciding whether to replay history. */
-export function invalidateOtherEffortSessions(
+/**
+ * A session key with every spawn-time setting taken out: the effort tail, and
+ * whatever the context blob carries after its provider and agent (the prompt
+ * cache TTL, `maxTurns=`, `maxBudgetUsd=`). Two keys with the same identity are
+ * one opencode conversation on one model and one agent, spawned differently,
+ * so at most one of them may own a live child (issue #140, h #g270). A key
+ * without a context blob (compaction, hand-built test keys) loses only its
+ * effort tail.
+ */
+export function spawnIdentity(key: string): string {
+  const parts = key.split("::")
+  if (parts.length > 1 && parts[parts.length - 1].startsWith("effort=")) parts.pop()
+  const last = parts.length - 1
+  if (parts[last].startsWith("context=")) {
+    try {
+      const context: unknown = JSON.parse(parts[last].slice("context=".length))
+      if (Array.isArray(context)) parts[last] = `context=${JSON.stringify(context.slice(0, 2))}`
+    } catch {
+      // Not a blob this plugin wrote, so it stays whole and only matches itself.
+    }
+  }
+  return parts.join("::")
+}
+
+/**
+ * Retire every other spawn of this conversation before deciding whether to
+ * replay history: the keys `spawnIdentity` reads as the same conversation,
+ * model and agent under another effort, prompt cache TTL, `maxTurns` or
+ * `maxBudgetUsd`.
+ */
+export function invalidateOtherSpawnVariants(
   baseKey: string,
   effort?: ReasoningEffort,
 ): void {
   const levels: (ReasoningEffort | undefined)[] = [
     undefined, "minimal", "low", "medium", "high", "xhigh", "max",
   ]
-  const staleKeys = levels
-    .filter((level) => level !== effort)
-    .map((level) => effortSessionKey(baseKey, level))
+  const currentKey = effortSessionKey(baseKey, effort)
+  const identity = spawnIdentity(currentKey)
+  // Effort siblings are named outright, so one holding nothing but a parked
+  // call or an open plan-mode question is still seen. The other settings live
+  // in the context blob, which cannot be enumerated, so those siblings are
+  // found by scanning the keys that hold a conversation or a child. Before
+  // this scan a TTL change landed on a key nothing looked at, and the old
+  // child kept running beside the new one (issue #140). Newest conversation
+  // first, so if more than one stale key still holds one, the one carried
+  // over is the one the operator was on last.
+  const staleKeys = [
+    ...new Set([
+      ...[...claudeSessions.keys()].reverse(),
+      ...levels.map((level) => effortSessionKey(baseKey, level)),
+      ...activeProcesses.keys(),
+    ]),
+  ].filter((key) => key !== currentKey && spawnIdentity(key) === identity)
 
   // Refuse the transition atomically. Tool results and recovery completions
-  // still belong to the old process; they must finish at its original effort.
+  // still belong to the old process; they must finish under its settings.
   for (const key of staleKeys) {
     const active = activeProcesses.get(key)
     if (
@@ -1180,17 +1224,17 @@ export function invalidateOtherEffortSessions(
       (active && (active.lineEmitter.listenerCount("line") > 0 || isSideQuestionPending(active)))
     ) {
       throw new Error(
-        "Cannot change reasoning effort while the previous effort session has pending work. Finish that work at its original effort first.",
+        "Cannot change reasoning effort, prompt cache TTL, maxTurns or maxBudgetUsd while this conversation's previous claude process has pending work. Finish that work under its original settings first.",
       )
     }
   }
   // The process has to go: effort is fixed per child (`CLAUDE_CODE_EFFORT_LEVEL`
-  // is spawn-time, h #g41). The CONVERSATION does not, and dropping it was what
-  // made every effort change replay the whole thread as text (issue #91). The
-  // id moves to the key this turn is about to use, so the spawn below resumes
-  // it at the new effort; the old key is left holding nothing, so flipping back
-  // later finds the conversation where it actually is.
-  const currentKey = effortSessionKey(baseKey, effort)
+  // is spawn-time, h #g41), and so are the TTL and the CLI caps. The
+  // CONVERSATION does not, and dropping it was what made every effort change
+  // replay the whole thread as text (issue #91). The id moves to the key this
+  // turn is about to use, so the spawn below resumes it under the new
+  // settings; the old key is left holding nothing, so flipping back later
+  // finds the conversation where it actually is.
   for (const key of staleKeys) {
     deleteActiveProcess(key)
     if (transferClaudeSession(key, currentKey)) {
