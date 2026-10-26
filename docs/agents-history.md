@@ -8815,3 +8815,11 @@ and a `doStream` turn that drops the agent's TTL and effort.
 Checks: `npm run typecheck`, `npm test` (1929/1929), and `tsup` into a scratch
 directory rather than `npm run build`, because the main checkout's `dist` is
 the maintainer's live plugin and a rebuild applies on its own (h #g269).
+
+Shipped as v0.63.1 on 2026-10-26 after the maintainer said "reply on #140
+indeed and shippit": PR #143 green on Linux and Windows, CI and Docs green on
+the merge commit before the tag, the publish verified from the Publish step's
+tail against the version document's shasum (`00ba96e3`, visible about 80 s
+after), and the GitHub Release created after. A patch, because nothing changes
+for a key that never carried a TTL or a cap. The main checkout's `dist` was
+rebuilt the same turn, and the issue was answered with the release.

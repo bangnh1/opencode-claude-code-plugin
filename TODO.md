@@ -165,6 +165,9 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-26: **done** (v0.63.1, PR #143, h #g270, issue #140): a cache TTL or CLI cap change no longer
+  leaves the old `claude` running beside the new one. Keys that differ only in spawn settings are one
+  conversation: the old child is ended and its Claude session carried over, refused while it is mid-turn.
 - 2026-10-25: **done** (v0.63.0, PR #142, h #g269): a rebuilt plugin applies without restarting opencode 2.
   The newest copy takes over at the first quiet turn, each conversation resuming its Claude session there;
   a session with work in flight finishes on its own copy first. Takes one restart to start.
