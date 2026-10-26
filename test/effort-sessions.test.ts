@@ -14,10 +14,11 @@ import {
   effortSessionKey,
   getActiveProcess,
   getClaudeSessionId,
-  invalidateOtherEffortSessions,
+  invalidateOtherSpawnVariants,
   setActiveProcess,
   setClaudeSessionId,
   sessionKey,
+  spawnIdentity,
   type ActiveProcess,
 } from "../src/session-manager.js"
 import { queuePendingProxyCall, resolvePendingProxyCallById } from "../src/proxy-broker.js"
@@ -43,7 +44,7 @@ test("effort invalidation kills the process and carries the claude session to th
   setClaudeSessionId(high, "old-high")
   storeCompressionSummary(high, "outdated summary")
   try {
-    invalidateOtherEffortSessions(base, "high")
+    invalidateOtherSpawnVariants(base, "high")
     assert.equal(getActiveProcess(high), first.active)
     assert.equal(getClaudeSessionId(high), "old-high")
     assert.equal(first.killed(), false)
@@ -51,7 +52,7 @@ test("effort invalidation kills the process and carries the claude session to th
     // Effort is fixed per child, so the PROCESS has to go. The conversation
     // does not: the id moves to the key this turn will use, so the spawn
     // resumes it at the new effort instead of replaying the thread (issue #91).
-    invalidateOtherEffortSessions(base, "low")
+    invalidateOtherSpawnVariants(base, "low")
     assert.equal(first.killed(), true)
     assert.equal(getActiveProcess(high), undefined)
     assert.equal(getClaudeSessionId(high), undefined, "the old effort key keeps no claim on it")
@@ -59,14 +60,14 @@ test("effort invalidation kills the process and carries the claude session to th
     assert.equal(getCompressionSummary(high), undefined)
 
     // Back to high: the id follows again, and the key it came from is empty.
-    invalidateOtherEffortSessions(base, "high")
+    invalidateOtherSpawnVariants(base, "high")
     assert.equal(getClaudeSessionId(low), undefined)
     assert.equal(getClaudeSessionId(high), "old-high")
 
     // A destination that already has a conversation of its own is never
     // overwritten, and the stale sibling is released rather than carried.
     setClaudeSessionId(base, "no-explicit-effort")
-    invalidateOtherEffortSessions(base, "high")
+    invalidateOtherSpawnVariants(base, "high")
     assert.equal(getClaudeSessionId(base), undefined)
     assert.equal(getClaudeSessionId(high), "old-high")
   } finally {
@@ -97,7 +98,7 @@ test("effort transition preserves an in-flight native side question", async () =
   })
   const rejected = assert.rejects(pending, /abort/i)
   try {
-    assert.throws(() => invalidateOtherEffortSessions(base, "low"), /pending work/)
+    assert.throws(() => invalidateOtherSpawnVariants(base, "low"), /pending work/)
     assert.equal(getActiveProcess(high), first.active)
     assert.equal(getClaudeSessionId(high), "aside-high")
   } finally {
@@ -132,13 +133,13 @@ for (const busy of ["proxy", "completion", "approval", "stream"] as const) {
       first.active.lineEmitter.on("line", () => {})
     }
     try {
-      assert.throws(() => invalidateOtherEffortSessions(base, "low"), /pending work/)
+      assert.throws(() => invalidateOtherSpawnVariants(base, "low"), /pending work/)
       assert.equal(getActiveProcess(high), first.active)
       assert.equal(getClaudeSessionId(high), "pending-high")
       assert.equal(first.killed(), false)
       if (busy === "approval") assert.equal(hasExitPlanModeQuestions(high), true)
       // Continuation at the original effort is not blocked or invalidated.
-      invalidateOtherEffortSessions(base, "high")
+      invalidateOtherSpawnVariants(base, "high")
       assert.equal(getActiveProcess(high), first.active)
     } finally {
       resolvePendingProxyCallById(call.toolCallId, { kind: "text", text: "cleanup" })
@@ -147,6 +148,81 @@ for (const busy of ["proxy", "completion", "approval", "stream"] as const) {
     }
   })
 }
+
+const conversationBase = (cwd: string) =>
+  sessionKey(cwd, 'claude-opus-5::tools::conversation::context=["claude-code","worker"]')
+const withSpawnSettings = (base: string, ...settings: string[]) =>
+  base.replace('"worker"]', `"worker",${settings.map((setting) => JSON.stringify(setting)).join(",")}]`)
+
+test("spawnIdentity drops effort and spawn settings and keeps what names the conversation", () => {
+  const base = conversationBase("/repo")
+  for (const key of [
+    base,
+    effortSessionKey(base, "high"),
+    withSpawnSettings(base, "1h"),
+    effortSessionKey(withSpawnSettings(base, "5m", "maxTurns=4", "maxBudgetUsd=2"), "low"),
+  ]) {
+    assert.equal(spawnIdentity(key), base, key)
+  }
+  for (const other of [
+    base.replace('"worker"', '"plan"'),
+    base.replace('"claude-code"', '"claude-code-work"'),
+    base.replace("claude-opus-5", "claude-sonnet-5"),
+    base.replace("::conversation::", "::another-conversation::"),
+    base.replace("::tools::", "::no-tools::"),
+    sessionKey("/repo", "claude-opus-5::compaction::conversation"),
+  ]) {
+    assert.notEqual(spawnIdentity(other), base, other)
+  }
+})
+
+test("a cache TTL or CLI cap change retires the old child and carries its conversation (issue #140)", () => {
+  const base = conversationBase("/ttl-carry")
+  const withTtl = effortSessionKey(withSpawnSettings(base, "1h"), "high")
+  const withCap = withSpawnSettings(base, "maxTurns=4")
+  const first = fakeActive()
+  setActiveProcess(withTtl, first.active)
+  setClaudeSessionId(withTtl, "ttl-conversation")
+  try {
+    // The agent lost its `cacheTtl` and `reasoningEffort`: a different base
+    // key, which the effort-only invalidation never looked at.
+    invalidateOtherSpawnVariants(base)
+    assert.equal(first.killed(), true, "the old child does not keep running beside the new one")
+    assert.equal(getActiveProcess(withTtl), undefined)
+    assert.equal(getClaudeSessionId(withTtl), undefined)
+    assert.equal(getClaudeSessionId(base), "ttl-conversation")
+
+    invalidateOtherSpawnVariants(withCap)
+    assert.equal(getClaudeSessionId(base), undefined)
+    assert.equal(getClaudeSessionId(withCap), "ttl-conversation")
+  } finally {
+    for (const key of [base, withTtl, withCap]) {
+      deleteActiveProcess(key)
+      deleteClaudeSessionId(key)
+    }
+  }
+})
+
+test("a cache TTL change refuses while the old child is parked in a proxied call", () => {
+  const base = conversationBase("/ttl-pending")
+  const withTtl = withSpawnSettings(base, "1h")
+  const first = fakeActive()
+  setActiveProcess(withTtl, first.active)
+  setClaudeSessionId(withTtl, "parked-ttl")
+  const id = "pending-ttl-call"
+  queuePendingProxyCall(withTtl, { id, toolName: "bash", input: {}, resolve() {}, reject() {} })
+  try {
+    assert.throws(() => invalidateOtherSpawnVariants(base), /pending work/)
+    assert.equal(first.killed(), false)
+    assert.equal(getActiveProcess(withTtl), first.active)
+    assert.equal(getClaudeSessionId(withTtl), "parked-ttl")
+    assert.equal(getClaudeSessionId(base), undefined)
+  } finally {
+    resolvePendingProxyCallById(id, { kind: "text", text: "cleanup" })
+    deleteActiveProcess(withTtl)
+    deleteClaudeSessionId(withTtl)
+  }
+})
 
 function fixture() {
   const cwd = mkdtempSync(join(tmpdir(), "opencode-effort-"))
@@ -317,6 +393,37 @@ for (const method of ["doStream", "doGenerate"] as const) {
     }
   })
 }
+
+test("doStream: dropping the agent's cacheTtl and effort leaves one child, resuming the same conversation (issue #140)", { timeout: 15_000 }, async () => {
+  const { cwd, modelId, provider, base, options } = fixture()
+  // What the previous turn ran under, while the agent still declared
+  // `cacheTtl: 1h` and `reasoningEffort: high`.
+  const before = effortSessionKey(withSpawnSettings(base, "1h"), "high")
+  const first = fakeActive()
+  setActiveProcess(before, first.active)
+  setClaudeSessionId(before, "ttl-conversation")
+  options.prompt.push(
+    { role: "assistant", content: [{ type: "text", text: "high answer" }] },
+    { role: "user", content: [{ type: "text", text: "next request" }] },
+  )
+  try {
+    const response = await provider.languageModel(modelId).doStream(options)
+    for await (const part of response.stream) if (part.type === "error") throw part.error
+    assert.equal(first.killed(), true, "the old child is ended before the new one spawns")
+    assert.equal(getActiveProcess(before), undefined)
+    assert.equal(getClaudeSessionId(before), undefined)
+    const args = getActiveProcess(base)?.cliArgs ?? []
+    assert.ok(args.includes("--resume"), "the new child resumes")
+    assert.ok(args.includes("ttl-conversation"), "the conversation the old child held")
+    assert.doesNotMatch(JSON.stringify(response.request?.body), /conversation_history/)
+  } finally {
+    await deleteActiveProcessAndWait(base)
+    deleteClaudeSessionId(base)
+    deleteActiveProcess(before)
+    deleteClaudeSessionId(before)
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
 
 test("effort changes leave other agent, provider, account, model and conversation contexts alive", { timeout: 15_000 }, async () => {
   const { cwd, modelId, provider, base, options } = fixture()
