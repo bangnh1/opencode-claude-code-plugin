@@ -105,6 +105,7 @@ export const PLUGIN_LOG_MESSAGES: ReadonlySet<string> = new Set([
   "falling back to the next model in the chain",
   "fast mode is in cooldown after a rate limit; this turn runs at standard speed and is billed at standard Opus rates, not the fast price shown in the model picker.",
   "file part without data, skipping",
+  "finishing the turn in progress under its original settings",
   "forkSessions is on but this claude CLI has no --fork-session; replaying the conversation instead",
   "forking the parent conversation's claude session instead of replaying it",
   "holding a subagent dispatch for the operator's answer",

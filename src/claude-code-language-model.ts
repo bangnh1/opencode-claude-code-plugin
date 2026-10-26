@@ -153,6 +153,7 @@ import {
   isClaudeThinkingDisabled,
   sessionKey,
   effortSessionKey,
+  findBusySpawnVariant,
   invalidateOtherSpawnVariants,
   transferClaudeSession,
   describeSessionKey,
@@ -1436,9 +1437,22 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       cwd,
       `${effectiveModelId}::${scope}::${affinity}::context=${JSON.stringify(context)}`,
     )
+    const requestedKey = effortSessionKey(baseKey, reasoningEffort)
+    // A model, effort, TTL or cap change that lands while this conversation's
+    // child is still inside a turn (a parked call, a streaming reply, a plan
+    // question) is applied after that turn, not beside it: the turn is served
+    // on the busy key, whose child keeps the settings it was spawned with
+    // (h #g271). Read-only, so the stub branches below may use it too.
+    const busyVariant = compactionMode ? undefined : findBusySpawnVariant(requestedKey)
+    if (busyVariant) {
+      log.notice("finishing the turn in progress under its original settings", {
+        sessionKey: busyVariant,
+        requestedKey,
+      })
+    }
     const sk = compactionMode
       ? sessionKey(cwd, `${effectiveModelId}::compaction::${affinity}`)
-      : effortSessionKey(baseKey, reasoningEffort)
+      : (busyVariant ?? requestedKey)
     const toUsage = this.toUsage.bind(this)
     const toFinishReason = this.toFinishReason.bind(this)
     const handleControlRequest = this.handleControlRequest.bind(this)
@@ -1755,7 +1769,11 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
       }
     }
 
-    if (!compactionMode) invalidateOtherSpawnVariants(baseKey, reasoningEffort)
+    if (!compactionMode) {
+      invalidateOtherSpawnVariants(sk, {
+        carryConversation: this.config.resumeAcrossModelChanges !== false,
+      })
+    }
 
     // What this session REALLY spawns as, for the TUI's Subagents section
     // (h #g234). Written here, past every branch that answers without the CLI
@@ -1763,16 +1781,20 @@ export class ClaudeCodeLanguageModel implements LanguageModelV3 {
     // knows the model it asked for: forceModel, an agent's effort, the dispatch
     // form, the fallback chain and a failover all change the spawn without
     // telling it. One write per session per process, more only on change.
+    // Not on a turn served on a busy variant: its child still runs as the
+    // last record says, and the new settings are recorded when they spawn.
     if (!compactionMode && affinity !== "default") {
-      recordSessionSpawn(affinity, {
-        model: stripAccountSuffix(failover.modelId),
-        effort: reasoningEffort,
-        account:
-          (this.config.failoverAccounts?.length ?? 0) > 1
-            ? (failover.target ?? sourceAccount)
-            : undefined,
-        agent: this.getOpencodeAgent(options),
-      })
+      if (!busyVariant) {
+        recordSessionSpawn(affinity, {
+          model: stripAccountSuffix(failover.modelId),
+          effort: reasoningEffort,
+          account:
+            (this.config.failoverAccounts?.length ?? 0) > 1
+              ? (failover.target ?? sourceAccount)
+              : undefined,
+          agent: this.getOpencodeAgent(options),
+        })
+      }
       // A fresh user message starts the turn the sidebar's estimate is fed
       // from (h #g247): its start and its prompt's length wait here, keyed
       // like the process, for the step that sees the `result`. A tool-result

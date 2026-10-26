@@ -8823,3 +8823,51 @@ tail against the version document's shasum (`00ba96e3`, visible about 80 s
 after), and the GitHub Release created after. A patch, because nothing changes
 for a key that never carried a TTL or a cap. The main checkout's `dist` was
 rebuilt the same turn, and the issue was answered with the release.
+
+## A change mid-turn waits for the turn (2026-10-26)
+
+h #g271. The three limits h #g270 left, closed after the maintainer said "ok
+deal with the gaps then".
+
+### Routing to the busy spawn
+
+Two of the limits were one problem. A change that lands while this
+conversation's child is still inside a turn either failed that turn (effort,
+TTL or caps: "pending work") or spawned a second child beside it (model: the
+sibling carry-over refuses a busy sibling as `sibling-still-writing` and the
+turn replayed into a fresh process). `findBusySpawnVariant(requestedKey)` looks
+for another key of the same conversation, agent, scope, cwd and account (the
+model name blanked, its `@account` marker kept) whose child has pending work,
+and the prologue serves the turn on that key. Its child keeps the settings it
+was spawned with, and the watchdog's respawn reuses the child's own `cliArgs`,
+so nothing changes under a turn in flight. The first turn that finds it idle
+applies the change through the paths that already existed: the spawn-setting
+carry (h #g270) or the model carry-over (h #g215).
+
+It never routes away from a requested key that is itself busy, and never in the
+shared `default` affinity, which is not one conversation. `recordSessionSpawn`
+is skipped on a routed turn, because the sidebar's record of the running child
+is still true. The "pending work" refusal stays as the backstop for a key that
+holds work with neither a child nor a conversation. One NOTICE per routed step:
+`finishing the turn in progress under its original settings`.
+
+An existing test changed meaning with this: the effort change that "leaves
+other contexts alive" had a BUSY child on another model of the same
+conversation, which now correctly takes the turn, so that one child is idle
+there and still has to survive.
+
+### `resumeAcrossModelChanges: false`
+
+The effort guide promised that the option goes back to replaying, and the code
+never read it on the effort path. `invalidateOtherSpawnVariants` now takes
+`carryConversation`, wired to the option: false releases the old keys' Claude
+sessions instead of moving one, so an effort, TTL or cap change replays the
+thread as it did before issue #91. The model path already honoured it.
+
+Six tests fail with routing disabled and the option ignored, and pass with
+both: the unit scan, the unit release, effort routing and then applying on the
+next idle turn on both entry points, model routing, and the replay with the
+option off.
+
+Checks: `npm run typecheck`, `npm test` (1933/1933), `npm run
+generate:log-messages` for the new NOTICE.

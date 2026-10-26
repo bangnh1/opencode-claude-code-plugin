@@ -12,6 +12,7 @@ import {
   deleteActiveProcessAndWait,
   deleteClaudeSessionId,
   effortSessionKey,
+  findBusySpawnVariant,
   getActiveProcess,
   getClaudeSessionId,
   invalidateOtherSpawnVariants,
@@ -21,7 +22,7 @@ import {
   spawnIdentity,
   type ActiveProcess,
 } from "../src/session-manager.js"
-import { queuePendingProxyCall, resolvePendingProxyCallById } from "../src/proxy-broker.js"
+import { markPendingProxyCallEmitted, queuePendingProxyCall, resolvePendingProxyCallById } from "../src/proxy-broker.js"
 import { createExitPlanModeQuestionCall, hasExitPlanModeQuestions } from "../src/plan-mode-question.js"
 import { getCompressionSummary, storeCompressionSummary } from "../src/compression-store.js"
 import { requestSideQuestion } from "../src/side-question.js"
@@ -44,7 +45,7 @@ test("effort invalidation kills the process and carries the claude session to th
   setClaudeSessionId(high, "old-high")
   storeCompressionSummary(high, "outdated summary")
   try {
-    invalidateOtherSpawnVariants(base, "high")
+    invalidateOtherSpawnVariants(effortSessionKey(base, "high"))
     assert.equal(getActiveProcess(high), first.active)
     assert.equal(getClaudeSessionId(high), "old-high")
     assert.equal(first.killed(), false)
@@ -52,7 +53,7 @@ test("effort invalidation kills the process and carries the claude session to th
     // Effort is fixed per child, so the PROCESS has to go. The conversation
     // does not: the id moves to the key this turn will use, so the spawn
     // resumes it at the new effort instead of replaying the thread (issue #91).
-    invalidateOtherSpawnVariants(base, "low")
+    invalidateOtherSpawnVariants(effortSessionKey(base, "low"))
     assert.equal(first.killed(), true)
     assert.equal(getActiveProcess(high), undefined)
     assert.equal(getClaudeSessionId(high), undefined, "the old effort key keeps no claim on it")
@@ -60,14 +61,14 @@ test("effort invalidation kills the process and carries the claude session to th
     assert.equal(getCompressionSummary(high), undefined)
 
     // Back to high: the id follows again, and the key it came from is empty.
-    invalidateOtherSpawnVariants(base, "high")
+    invalidateOtherSpawnVariants(effortSessionKey(base, "high"))
     assert.equal(getClaudeSessionId(low), undefined)
     assert.equal(getClaudeSessionId(high), "old-high")
 
     // A destination that already has a conversation of its own is never
     // overwritten, and the stale sibling is released rather than carried.
     setClaudeSessionId(base, "no-explicit-effort")
-    invalidateOtherSpawnVariants(base, "high")
+    invalidateOtherSpawnVariants(effortSessionKey(base, "high"))
     assert.equal(getClaudeSessionId(base), undefined)
     assert.equal(getClaudeSessionId(high), "old-high")
   } finally {
@@ -98,7 +99,7 @@ test("effort transition preserves an in-flight native side question", async () =
   })
   const rejected = assert.rejects(pending, /abort/i)
   try {
-    assert.throws(() => invalidateOtherSpawnVariants(base, "low"), /pending work/)
+    assert.throws(() => invalidateOtherSpawnVariants(effortSessionKey(base, "low")), /pending work/)
     assert.equal(getActiveProcess(high), first.active)
     assert.equal(getClaudeSessionId(high), "aside-high")
   } finally {
@@ -133,13 +134,13 @@ for (const busy of ["proxy", "completion", "approval", "stream"] as const) {
       first.active.lineEmitter.on("line", () => {})
     }
     try {
-      assert.throws(() => invalidateOtherSpawnVariants(base, "low"), /pending work/)
+      assert.throws(() => invalidateOtherSpawnVariants(effortSessionKey(base, "low")), /pending work/)
       assert.equal(getActiveProcess(high), first.active)
       assert.equal(getClaudeSessionId(high), "pending-high")
       assert.equal(first.killed(), false)
       if (busy === "approval") assert.equal(hasExitPlanModeQuestions(high), true)
       // Continuation at the original effort is not blocked or invalidated.
-      invalidateOtherSpawnVariants(base, "high")
+      invalidateOtherSpawnVariants(effortSessionKey(base, "high"))
       assert.equal(getActiveProcess(high), first.active)
     } finally {
       resolvePendingProxyCallById(call.toolCallId, { kind: "text", text: "cleanup" })
@@ -203,7 +204,7 @@ test("a cache TTL or CLI cap change retires the old child and carries its conver
   }
 })
 
-test("a cache TTL change refuses while the old child is parked in a proxied call", () => {
+test("the cleanup still refuses to retire a TTL variant parked in a proxied call", () => {
   const base = conversationBase("/ttl-pending")
   const withTtl = withSpawnSettings(base, "1h")
   const first = fakeActive()
@@ -224,7 +225,110 @@ test("a cache TTL change refuses while the old child is parked in a proxied call
   }
 })
 
-function fixture() {
+test("findBusySpawnVariant names a mid-turn spawn of the same conversation under any model or setting", () => {
+  const base = conversationBase("/busy-variant")
+  const requested = effortSessionKey(base, "low")
+  const variants = [
+    effortSessionKey(base, "high"),
+    withSpawnSettings(base, "1h"),
+    base.replace("claude-opus-5", "claude-sonnet-5"),
+  ]
+  const unrelated = [
+    base.replace('"worker"', '"plan"'),
+    base.replace('"claude-code"', '"claude-code-work"'),
+    base.replace("claude-opus-5", "claude-opus-5@work"),
+    base.replace("::conversation::", "::another-conversation::"),
+    base.replace("::tools::", "::no-tools::"),
+  ]
+  const live = [...variants, ...unrelated].map((key) => {
+    const fake = fakeActive()
+    setActiveProcess(key, fake.active)
+    return { key, ...fake }
+  })
+  try {
+    assert.equal(findBusySpawnVariant(requested), undefined, "an idle variant takes nothing")
+    for (const { key, active } of live) {
+      active.lineEmitter.on("line", () => {})
+      assert.equal(
+        findBusySpawnVariant(requested),
+        variants.includes(key) ? key : undefined,
+        key,
+      )
+      active.lineEmitter.removeAllListeners("line")
+    }
+    // A turn already on a busy key stays there.
+    const own = fakeActive()
+    own.active.lineEmitter.on("line", () => {})
+    setActiveProcess(requested, own.active)
+    live[0].active.lineEmitter.on("line", () => {})
+    assert.equal(findBusySpawnVariant(requested), undefined)
+    // The shared bucket is no one conversation, so nothing is routed in it.
+    const shared = base.replace("::conversation::", "::default::")
+    assert.equal(findBusySpawnVariant(effortSessionKey(shared, "low")), undefined)
+  } finally {
+    for (const key of [requested, ...variants, ...unrelated]) deleteActiveProcess(key)
+  }
+})
+
+test("resumeAcrossModelChanges: false releases the old spawn's conversation instead of carrying it", () => {
+  const base = conversationBase("/no-carry")
+  const high = effortSessionKey(base, "high")
+  const withTtl = withSpawnSettings(base, "1h")
+  const first = fakeActive()
+  setActiveProcess(high, first.active)
+  setClaudeSessionId(high, "released")
+  try {
+    invalidateOtherSpawnVariants(withTtl, { carryConversation: false })
+    assert.equal(first.killed(), true)
+    assert.equal(getClaudeSessionId(high), undefined)
+    assert.equal(getClaudeSessionId(withTtl), undefined, "nothing is carried, so the new spawn replays")
+  } finally {
+    for (const key of [high, withTtl]) {
+      deleteActiveProcess(key)
+      deleteClaudeSessionId(key)
+    }
+  }
+})
+
+/** A child the routed turn can talk to: it takes writes and reports kills. */
+function scriptedActive() {
+  let killed = false
+  const active: ActiveProcess = {
+    proc: Object.assign(new EventEmitter(), {
+      stdin: { write: () => true },
+      kill: () => { killed = true; return true },
+    }) as unknown as ChildProcess,
+    lineEmitter: new EventEmitter(),
+    unattendedLines: [],
+  }
+  return { active, killed: () => killed }
+}
+
+/**
+ * Runs a tool-result turn against a child parked in call `id`, and ends it the
+ * way the CLI would once the call is answered. Returns what the call got.
+ */
+async function answerParkedCall(
+  run: () => Promise<unknown>,
+  active: ActiveProcess,
+  answered: () => boolean,
+): Promise<unknown> {
+  const pending = run()
+  for (let attempt = 0; attempt < 200 && !answered(); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.ok(answered(), "the parked call got this turn's tool result")
+  active.lineEmitter.emit("line", JSON.stringify({ type: "result", session_id: "parked", is_error: false }))
+  const response = await pending
+  if (response && typeof response === "object" && "stream" in response) {
+    for await (const part of (response as { stream: ReadableStream<{ type: string; error?: unknown }> }).stream) {
+      if (part.type === "error") throw part.error
+    }
+  }
+  return response
+}
+
+function fixture(settings: Record<string, unknown> = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "opencode-effort-"))
   const cliPath = join(cwd, "fake-claude.cjs")
   writeFileSync(cliPath, `#!/usr/bin/env node
@@ -249,6 +353,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const provider = createClaudeCode({
     cwd, cliPath, bridgeOpencodeMcp: false, proxyOpencodeMcpTools: false,
     proxyTools: [], interactive: false, autoContinueIncompleteTurns: false,
+    ...settings,
   })
   const base = sessionKey(cwd, `${modelId}::tools::conversation::context=["claude-code","worker"]`)
   const options: LanguageModelV3CallOptions = {
@@ -290,28 +395,53 @@ for (const method of ["doStream", "doGenerate"] as const) {
     }
   })
 
-  test(`${method}: effort switch rejects before touching a pending tool session`, async () => {
+  test(`${method}: an effort switch mid-turn finishes that turn on the old child, then applies (h #g271)`, { timeout: 15_000 }, async () => {
     const { cwd, modelId, provider, base, options } = fixture()
     const high = effortSessionKey(base, "high")
-    const first = fakeActive()
+    const low = effortSessionKey(base, "low")
+    const first = scriptedActive()
     setActiveProcess(high, first.active)
     setClaudeSessionId(high, "pending-high")
     const id = `pending-integration-${method}`
-    queuePendingProxyCall(high, { id, toolName: "task", input: {}, resolve() {}, reject() {} })
+    let delivered: unknown
+    queuePendingProxyCall(high, {
+      id, toolName: "read", input: {}, channel: { closed: false },
+      resolve(result) { delivered = result }, reject() {},
+    })
+    markPendingProxyCallEmitted(id)
     options.providerOptions!["claude-code"].reasoningEffort = "low"
     options.prompt.push(
-      { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "task", input: {} }] },
-      { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName: "task", output: { type: "text", value: "result" } }] },
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "read", input: {} }] },
+      { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName: "read", output: { type: "text", value: "result" } }] },
     )
     try {
-      await assert.rejects(provider.languageModel(modelId)[method](options), /pending work/)
+      await answerParkedCall(() => provider.languageModel(modelId)[method](options), first.active, () => delivered !== undefined)
+      assert.equal(first.killed(), false, "the turn in flight was not cut")
       assert.equal(getActiveProcess(high), first.active)
-      assert.equal(getClaudeSessionId(high), "pending-high")
-      assert.equal(first.killed(), false)
+      assert.equal(getActiveProcess(low), undefined, "and nothing spawned beside it")
+
+      // The next fresh message finds the old child idle: it goes, and the new
+      // effort's spawn resumes the same conversation.
+      options.prompt.push(
+        { role: "assistant", content: [{ type: "text", text: "read it" }] },
+        { role: "user", content: [{ type: "text", text: "next request" }] },
+      )
+      const held = getClaudeSessionId(high)
+      assert.ok(held, "the old key still holds the conversation after its turn")
+      const next = await provider.languageModel(modelId)[method](options)
+      if ("stream" in next) for await (const part of next.stream) if (part.type === "error") throw part.error
+      assert.equal(first.killed(), true)
+      assert.equal(getActiveProcess(high), undefined)
+      const args = getActiveProcess(low)?.cliArgs ?? []
+      assert.ok(args.includes("--resume"), "the new effort's spawn resumes")
+      assert.ok(args.includes(held!), "exactly the conversation the old child held")
+      assert.doesNotMatch(JSON.stringify(next.request?.body), /conversation_history/)
     } finally {
       resolvePendingProxyCallById(id, { kind: "text", text: "cleanup" })
       deleteActiveProcess(high)
       deleteClaudeSessionId(high)
+      await deleteActiveProcessAndWait(low)
+      deleteClaudeSessionId(low)
       rmSync(cwd, { recursive: true, force: true })
     }
   })
@@ -439,7 +569,10 @@ test("effort changes leave other agent, provider, account, model and conversatio
   const others = otherBases.map((other) => {
     const key = effortSessionKey(other, "high")
     const fake = fakeActive()
-    fake.active.lineEmitter.on("line", () => {})
+    // A busy child on another model of this same conversation would take the
+    // turn instead (h #g271), so that one is idle here. It must survive the
+    // effort change all the same.
+    if (!other.includes("::claude-opus-5::")) fake.active.lineEmitter.on("line", () => {})
     setActiveProcess(key, fake.active)
     setClaudeSessionId(key, "untouched")
     return { key, ...fake }
@@ -464,6 +597,66 @@ test("effort changes leave other agent, provider, account, model and conversatio
       deleteActiveProcess(other.key)
       deleteClaudeSessionId(other.key)
     }
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test("doStream: a model change mid-turn finishes that turn on the old model's child (h #g271)", { timeout: 15_000 }, async () => {
+  const { cwd, modelId, provider, base, options } = fixture()
+  const otherModel = base.replace(`::${modelId}::`, "::claude-sonnet-4-5::")
+  const first = scriptedActive()
+  setActiveProcess(otherModel, first.active)
+  setClaudeSessionId(otherModel, "pending-sonnet")
+  const id = "pending-model-change"
+  let delivered: unknown
+  queuePendingProxyCall(otherModel, {
+    id, toolName: "read", input: {}, channel: { closed: false },
+    resolve(result) { delivered = result }, reject() {},
+  })
+  markPendingProxyCallEmitted(id)
+  options.prompt.push(
+    { role: "assistant", content: [{ type: "tool-call", toolCallId: id, toolName: "read", input: {} }] },
+    { role: "tool", content: [{ type: "tool-result", toolCallId: id, toolName: "read", output: { type: "text", value: "result" } }] },
+  )
+  try {
+    await answerParkedCall(() => provider.languageModel(modelId).doStream(options), first.active, () => delivered !== undefined)
+    assert.equal(first.killed(), false)
+    assert.equal(getActiveProcess(otherModel), first.active)
+    assert.equal(getActiveProcess(base), undefined, "no second child beside the busy one")
+  } finally {
+    resolvePendingProxyCallById(id, { kind: "text", text: "cleanup" })
+    deleteActiveProcess(otherModel)
+    deleteClaudeSessionId(otherModel)
+    await deleteActiveProcessAndWait(base)
+    deleteClaudeSessionId(base)
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test("doStream: with resumeAcrossModelChanges false an effort change replays instead of resuming", { timeout: 15_000 }, async () => {
+  const { cwd, modelId, provider, base, options } = fixture({ resumeAcrossModelChanges: false })
+  const high = effortSessionKey(base, "high")
+  const low = effortSessionKey(base, "low")
+  const first = fakeActive()
+  setActiveProcess(high, first.active)
+  setClaudeSessionId(high, "not-carried")
+  options.providerOptions!["claude-code"].reasoningEffort = "low"
+  options.prompt.push(
+    { role: "assistant", content: [{ type: "text", text: "high answer" }] },
+    { role: "user", content: [{ type: "text", text: "next request" }] },
+  )
+  try {
+    const response = await provider.languageModel(modelId).doStream(options)
+    for await (const part of response.stream) if (part.type === "error") throw part.error
+    assert.equal(first.killed(), true, "the old child still goes")
+    assert.equal(getClaudeSessionId(high), undefined)
+    assert.ok(!(getActiveProcess(low)?.cliArgs ?? []).includes("not-carried"), "its conversation is not resumed")
+    assert.match(JSON.stringify(response.request?.body), /conversation_history/)
+  } finally {
+    await deleteActiveProcessAndWait(low)
+    deleteClaudeSessionId(low)
+    deleteActiveProcess(high)
+    deleteClaudeSessionId(high)
     rmSync(cwd, { recursive: true, force: true })
   }
 })
