@@ -8871,3 +8871,11 @@ option off.
 
 Checks: `npm run typecheck`, `npm test` (1933/1933), `npm run
 generate:log-messages` for the new NOTICE.
+
+Shipped as v0.63.2 on 2026-10-26 after the maintainer said "yes" to merging,
+releasing and following up on issue #140: PR #144 green on Linux and Windows,
+CI and Docs green on the merge commit before the tag, the publish verified from
+the Publish step's tail against the version document's shasum (`9c82a05a`,
+visible about 120 s after), and the GitHub Release created after. A patch: a
+turn with no change in flight runs exactly as before. The main checkout's
+`dist` was rebuilt the same turn, and #140 got a follow-up comment.

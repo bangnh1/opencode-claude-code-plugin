@@ -165,6 +165,9 @@ Verification still owed, copied from the vault's `Future Features.md` "Next up" 
 
 ## Done
 
+- 2026-10-26: **done** (v0.63.2, PR #144, h #g271): a model, effort, TTL or cap change mid-turn waits for the
+  turn. It finishes on the busy child under its original settings and the change applies from the next idle
+  turn; `resumeAcrossModelChanges: false` now also stops the effort/TTL/cap carry, as documented.
 - 2026-10-26: **done** (v0.63.1, PR #143, h #g270, issue #140): a cache TTL or CLI cap change no longer
   leaves the old `claude` running beside the new one. Keys that differ only in spawn settings are one
   conversation: the old child is ended and its Claude session carried over, refused while it is mid-turn.
